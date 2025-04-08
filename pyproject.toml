@@ -1,0 +1,44 @@
+[project]
+name = "jymkit"
+version = "0.0.dev1"
+description = "A lightweight utility library for building reinforcement learning projects in JAX."
+readme = "README.md"
+authors = [
+    { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "equinox>=0.11.12",
+    "jax>=0.5.2",
+]
+
+[project.optional-dependencies]
+algs = [
+    "distrax>=0.1.5",
+    "optax>=0.2.4",
+]
+gpu = [
+    "jax[cuda]>=0.5.2"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["src/jymkit*"]
+
+[project.scripts]
+jymkit = "jymkit.cli.init:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "ruff>=0.11.0",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+extend-select = ["I"]
