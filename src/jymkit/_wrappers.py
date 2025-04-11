@@ -40,7 +40,7 @@ class LogWrapper(Wrapper):
         structure = jax.tree.structure(
             obs, is_leaf=lambda x: isinstance(x, jym.AgentObservation)
         )
-        initial_vals = jnp.zeros((structure.num_leaves,))
+        initial_vals = jnp.zeros(structure.num_leaves).squeeze()
         state = LogEnvState(
             env_state=env_state,
             episode_returns=initial_vals,
@@ -77,7 +77,7 @@ class LogWrapper(Wrapper):
         return timestep._replace(info=info), state
 
     def _flat_reward(self, rewards: float | PyTree[float]):
-        return jnp.array(jax.tree.leaves(rewards))
+        return jnp.array(jax.tree.leaves(rewards)).squeeze()
 
 
 class GymnaxWrapper(Wrapper):

@@ -1,6 +1,6 @@
 [project]
 name = "jymkit"
-version = "0.0.dev1"
+version = "0.0.dev6"
 description = "A lightweight utility library for building reinforcement learning projects in JAX."
 readme = "README.md"
 authors = [
@@ -26,7 +26,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-include = ["src/jymkit*"]
+include = ["src/jymkit"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jymkit"]
 
 [project.scripts]
 jymkit = "jymkit.cli.init:main"

@@ -2,7 +2,7 @@ import inspect
 import time
 from dataclasses import replace
 from functools import partial
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 import equinox as eqx
 import jax
@@ -11,7 +11,6 @@ import optax
 from jaxtyping import Array, PRNGKeyArray
 
 import jymkit as jym
-from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 
 from .networks import ActorNetwork, CriticNetwork
 
@@ -22,11 +21,11 @@ class Transition(NamedTuple):
     observation: Array
     action: Array
     reward: Array
-    done: Array
-    value: Array
-    next_value: Array
+    terminated: Array
     log_prob: Array
     info: Array
+    value: Array
+    next_value: Array
     return_: Array = None
     advantage_: Array = None
 
@@ -53,7 +52,7 @@ class PPOAgent(eqx.Module):
     ent_coef: float = eqx.field(static=True, default=0.01)
     vf_coef: float = eqx.field(static=True, default=0.25)
 
-    total_timesteps: int = eqx.field(static=True, default=1e6)
+    total_timesteps: int = eqx.field(static=True, default=1e5)
     num_envs: int = eqx.field(static=True, default=6)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
@@ -154,27 +153,19 @@ class PPOAgent(eqx.Module):
         )
         return value
 
-    def forward_actor(self, observation, key, training=False):
-        # TODO
-        if not training:
-            action_dist = self.do_for_each_agent(
-                lambda a, o: a.actor(o),
-                a=self.state,
-                o=observation,
-            )
-        else:
-            action_dist = self.do_for_each_agent(
-                lambda a, o: jax.vmap(a.actor)(o),
-                a=self.state,
-                o=observation,
-            )
+    def forward_actor(self, observation, key, get_log_prob=True):
+        action_dist = self.do_for_each_agent(
+            lambda a, o: a.actor(o),
+            a=self.state,
+            o=observation,
+        )
         action = self.do_for_each_agent(
             lambda a, key: a.sample(seed=key),
             a=action_dist,
             key=key,
             shared_argnames=["key"],  # TODO: tmp
         )
-        if not training:
+        if not get_log_prob:
             return action
         log_prob = self.do_for_each_agent(
             lambda a, act: a.log_prob(act),
@@ -188,7 +179,7 @@ class PPOAgent(eqx.Module):
             rng, obs, env_state, done, episode_reward = carry
             rng, action_key, step_key = jax.random.split(rng, 3)
 
-            action = self.forward_actor(obs, action_key)
+            action = self.forward_actor(obs, action_key, get_log_prob=False)
 
             (obs, reward, terminated, truncated, info), env_state = env.step(
                 step_key, env_state, action
@@ -216,18 +207,18 @@ class PPOAgent(eqx.Module):
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
-            action, log_prob = self.forward_actor(last_obs, sample_key, training=True)
-            value = self.forward_critic(last_obs)
+            sample_key = jax.random.split(sample_key, self.num_envs)
+            action, log_prob = jax.vmap(self.forward_actor)(last_obs, sample_key)
 
             # take a step in the environment
             rng, key = jax.random.split(rng)
             step_key = jax.random.split(key, self.num_envs)
-            (obsv, reward, terminated, truncated, info), env_state = jax.vmap(
-                env.step, in_axes=(0, 0, 0)
-            )(step_key, env_state, action)
+            (obsv, reward, terminated, truncated, info), env_state = jax.vmap(env.step)(
+                step_key, env_state, action
+            )
 
-            # get value of next observation before autoreset
-            next_value = self.forward_critic(info[ORIGINAL_OBSERVATION_KEY])
+            value = self.forward_critic(last_obs)
+            next_value = self.forward_critic(obsv)
 
             # gamma = self.gamma
             # if "discount" in info:
@@ -239,11 +230,11 @@ class PPOAgent(eqx.Module):
                 observation=last_obs,
                 action=action,
                 reward=reward,
-                done=terminated,
-                value=value,
-                next_value=next_value,
+                terminated=terminated,
                 log_prob=log_prob,
                 info=info,
+                value=value,
+                next_value=next_value,
             )
 
             rollout_state = (env_state, obsv, rng)
@@ -252,7 +243,7 @@ class PPOAgent(eqx.Module):
         def compute_gae(gae, transition):
             value = jnp.stack(jax.tree.leaves(transition.value), axis=-1).squeeze()
             reward = jnp.stack(jax.tree.leaves(transition.reward), axis=-1).squeeze()
-            done = jnp.stack(jax.tree.leaves(transition.done), axis=-1).squeeze()
+            done = jnp.stack(jax.tree.leaves(transition.terminated), axis=-1).squeeze()
             next_value = jnp.stack(
                 jax.tree.leaves(transition.next_value), axis=-1
             ).squeeze()
@@ -262,7 +253,7 @@ class PPOAgent(eqx.Module):
 
             delta = reward + self.gamma * next_value * (1 - done) - value
             gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-            return gae, (gae, gae + value)
+            return gae, gae
 
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
@@ -270,7 +261,7 @@ class PPOAgent(eqx.Module):
         )
 
         # Calculate GAE & returns
-        _, (advantages, returns) = jax.lax.scan(
+        _, advantages = jax.lax.scan(
             compute_gae,
             jnp.zeros_like(trajectory_batch.value[-1]),
             trajectory_batch,
@@ -279,7 +270,7 @@ class PPOAgent(eqx.Module):
         )
 
         trajectory_batch = trajectory_batch._replace(
-            return_=returns,
+            return_=advantages + trajectory_batch.value,
             advantage_=advantages,
         )
 
@@ -453,25 +444,43 @@ class PPOAgent(eqx.Module):
 
             metric = trajectory_batch.info
             rng, eval_key = jax.random.split(rng)
-            eval_rewards = self.evaluate(eval_key, env)
-            metric["eval_rewards"] = eval_rewards
 
             if self.debug:
+                # eval_rewards = self.evaluate(eval_key, env)
+                # metric["eval_rewards"] = eval_rewards
 
                 def callback(info):
-                    print(
-                        f"timestep={(info['timestep'][-1][0] * self.num_envs)}, eval rewards={info['eval_rewards']}"
+                    # Only print after training for 10%
+                    if (
+                        info["timestep"][-1][0]
+                        < (self.total_timesteps // self.num_envs) * 0.1
+                    ):
+                        return
+                    return_values = info["returned_episode_returns"][
+                        info["returned_episode"]
+                    ]
+                    timesteps = (
+                        info["timestep"][info["returned_episode"]] * self.num_envs
                     )
+                    for t in range(len(timesteps)):
+                        print(
+                            f"global step={timesteps[t]}, episodic return={return_values[t]}"
+                        )
+                    # print(
+                    #     f"timestep={(info['timestep'][-1][0] * self.num_envs)}, eval rewards={info['eval_rewards']}"
+                    # )
 
                 jax.debug.callback(callback, metric)
 
             runner_state = (self, env_state, last_obs, rng)
-            return runner_state, metric
+            return runner_state, _
 
         if not self.is_initialized:
             self = self.init(key, env)
 
-        env = jym.LogWrapper(env)
+        # env = jym.LogWrapper(env)
+
+        breakpoint()
 
         def train_fn():
             # We wrap this logic so we can compile ahead of time
@@ -485,15 +494,15 @@ class PPOAgent(eqx.Module):
         s_time = time.time()
         print("Starting JAX compilation...")
         train_fn = jax.jit(train_fn).lower().compile()
-        print(
-            f"JAX compilation finished in {(time.time() - s_time):.2f} seconds, starting training..."
-        )
+        print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
+        s_time = time.time()
         updated_self = train_fn()
+        print(f"Training finished in {(time.time() - s_time):.2f} seconds")
         return updated_self
 
     def do_for_each_agent(
         self,
-        func,
+        func: Callable,
         shared_argnames: list[str] = [],
         **func_args,
     ):
@@ -502,33 +511,14 @@ class PPOAgent(eqx.Module):
             return func(**func_args)
 
         def map_one_level(f, tree, *rest):
-            seen_pytree = False
+            """
+            NOTE: Immidiately self-referential trees may pose a problem.
+            see eqx.tree_flatten_one_level
+            https://github.com/patrick-kidger/equinox/blob/4995b2bed015d6922ca46868cbaf59c767b44682/equinox/_tree.py#L352
 
-            def is_leaf(node):
-                nonlocal seen_pytree
-                if node is tree:
-                    if seen_pytree:
-                        """
-                        From eqx.tree_flatten_one_level:
-                        https://github.com/patrick-kidger/equinox/tree/main/equinox
-                        """
-                        try:
-                            type_string = type(tree).__name__
-                        except AttributeError:
-                            type_string = "<unknown>"
-                        raise ValueError(
-                            f"PyTree node of type `{type_string}` is immediately "
-                            "self-referential; that is to say it appears within its own PyTree "
-                            "structure as an immediate subnode. (For example "
-                            "`x = []; x.append(x)`.) This is not allowed."
-                        )
-                    else:
-                        seen_pytree = True
-                    return False
-                else:
-                    return True
-
-            return jax.tree.map(f, tree, *rest, is_leaf=is_leaf)
+            We don't expect this to be a problem here.
+            """
+            return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
 
         per_agent_args = {}
         shared_args = {}
