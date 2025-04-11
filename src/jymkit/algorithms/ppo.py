@@ -52,7 +52,7 @@ class PPOAgent(eqx.Module):
     ent_coef: float = eqx.field(static=True, default=0.01)
     vf_coef: float = eqx.field(static=True, default=0.25)
 
-    total_timesteps: int = eqx.field(static=True, default=1e5)
+    total_timesteps: int = eqx.field(static=True, default=1e6)
     num_envs: int = eqx.field(static=True, default=6)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches

@@ -15,8 +15,8 @@ class TimeStep(NamedTuple):
 
     observation: Observation
     reward: Array
-    terminated: Array
-    truncated: Array
+    terminated: bool | Array
+    truncated: bool | Array
     info: dict
 
 

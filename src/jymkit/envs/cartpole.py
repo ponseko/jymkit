@@ -67,7 +67,16 @@ class CartPole(jym.Environment):
             theta_dot=theta_dot,
             time=state.time + 1,
         )
-        return state
+
+        timestep = jym.TimeStep(
+            self.get_observation(state),
+            self.get_reward(),
+            self.get_terminated(state),
+            self.get_truncated(state),
+            {},
+        )
+
+        return timestep, state
 
     def reset_env(self, key: PRNGKeyArray) -> EnvState:
         state_variables = jax.random.uniform(key, shape=(4,), minval=-0.05, maxval=0.05)
@@ -77,14 +86,15 @@ class CartPole(jym.Environment):
             theta=state_variables[2],
             theta_dot=state_variables[3],
         )
-        return state
+        observation = self.get_observation(state)
+        return observation, state
 
     def get_observation(self, state: EnvState) -> jym.Observation:
         return jnp.array(
             [state.x, state.x_dot, state.theta, state.theta_dot], dtype=jnp.float32
         )
 
-    def get_reward(self, state: EnvState, prev_state: EnvState) -> float:
+    def get_reward(self) -> float:
         return 1.0
 
     def get_terminated(self, state: EnvState) -> bool:
