@@ -2,7 +2,7 @@ import inspect
 import time
 from dataclasses import replace
 from functools import partial
-from typing import Callable
+from typing import Callable, Tuple
 
 import equinox as eqx
 import jax
@@ -101,11 +101,8 @@ class Transition(eqx.Module):
 
 
 class AgentState(eqx.Module):
-    class Networks(eqx.Module):
-        actor: ActorNetwork
-        critic: CriticNetwork
-
-    networks: Networks
+    actor: ActorNetwork
+    critic: CriticNetwork
     optimizer_state: optax.OptState
 
 
@@ -113,22 +110,6 @@ class PPOAgent(eqx.Module):
     state: PyTree[AgentState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
-
-    @property
-    def networks(self):
-        return jax.tree.map(
-            lambda x: x.networks,
-            self.state,
-            is_leaf=lambda x: isinstance(x, AgentState),
-        )
-
-    @property
-    def optimizer_state(self):
-        return jax.tree.map(
-            lambda x: x.optimizer_state,
-            self.state,
-            is_leaf=lambda x: isinstance(x, AgentState),
-        )
 
     learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
     gamma: float = eqx.field(static=True, default=0.99)
@@ -227,19 +208,17 @@ class PPOAgent(eqx.Module):
             hidden_dims=critic_features,
             output_space=1,
         )
-        networks = AgentState.Networks(
+        optimizer_state = optimizer.init((actor, critic))
+
+        return AgentState(
             actor=actor,
             critic=critic,
-        )
-        optimizer_state = optimizer.init(networks)
-        return AgentState(
-            networks=networks,
             optimizer_state=optimizer_state,
         )
 
     def forward_critic(self, observation):
         value = self.do_for_each_agent(
-            lambda a, o: jax.vmap(a.networks.critic)(o),
+            lambda a, o: a.critic(o),
             a=self.state,
             o=observation,
         )
@@ -247,7 +226,7 @@ class PPOAgent(eqx.Module):
 
     def forward_actor(self, observation, key, get_log_prob=True):
         action_dist = self.do_for_each_agent(
-            lambda a, o: a.networks.actor(o),
+            lambda a, o: a.actor(o),
             a=self.state,
             o=observation,
         )
@@ -309,8 +288,8 @@ class PPOAgent(eqx.Module):
                 step_key, env_state, action
             )
 
-            value = self.forward_critic(last_obs)
-            next_value = self.forward_critic(info[ORIGINAL_OBSERVATION_KEY])
+            value = jax.vmap(self.forward_critic)(last_obs)
+            next_value = jax.vmap(self.forward_critic)(info[ORIGINAL_OBSERVATION_KEY])
 
             # gamma = self.gamma
             # if "discount" in info:
@@ -384,20 +363,13 @@ class PPOAgent(eqx.Module):
 
                 @eqx.filter_grad
                 def __ppo_los_fn(
-                    params: AgentState.Networks,
-                    train_batch: Transition,
-                    # observations,
-                    # actions,
-                    # log_probs,
-                    # values,
-                    # advantages,
-                    # returns,
+                    params: Tuple[eqx.Module, eqx.Module], train_batch: Transition
                 ):
-                    # breakpoint()
-                    action_dist = jax.vmap(params.actor)(train_batch.observation)
+                    actor, critic = params
+                    action_dist = jax.vmap(actor)(train_batch.observation)
                     log_prob = action_dist.log_prob(train_batch.action)
                     entropy = action_dist.entropy().mean()
-                    value = jax.vmap(params.critic)(train_batch.observation)
+                    value = jax.vmap(critic)(train_batch.observation)
 
                     init_log_prob = train_batch.log_prob
                     if log_prob.ndim == 2:  # MultiDiscrete Action Space
@@ -417,6 +389,7 @@ class PPOAgent(eqx.Module):
                     )
                     actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
 
+                    # critic loss
                     value_pred_clipped = train_batch.value + (
                         jnp.clip(
                             value - train_batch.value,
@@ -436,63 +409,24 @@ class PPOAgent(eqx.Module):
                     )
                     return total_loss  # , (actor_loss, value_loss, entropy)
 
-                def __update_over_minibatch(
-                    current_self: PPOAgent, minibatch: Transition
+                def __update_state_over_minibatch(
+                    current_state: AgentState, minibatch: Transition
                 ):
-                    # breakpoint()
-
-                    grads = self.do_for_each_agent(
-                        lambda params, batch: __ppo_los_fn(params, batch),
-                        params=current_self.networks,
-                        batch=minibatch.view_transposed,
+                    actor, critic = current_state.actor, current_state.critic
+                    grads = __ppo_los_fn((actor, critic), minibatch)
+                    updates, optimizer_state = self.optimizer.update(
+                        grads, current_state.optimizer_state
+                    )
+                    new_actor, new_critic = optax.apply_updates(
+                        (actor, critic), updates
+                    )
+                    updated_state = AgentState(
+                        actor=new_actor,
+                        critic=new_critic,
+                        optimizer_state=optimizer_state,
                     )
 
-                    # observations, actions, log_probs, values, advantages, returns = (
-                    #     minibatch.observation,
-                    #     minibatch.action,
-                    #     minibatch.log_prob,
-                    #     minibatch.value,
-                    #     minibatch.advantage_,
-                    #     minibatch.return_,
-                    # )
-
-                    # grads = self.do_for_each_agent(
-                    #     lambda params, obs, act, logp, val, adv, ret: __ppo_los_fn(
-                    #         params, obs, act, logp, val, adv, ret
-                    #     ),
-                    #     params=current_self.networks,
-                    #     obs=observations,
-                    #     act=actions,
-                    #     logp=log_probs,
-                    #     val=values,
-                    #     adv=advantages,
-                    #     ret=returns,
-                    # )
-
-                    updates, optimizer_state = self.do_for_each_agent(
-                        lambda u, s: self.optimizer.update(u, s),
-                        u=grads,
-                        s=current_self.optimizer_state,
-                    )
-
-                    new_networks = self.do_for_each_agent(
-                        lambda params, updates: optax.apply_updates(params, updates),
-                        params=current_self.networks,
-                        updates=updates,
-                    )
-
-                    train_state = self.do_for_each_agent(
-                        lambda networks, opt_state: AgentState(
-                            networks=AgentState.Networks(
-                                actor=networks.actor,
-                                critic=networks.critic,
-                            ),
-                            optimizer_state=opt_state,
-                        ),
-                        networks=new_networks,
-                        opt_state=optimizer_state,
-                    )
-                    return replace(self, state=train_state), None
+                    return updated_state, None
 
                 batch_idx = jax.random.permutation(key, self.batch_size)
 
@@ -510,11 +444,13 @@ class PPOAgent(eqx.Module):
                     lambda x: x.reshape((self.num_minibatches, -1) + x.shape[1:]),
                     shuffled_batch,
                 )
-                # update over minibatches
-                updated_self, _ = jax.lax.scan(
-                    __update_over_minibatch, self, minibatches
+                # Update (each) agent
+                updated_state, _ = self.do_for_each_agent(
+                    lambda s, m: jax.lax.scan(__update_state_over_minibatch, s, m),
+                    s=self.state,
+                    m=minibatches.view_transposed,
                 )
-                return updated_self
+                return replace(self, state=updated_state)
 
             self: PPOAgent = runner_state[0]
             # Do rollout of single trajactory
