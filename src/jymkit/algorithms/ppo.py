@@ -2,22 +2,23 @@ import inspect
 import time
 from dataclasses import replace
 from functools import partial
-from typing import Callable, NamedTuple
+from typing import Callable
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
+from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 
 from .networks import ActorNetwork, CriticNetwork
 
 
 # Define a simple tuple to hold the state of the environment.
 # This is the format we will use to store transitions in our buffer.
-class Transition(NamedTuple):
+class Transition(eqx.Module):
     observation: Array
     action: Array
     reward: Array
@@ -29,17 +30,105 @@ class Transition(NamedTuple):
     return_: Array = None
     advantage_: Array = None
 
+    @property
+    def structure(self) -> PyTreeDef:
+        """
+        Returns the top-level structure of the transition objects (using reward as a reference).
+        This is either PyTreeDef(*) for single agents
+        or PyTreeDef((*, x num_agents)) for multi-agent environments.
+        usefull for unflattening Transition.flat.properties back to the original structure.
+        """
+        return jax.tree.structure(self.reward)
 
-class AgentState(NamedTuple):
-    actor: ActorNetwork
-    critic: CriticNetwork
+    @property
+    def view_flat(self) -> "Transition":
+        """
+        Returns a flattened version of the transition.
+        Where possible, this is a jnp.stack of the leaves.
+        Otherwise, it returns a list of leaves.
+        """
+
+        def return_as_stack_or_list(x):
+            x = jax.tree.leaves(x)
+            try:
+                return jnp.stack(x, axis=-1).squeeze()
+            except ValueError:
+                return x
+
+        return jax.tree.map(
+            return_as_stack_or_list,
+            self,
+            is_leaf=lambda y: y is not self,
+        )
+
+    @property
+    def view_transposed(self) -> PyTree["Transition"]:
+        """
+        The original transition is a Transition of PyTrees
+            e.g. Transition(observation={a1: ..., a2: ...}, action={a1: ..., a2: ...}, ...)
+        The transposed transition is a PyTree of Transitions
+            e.g. {a1: Transition(observation=..., action=..., ...), a2: Transition(observation=..., action=..., ...), ...}
+        This is useful for multi-agent environments where we want to have a single Transition object per agent.
+        In single-agent environments, this will be the same as the original transition.
+        """
+        if self.structure.num_leaves == 1:  # single agent
+            return self
+
+        field_names = list(self.__dataclass_fields__.keys())
+
+        fields = {}
+        for f in field_names:
+            attr = getattr(self, f)
+            fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
+
+        per_agent_transitions = []
+        for i in range(len(fields[field_names[0]])):
+            agent_transition = Transition(
+                **{
+                    field_name: fields[field_name][i]
+                    for field_name in field_names
+                    if field_name != "info"
+                    and (fields[field_name] is not None)
+                    # and field_name != "advantage_"
+                    and field_name != "terminated"
+                },
+                terminated=fields["terminated"][0],
+                info=fields["info"],
+            )
+            per_agent_transitions.append(agent_transition)
+
+        return jax.tree.unflatten(self.structure, per_agent_transitions)
+
+
+class AgentState(eqx.Module):
+    class Networks(eqx.Module):
+        actor: ActorNetwork
+        critic: CriticNetwork
+
+    networks: Networks
     optimizer_state: optax.OptState
 
 
 class PPOAgent(eqx.Module):
-    state: AgentState = None
+    state: PyTree[AgentState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
+
+    @property
+    def networks(self):
+        return jax.tree.map(
+            lambda x: x.networks,
+            self.state,
+            is_leaf=lambda x: isinstance(x, AgentState),
+        )
+
+    @property
+    def optimizer_state(self):
+        return jax.tree.map(
+            lambda x: x.optimizer_state,
+            self.state,
+            is_leaf=lambda x: isinstance(x, AgentState),
+        )
 
     learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
     gamma: float = eqx.field(static=True, default=0.99)
@@ -138,16 +227,19 @@ class PPOAgent(eqx.Module):
             hidden_dims=critic_features,
             output_space=1,
         )
-        optimizer_state = optimizer.init({"actor": actor, "critic": critic})
-        return AgentState(
+        networks = AgentState.Networks(
             actor=actor,
             critic=critic,
+        )
+        optimizer_state = optimizer.init(networks)
+        return AgentState(
+            networks=networks,
             optimizer_state=optimizer_state,
         )
 
     def forward_critic(self, observation):
         value = self.do_for_each_agent(
-            lambda a, o: jax.vmap(a.critic)(o),
+            lambda a, o: jax.vmap(a.networks.critic)(o),
             a=self.state,
             o=observation,
         )
@@ -155,7 +247,7 @@ class PPOAgent(eqx.Module):
 
     def forward_actor(self, observation, key, get_log_prob=True):
         action_dist = self.do_for_each_agent(
-            lambda a, o: a.actor(o),
+            lambda a, o: a.networks.actor(o),
             a=self.state,
             o=observation,
         )
@@ -218,7 +310,7 @@ class PPOAgent(eqx.Module):
             )
 
             value = self.forward_critic(last_obs)
-            next_value = self.forward_critic(obsv)
+            next_value = self.forward_critic(info[ORIGINAL_OBSERVATION_KEY])
 
             # gamma = self.gamma
             # if "discount" in info:
@@ -240,20 +332,19 @@ class PPOAgent(eqx.Module):
             rollout_state = (env_state, obsv, rng)
             return rollout_state, transition
 
-        def compute_gae(gae, transition):
-            value = jnp.stack(jax.tree.leaves(transition.value), axis=-1).squeeze()
-            reward = jnp.stack(jax.tree.leaves(transition.reward), axis=-1).squeeze()
-            done = jnp.stack(jax.tree.leaves(transition.terminated), axis=-1).squeeze()
-            next_value = jnp.stack(
-                jax.tree.leaves(transition.next_value), axis=-1
-            ).squeeze()
+        def compute_gae(gae, transition: Transition):
+            value = transition.view_flat.value
+            reward = transition.view_flat.reward
+            next_value = transition.view_flat.next_value
+            done = transition.view_flat.terminated
 
-            if len(done.shape) == 1 and len(reward.shape) == 2:
+            if done.ndim < reward.ndim:
+                # correct for multi-agent envs that do not return done flags per agent
                 done = jnp.expand_dims(done, axis=-1)
 
             delta = reward + self.gamma * next_value * (1 - done) - value
             gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-            return gae, gae
+            return gae, (gae, gae + value)
 
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
@@ -261,16 +352,24 @@ class PPOAgent(eqx.Module):
         )
 
         # Calculate GAE & returns
-        _, advantages = jax.lax.scan(
+        _, (advantages, returns) = jax.lax.scan(
             compute_gae,
-            jnp.zeros_like(trajectory_batch.value[-1]),
+            jnp.zeros_like(trajectory_batch.view_flat.value[-1]),
             trajectory_batch,
             reverse=True,
             unroll=16,
         )
 
-        trajectory_batch = trajectory_batch._replace(
-            return_=advantages + trajectory_batch.value,
+        # Return to multi-agent structure
+        if self.multi_agent_env:
+            advantages = jnp.moveaxis(advantages, -1, 0)
+            returns = jnp.moveaxis(returns, -1, 0)
+            advantages = jax.tree.unflatten(trajectory_batch.structure, advantages)
+            returns = jax.tree.unflatten(trajectory_batch.structure, returns)
+
+        trajectory_batch = replace(
+            trajectory_batch,
+            return_=returns,
             advantage_=advantages,
         )
 
@@ -285,28 +384,31 @@ class PPOAgent(eqx.Module):
 
                 @eqx.filter_grad
                 def __ppo_los_fn(
-                    params,
-                    observations,
-                    actions,
-                    log_probs,
-                    values,
-                    advantages,
-                    returns,
+                    params: AgentState.Networks,
+                    train_batch: Transition,
+                    # observations,
+                    # actions,
+                    # log_probs,
+                    # values,
+                    # advantages,
+                    # returns,
                 ):
-                    action_dist = jax.vmap(params["actor"])(observations)
-                    log_prob = action_dist.log_prob(actions)
+                    # breakpoint()
+                    action_dist = jax.vmap(params.actor)(train_batch.observation)
+                    log_prob = action_dist.log_prob(train_batch.action)
                     entropy = action_dist.entropy().mean()
-                    value = jax.vmap(params["critic"])(observations)
+                    value = jax.vmap(params.critic)(train_batch.observation)
 
-                    if len(log_prob.shape) == 2:  # MultiDiscrete Action Space
+                    init_log_prob = train_batch.log_prob
+                    if log_prob.ndim == 2:  # MultiDiscrete Action Space
                         log_prob = jnp.sum(log_prob, axis=-1)
-                        log_probs = jnp.sum(log_probs, axis=-1)
+                        init_log_prob = jnp.sum(init_log_prob, axis=-1)
 
                     # actor loss
-                    ratio = jnp.exp(log_prob - log_probs)
-                    _advantages = (advantages - advantages.mean()) / (
-                        advantages.std() + 1e-8
-                    )
+                    ratio = jnp.exp(log_prob - init_log_prob)
+                    _advantages = (
+                        train_batch.advantage_ - train_batch.advantage_.mean()
+                    ) / (train_batch.advantage_.std() + 1e-8)
                     actor_loss1 = _advantages * ratio
 
                     actor_loss2 = (
@@ -315,15 +417,17 @@ class PPOAgent(eqx.Module):
                     )
                     actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
 
-                    value_pred_clipped = values + (
+                    value_pred_clipped = train_batch.value + (
                         jnp.clip(
-                            value - values,
+                            value - train_batch.value,
                             -self.clip_coef_vf,
                             self.clip_coef_vf,
                         )
                     )
-                    value_losses = jnp.square(value - returns)
-                    value_losses_clipped = jnp.square(value_pred_clipped - returns)
+                    value_losses = jnp.square(value - train_batch.return_)
+                    value_losses_clipped = jnp.square(
+                        value_pred_clipped - train_batch.return_
+                    )
                     value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
 
                     # Total loss
@@ -332,76 +436,57 @@ class PPOAgent(eqx.Module):
                     )
                     return total_loss  # , (actor_loss, value_loss, entropy)
 
-                def __update_over_minibatch(train_state: AgentState, minibatch):
-                    observations, actions, log_probs, values, advantages, returns = (
-                        minibatch.observation,
-                        minibatch.action,
-                        minibatch.log_prob,
-                        minibatch.value,
-                        minibatch.advantage_,
-                        minibatch.return_,
-                    )
-                    train_state = train_state.state
-
-                    params = jax.tree.map(
-                        lambda x: {"actor": x.actor, "critic": x.critic},
-                        train_state,
-                        is_leaf=lambda x: isinstance(x, AgentState),
-                    )
-                    if self.multi_agent_env:
-                        structure = jax.tree.structure(
-                            params, is_leaf=lambda x: x is not params
-                        )
-                        # in case of multiagent, advantages and returns are (mb_size, num_agents)
-                        # and we need to transpose them to (num_agents, mb_size)
-                        # in single agent case, they are (mb_size,), in which case transpose is a no-op
-                        advantages = list(jnp.transpose(advantages))
-                        returns = list(jnp.transpose(returns))
-                        advantages = jax.tree.unflatten(structure, advantages)
-                        returns = jax.tree.unflatten(structure, returns)
+                def __update_over_minibatch(
+                    current_self: PPOAgent, minibatch: Transition
+                ):
+                    # breakpoint()
 
                     grads = self.do_for_each_agent(
-                        lambda params, obs, act, logp, val, adv, ret: __ppo_los_fn(
-                            params, obs, act, logp, val, adv, ret
-                        ),
-                        params=params,
-                        obs=observations,
-                        act=actions,
-                        logp=log_probs,
-                        val=values,
-                        adv=advantages,
-                        ret=returns,
-                    )
-                    opt_states = jax.tree.map(
-                        lambda x: x.optimizer_state,
-                        train_state,
-                        is_leaf=lambda x: isinstance(x, AgentState),
+                        lambda params, batch: __ppo_los_fn(params, batch),
+                        params=current_self.networks,
+                        batch=minibatch.view_transposed,
                     )
 
-                    updates_and_optstate = self.do_for_each_agent(
+                    # observations, actions, log_probs, values, advantages, returns = (
+                    #     minibatch.observation,
+                    #     minibatch.action,
+                    #     minibatch.log_prob,
+                    #     minibatch.value,
+                    #     minibatch.advantage_,
+                    #     minibatch.return_,
+                    # )
+
+                    # grads = self.do_for_each_agent(
+                    #     lambda params, obs, act, logp, val, adv, ret: __ppo_los_fn(
+                    #         params, obs, act, logp, val, adv, ret
+                    #     ),
+                    #     params=current_self.networks,
+                    #     obs=observations,
+                    #     act=actions,
+                    #     logp=log_probs,
+                    #     val=values,
+                    #     adv=advantages,
+                    #     ret=returns,
+                    # )
+
+                    updates, optimizer_state = self.do_for_each_agent(
                         lambda u, s: self.optimizer.update(u, s),
                         u=grads,
-                        s=opt_states,
-                    )
-                    updates = self.do_for_each_agent(
-                        lambda x: x[0],
-                        x=updates_and_optstate,
-                    )
-                    optimizer_state = self.do_for_each_agent(
-                        lambda x: x[1],
-                        x=updates_and_optstate,
+                        s=current_self.optimizer_state,
                     )
 
                     new_networks = self.do_for_each_agent(
                         lambda params, updates: optax.apply_updates(params, updates),
-                        params=params,
+                        params=current_self.networks,
                         updates=updates,
                     )
 
                     train_state = self.do_for_each_agent(
                         lambda networks, opt_state: AgentState(
-                            actor=networks["actor"],
-                            critic=networks["critic"],
+                            networks=AgentState.Networks(
+                                actor=networks.actor,
+                                critic=networks.critic,
+                            ),
                             optimizer_state=opt_state,
                         ),
                         networks=new_networks,
@@ -410,18 +495,18 @@ class PPOAgent(eqx.Module):
                     return replace(self, state=train_state), None
 
                 batch_idx = jax.random.permutation(key, self.batch_size)
-                batch = trajectory_batch
 
                 # reshape (flatten over first dimension)
-                batch = jax.tree_util.tree_map(
-                    lambda x: x.reshape((self.batch_size,) + x.shape[2:]), batch
+                batch = jax.tree.map(
+                    lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
+                    trajectory_batch,
                 )
                 # take from the batch in a new order (the order of the randomized batch_idx)
-                shuffled_batch = jax.tree_util.tree_map(
+                shuffled_batch = jax.tree.map(
                     lambda x: jnp.take(x, batch_idx, axis=0), batch
                 )
                 # split in minibatches
-                minibatches = jax.tree_util.tree_map(
+                minibatches = jax.tree.map(
                     lambda x: x.reshape((self.num_minibatches, -1) + x.shape[1:]),
                     shuffled_batch,
                 )
@@ -478,10 +563,6 @@ class PPOAgent(eqx.Module):
         if not self.is_initialized:
             self = self.init(key, env)
 
-        # env = jym.LogWrapper(env)
-
-        breakpoint()
-
         def train_fn():
             # We wrap this logic so we can compile ahead of time
             obsv, env_state = jax.vmap(env.reset)(jax.random.split(key, self.num_envs))
@@ -506,6 +587,35 @@ class PPOAgent(eqx.Module):
         shared_argnames: list[str] = [],
         **func_args,
     ):
+        if not self.multi_agent_env:
+            return func(**func_args)
+
+        # Separate shared and per-agent args
+        shared_args = {k: v for k, v in func_args.items() if k in shared_argnames}
+        per_agent_args = {
+            k: v for k, v in func_args.items() if k not in shared_argnames
+        }
+
+        # Prepare a function that takes only per-agent args
+        def agent_func(*args):
+            per_agent_kwargs = dict(zip(per_agent_args.keys(), args))
+            return func(**per_agent_kwargs, **shared_args)
+
+        def map_one_level(f, tree, *rest):
+            # NOTE: Immidiately self-referential trees may pose a problem.
+            # see eqx.tree_flatten_one_level
+            # Likely not a problem here.
+            return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
+
+        # Use jax.tree_map to apply agent_func to the per-agent args
+        res = map_one_level(agent_func, *per_agent_args.values())
+
+        one_level_leaves, structure = eqx.tree_flatten_one_level(res)
+        if isinstance(one_level_leaves[0], tuple):
+            tupled = tuple([list(x) for x in zip(*one_level_leaves)])
+            res = tuple(jax.tree.unflatten(structure, leaves) for leaves in tupled)
+        return res
+
         if not self.multi_agent_env:
             # if not multiagent, just call the function
             return func(**func_args)
@@ -538,4 +648,8 @@ class PPOAgent(eqx.Module):
         per_agent_args = {arg: per_agent_args[arg] for arg in func_args_order}
 
         res = map_one_level(lambda *args: func(*args), *per_agent_args.values())
+        one_level_leaves, structure = eqx.tree_flatten_one_level(res)
+        if isinstance(one_level_leaves[0], tuple):
+            tupled = tuple([list(x) for x in zip(*one_level_leaves)])
+            res = tuple(jax.tree.unflatten(structure, leaves) for leaves in tupled)
         return res
