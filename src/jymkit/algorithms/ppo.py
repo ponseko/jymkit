@@ -1,6 +1,6 @@
 import time
 from dataclasses import replace
-from typing import Callable, Tuple
+from typing import Tuple
 
 import equinox as eqx
 import jax
@@ -11,7 +11,7 @@ from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 import jymkit as jym
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 
-from ._map_agents import map_each_agent
+from ._map_agents import map_each_agent, split_key_over_agents
 from .networks import ActorNetwork, CriticNetwork
 
 
@@ -148,9 +148,13 @@ class PPOAgent(eqx.Module):
         return self.state is not None
 
     def init(self, key: PRNGKeyArray, env: jym.Environment) -> "PPOAgent":
+        observation_space = env.observation_space
+        action_space = env.action_space
+        self = replace(self, multi_agent_env=env.multi_agent)
+
         @map_each_agent(
             shared_argnames=["actor_features", "critic_features", "optimizer"],
-            identity=self.multi_agent_env,
+            identity=not self.multi_agent_env,
         )
         def create_agent_state(
             key: PRNGKeyArray,
@@ -181,15 +185,8 @@ class PPOAgent(eqx.Module):
                 optimizer_state=optimizer_state,
             )
 
-        observation_space = env.observation_space
-        action_space = env.action_space
-        self = replace(self, multi_agent_env=env.multi_agent)
-
         env_agent_structure = jax.tree.structure(observation_space)
-        keys_per_agent = jax.tree.unflatten(
-            env_agent_structure,
-            list(jax.random.split(key, len(jax.tree.leaves(observation_space)))),
-        )
+        keys_per_agent = split_key_over_agents(key, env_agent_structure)
 
         # TODO: can define multiple optimizers by using map
         optimizer = optax.chain(
@@ -200,44 +197,7 @@ class PPOAgent(eqx.Module):
             ),
         )
 
-        # agent_states = map_each_agent(
-        #     self.create_agent_state,
-        #     shared_argnames=["actor_features", "critic_features", "optimizer"],
-        #     identity=not self.multi_agent_env,
-        # )(
-        #     output_space=action_space,
-        #     key=keys_per_agent,
-        #     actor_features=[64, 64],
-        #     critic_features=[64, 64],
-        #     obs_space=observation_space,
-        #     optimizer=optimizer,
-        # )
-
-        # NOTE to self:
-        # def our_improved_map_func(
-        #     func: Callable,
-        #     tree: PyTree, # <--- get first-level-structure
-        #     *rest # <--- remaining args that follow the same first-level structure are considered per-agent, the rest are shared
-        # ) -> PyTree:
-        #     ...
-
-        # NOTE to self:
-        # as a transformation the above still does not make sense
-        # in that case, we accept a func AND shared_argnums=[0, 1, 2] / shared_argnames=["actor_features", "critic_features", "optimizer"]
-
-        # agent_states2 = map_each_agent(
-        #     self.create_agent_state,
-        #     shared_argnames=["actor_features", "critic_features", "optimizer"],
-        #     identity=not self.multi_agent_env,
-        # )(
-        #     output_space=action_space,
-        #     key=keys_per_agent,
-        #     actor_features=[64, 64],
-        #     critic_features=[64, 64],
-        #     obs_space=observation_space,
-        #     optimizer=optimizer,
-        # )
-        agent_states2 = create_agent_state(
+        agent_states = create_agent_state(
             output_space=action_space,
             key=keys_per_agent,
             actor_features=[64, 64],
@@ -245,19 +205,6 @@ class PPOAgent(eqx.Module):
             obs_space=observation_space,
             optimizer=optimizer,
         )
-
-        agent_states = self.do_for_each_agent(
-            create_agent_state,
-            output_space=action_space,
-            key=keys_per_agent,
-            actor_features=[64, 64],
-            critic_features=[64, 64],
-            obs_space=observation_space,
-            optimizer=optimizer,
-            shared_argnames=["actor_features", "critic_features", "optimizer"],
-        )
-
-        breakpoint()
 
         agent = replace(
             self,
@@ -267,32 +214,35 @@ class PPOAgent(eqx.Module):
         return agent
 
     def forward_critic(self, observation):
-        value = self.do_for_each_agent(
+        value = map_each_agent(
             lambda a, o: a.critic(o),
-            a=self.state,
-            o=observation,
-        )
+            identity=not self.multi_agent_env,
+        )(a=self.state, o=observation)
         return value
 
     def forward_actor(self, observation, key, get_log_prob=True):
-        action_dist = self.do_for_each_agent(
-            lambda a, o: a.actor(o),
-            a=self.state,
-            o=observation,
-        )
-        action = self.do_for_each_agent(
-            lambda a, key: a.sample(seed=key),
-            a=action_dist,
-            key=key,
-            shared_argnames=["key"],  # TODO: tmp
-        )
+        # if self.multi_agent_env:
+        #     _, structure = eqx.tree_flatten_one_level(observation)
+        #     key = split_key_over_agents(key, structure)
+        action_dist = map_each_agent(
+            lambda a, o: a.actor(o), identity=not self.multi_agent_env
+        )(a=self.state, o=observation)
+
+        action = map_each_agent(
+            lambda dist, seed: dist.sample(seed=seed),
+            identity=not self.multi_agent_env,
+            shared_argnames=["seed"],  # NOTE: not sharing the seed is causing nans
+        )(dist=action_dist, seed=key)
+
         if not get_log_prob:
             return action
-        log_prob = self.do_for_each_agent(
-            lambda a, act: a.log_prob(act),
-            a=action_dist,
+        log_prob = map_each_agent(
+            lambda dist, act: dist.log_prob(act), identity=not self.multi_agent_env
+        )(
+            dist=action_dist,
             act=action,
         )
+
         return action, log_prob
 
     def evaluate(self, key: PRNGKeyArray, env: jym.Environment):
@@ -459,6 +409,7 @@ class PPOAgent(eqx.Module):
                     )
                     return total_loss  # , (actor_loss, value_loss, entropy)
 
+                @map_each_agent(identity=not self.multi_agent_env)
                 def __update_state_over_minibatch(
                     current_state: AgentState, minibatch: Transition
                 ):
@@ -495,10 +446,10 @@ class PPOAgent(eqx.Module):
                     shuffled_batch,
                 )
                 # Update (each) agent
-                updated_state, _ = self.do_for_each_agent(
-                    lambda s, m: jax.lax.scan(__update_state_over_minibatch, s, m),
-                    s=self.state,
-                    m=minibatches.view_transposed,
+                updated_state, _ = jax.lax.scan(
+                    __update_state_over_minibatch,
+                    self.state,
+                    minibatches.view_transposed,
                 )
                 return replace(self, state=updated_state)
 
@@ -566,63 +517,3 @@ class PPOAgent(eqx.Module):
         updated_self = train_fn()
         print(f"Training finished in {(time.time() - s_time):.2f} seconds")
         return updated_self
-
-    def do_for_each_agent(
-        self,
-        func: Callable,
-        shared_argnames: list[str] = [],
-        **func_args,
-    ):
-        if not self.multi_agent_env:
-            return func(**func_args)
-
-        # Prepare a function that takes only per-agent args
-        def agent_func(*args):
-            per_agent_kwargs = dict(zip(per_agent_args.keys(), args))
-            return func(**per_agent_kwargs, **shared_args)
-
-        def map_one_level(f, tree, *rest):
-            # NOTE: Immidiately self-referential trees may pose a problem.
-            # see eqx.tree_flatten_one_level
-            # Likely not a problem here.
-            return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
-
-        def stack_agents(agent_dict):
-            return jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *agent_dict.values())
-
-        # Separate shared and per-agent args
-        shared_args = {k: v for k, v in func_args.items() if k in shared_argnames}
-        per_agent_args = {
-            k: v for k, v in func_args.items() if k not in shared_argnames
-        }
-
-        try:
-            # no_gov = jax.tree.map(
-            #     lambda x: {k: v for k, v in x.items() if k != "government"},
-            #     per_agent_args,
-            #     is_leaf=lambda y: y is not per_agent_args,
-            # )
-            stacked = {k: stack_agents(v) for k, v in per_agent_args.items()}
-            res = jax.vmap(agent_func)(*stacked.values())
-            leaves = jax.tree.leaves(res)
-            leaves = [list(x) for x in zip(*leaves)]
-            leaves = [
-                jax.tree.unflatten(jax.tree.structure(res), x) for x in leaves
-            ]  # NOTE
-            dummy_arg = per_agent_args[list(per_agent_args.keys())[0]]
-            agent_structure = jax.tree.structure(
-                dummy_arg, is_leaf=lambda x: x is not dummy_arg
-            )
-            res = jax.tree.unflatten(agent_structure, leaves)
-            print("Using vmap")
-
-        except Exception:
-            # Use jax.tree_map to apply agent_func to the per-agent args
-            res = map_one_level(agent_func, *per_agent_args.values())
-            print("Using tree_map")
-
-        one_level_leaves, structure = eqx.tree_flatten_one_level(res)
-        if isinstance(one_level_leaves[0], tuple):
-            tupled = tuple([list(x) for x in zip(*one_level_leaves)])
-            res = tuple(jax.tree.unflatten(structure, leaves) for leaves in tupled)
-        return res

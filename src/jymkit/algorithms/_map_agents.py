@@ -4,6 +4,7 @@ from typing import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jaxtyping import PRNGKeyArray, PyTreeDef
 
 
 def _result_tuple_to_tuple_result(r):
@@ -18,66 +19,19 @@ def _result_tuple_to_tuple_result(r):
     return r
 
 
-# def treemap_each_agent(
-#     func: Callable, shared_argnames: list[str] = None, identity: bool = False
-# ):
-#     @functools.wraps(func)
-#     def wrapper(*args, **kwargs):
-#         if identity:
-#             return func(*args, **kwargs)
+def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
+    """
+    Given a key and a pytree structure, split the key into
+    as many keys as there are leaves in the pytree.
+    Useful when provided with a flat pytree of agents.
 
-#         # Separate shared and per-agent args
-#         shared_args = {k: v for k, v in kwargs.items() if k in shared_argnames}
-#         per_agent_args = {k: v for k, v in kwargs.items() if k not in shared_argnames}
-
-#         def map_one_level(f, tree, *rest):
-#             # NOTE: Immidiately self-referential trees may pose a problem.
-#             # see eqx.tree_flatten_one_level
-#             # Likely not a problem here.
-#             return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
-
-#         # Prepare a function that takes only per-agent args
-#         def agent_func(*args):
-#             per_agent_kwargs = dict(zip(per_agent_args.keys(), args))
-#             return func(**per_agent_kwargs, **shared_args)
-
-#         result = map_one_level(agent_func, *per_agent_args.values())
-#         return _result_tuple_to_tuple_result(result)
-
-#     return wrapper
-
-
-# def vmap_each_agent(
-#     func: Callable, shared_argnames: list[str] = None, identity: bool = False
-# ):
-#     @functools.wraps(func)
-#     def wrapper(*args, **kwargs):
-#         if identity:
-#             return func(*args, **kwargs)
-
-#         # Separate shared and per-agent args
-#         shared_args = {k: v for k, v in kwargs.items() if k in shared_argnames}
-#         per_agent_args = {k: v for k, v in kwargs.items() if k not in shared_argnames}
-#         dummy = per_agent_args[list(per_agent_args.keys())[0]]
-#         agent_structure = jax.tree.structure(dummy, is_leaf=lambda x: x is not dummy)
-
-#         def stack_agents(agent_dict):
-#             return jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *agent_dict.values())
-
-#         # Prepare a function that takes only per-agent args
-#         def agent_func(*args):
-#             per_agent_kwargs = dict(zip(per_agent_args.keys(), args))
-#             return func(**per_agent_kwargs, **shared_args)
-
-#         stacked = {k: stack_agents(v) for k, v in per_agent_args.items()}
-#         result = jax.vmap(agent_func)(*stacked.values())
-#         leaves = jax.tree.leaves(result)
-#         leaves = [list(x) for x in zip(*leaves)]
-#         leaves = [jax.tree.unflatten(jax.tree.structure(result), x) for x in leaves]
-#         result = jax.tree.unflatten(agent_structure, leaves)
-#         return _result_tuple_to_tuple_result(result)
-
-#     return wrapper
+    *Arguments*:
+        `key`: A PRNGKeyArray to be split.
+        `agent_structure`: A pytree structure of agents.
+    """
+    num_agents = agent_structure.num_leaves
+    keys = list(jax.random.split(key, num_agents))
+    return jax.tree.unflatten(agent_structure, keys)
 
 
 def map_each_agent(
@@ -114,6 +68,14 @@ def map_each_agent(
             if identity:
                 return func(*args, **kwargs)
 
+            # Map positional args to their respective keyword arguments
+            kw_args = list(func.__code__.co_varnames[: func.__code__.co_argcount])
+            for i, arg in enumerate(args):
+                if kw_args[i] in kwargs:
+                    raise ValueError(f"Duplicate argument: {kw_args[i]}")
+                if i < len(kw_args):
+                    kwargs[kw_args[i]] = arg
+
             # Separate shared and per-agent args
             shared_args = {k: v for k, v in kwargs.items() if k in shared_argnames}
             per_agent_args = {
@@ -121,8 +83,8 @@ def map_each_agent(
             }
 
             # Prepare a function that takes only per-agent args
-            def agent_func(*args):
-                per_agent_kwargs = dict(zip(per_agent_args.keys(), args))
+            def agent_func(*agent_args):
+                per_agent_kwargs = dict(zip(per_agent_args.keys(), agent_args))
                 return func(**per_agent_kwargs, **shared_args)
 
             try:
