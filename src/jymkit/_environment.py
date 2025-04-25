@@ -21,13 +21,11 @@ class Environment(eqx.Module):
 
     **Properties:**
 
-    - `max_episode_steps`: Maximum number of steps in an episode before truncation. If 0, no limit is enforced (default: 0)
     - `multi_agent`: Indicates if the environment supports multiple agents.
 
     """
 
-    max_episode_steps: int = 0
-    multi_agent: bool = False
+    multi_agent: bool = eqx.field(default=False, kw_only=True)
 
     def step(
         self, key: PRNGKeyArray, state: EnvState, action: Action
