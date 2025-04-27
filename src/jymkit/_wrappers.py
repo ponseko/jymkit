@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import Tuple
+from typing import Any, Tuple, TypeVar
 
 import equinox as eqx
 import jax
@@ -8,18 +8,20 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jymkit as jym
 
+TObservation = TypeVar("TObservation")
+
 
 class Wrapper(eqx.Module):
     """Base class for all wrappers."""
 
-    env: jym.Environment
+    env: Any
 
     def __getattr__(self, name):
         return getattr(self.env, name)
 
 
 class LogEnvState(eqx.Module):
-    env_state: jym.EnvState
+    env_state: Any
     episode_returns: float | Array
     episode_lengths: int | Array
     returned_episode_returns: float | Array
@@ -35,7 +37,7 @@ class LogWrapper(Wrapper):
     - `env`: Environment to wrap.
     """
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[jym.Observation, LogEnvState]:
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, LogEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self.env.reset(key)
         structure = jax.tree.structure(
             obs, is_leaf=lambda x: isinstance(x, jym.AgentObservation)
@@ -52,7 +54,7 @@ class LogWrapper(Wrapper):
         return obs, state
 
     def step(
-        self, key: PRNGKeyArray, state: LogEnvState, action: jym.Action
+        self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[jym.TimeStep, LogEnvState]:
         timestep, env_state = self.env.step(key, state.env_state, action)
         reward = self._flat_reward(timestep.reward)
@@ -95,7 +97,7 @@ class GymnaxWrapper(Wrapper):
     retrieve_truncated_info: bool = False
 
     def step(
-        self, key: PRNGKeyArray, state: jym.EnvState, action: jym.Action
+        self, key: PRNGKeyArray, state: Any, action: int | float
     ) -> Tuple[jym.TimeStep, jym.Environment]:
         obs, env_state, done, reward, info = self.env.step(key, state, action)
         terminated, truncated = done, False
@@ -116,7 +118,7 @@ class GymnaxWrapper(Wrapper):
                 raise e
 
         timestep = jym.TimeStep(
-            obs=obs,
+            observation=obs,
             reward=reward,
             terminated=terminated,
             truncated=truncated,

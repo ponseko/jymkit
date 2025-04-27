@@ -1,17 +1,17 @@
 import time
 from dataclasses import replace
-from typing import Tuple
+from typing import Optional, Tuple
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 
-from ._map_agents import map_each_agent, split_key_over_agents
+from ._map_agents import map_each_agent, scan_logger, split_key_over_agents
 from .networks import ActorNetwork, CriticNetwork
 
 
@@ -20,14 +20,14 @@ from .networks import ActorNetwork, CriticNetwork
 class Transition(eqx.Module):
     observation: Array
     action: Array
-    reward: Array
-    terminated: Array
+    reward: Float[Array, "..."]
+    terminated: Bool[Array, "..."]
     log_prob: Array
-    info: Array
+    info: dict
     value: Array
     next_value: Array
-    return_: Array = None
-    advantage_: Array = None
+    return_: Optional[Array] = None
+    advantage_: Optional[Array] = None
 
     @property
     def structure(self) -> PyTreeDef:
@@ -165,6 +165,7 @@ class PPOAgent(eqx.Module):
             optimizer: optax.GradientTransformation,
         ) -> AgentState:
             actor_key, critic_key = jax.random.split(key)
+
             actor = ActorNetwork(
                 key=actor_key,
                 obs_space=obs_space,
@@ -177,7 +178,9 @@ class PPOAgent(eqx.Module):
                 hidden_dims=critic_features,
                 output_space=1,
             )
-            optimizer_state = optimizer.init((actor, critic))
+            optimizer_state = optimizer.init(
+                eqx.filter((actor, critic), eqx.is_inexact_array)
+            )
 
             return AgentState(
                 actor=actor,
@@ -213,13 +216,14 @@ class PPOAgent(eqx.Module):
         )
         return agent
 
-    def forward_critic(self, observation):
+    def forward_critic(self, observation: PyTree[Array]):
         value = map_each_agent(
             lambda a, o: a.critic(o),
             identity=not self.multi_agent_env,
         )(a=self.state, o=observation)
         return value
 
+    @jax.jit
     def forward_actor(self, observation, key, get_log_prob=True):
         # if self.multi_agent_env:
         #     _, structure = eqx.tree_flatten_one_level(observation)
@@ -300,8 +304,8 @@ class PPOAgent(eqx.Module):
             transition = Transition(
                 observation=last_obs,
                 action=action,
-                reward=reward,
-                terminated=terminated,
+                reward=jnp.asarray(reward),
+                terminated=jnp.asarray(terminated),
                 log_prob=log_prob,
                 info=info,
                 value=value,
@@ -355,6 +359,7 @@ class PPOAgent(eqx.Module):
         return rollout_state, trajectory_batch
 
     def train(self, key: PRNGKeyArray, env: jym.Environment) -> "PPOAgent":
+        @scan_logger(log_function="simple", log_interval=0.05, n=self.num_iterations)
         def train_iteration(runner_state, _):
             def update_epoch(
                 trajectory_batch: Transition, key: PRNGKeyArray
@@ -363,8 +368,11 @@ class PPOAgent(eqx.Module):
 
                 @eqx.filter_grad
                 def __ppo_los_fn(
-                    params: Tuple[eqx.Module, eqx.Module], train_batch: Transition
+                    params: Tuple[ActorNetwork, CriticNetwork], train_batch: Transition
                 ):
+                    assert train_batch.advantage_ is not None
+                    assert train_batch.return_ is not None
+
                     actor, critic = params
                     action_dist = jax.vmap(actor)(train_batch.observation)
                     log_prob = action_dist.log_prob(train_batch.action)
@@ -418,9 +426,7 @@ class PPOAgent(eqx.Module):
                     updates, optimizer_state = self.optimizer.update(
                         grads, current_state.optimizer_state
                     )
-                    new_actor, new_critic = optax.apply_updates(
-                        (actor, critic), updates
-                    )
+                    new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
                     updated_state = AgentState(
                         actor=new_actor,
                         critic=new_critic,
@@ -465,37 +471,9 @@ class PPOAgent(eqx.Module):
                 self = update_epoch(trajectory_batch, epoch_keys[i])
 
             metric = trajectory_batch.info
-            rng, eval_key = jax.random.split(rng)
-
-            if self.debug:
-                # eval_rewards = self.evaluate(eval_key, env)
-                # metric["eval_rewards"] = eval_rewards
-
-                def callback(info):
-                    # Only print after training for 10%
-                    if (
-                        info["timestep"][-1][0]
-                        < (self.total_timesteps // self.num_envs) * 0.1
-                    ):
-                        return
-                    return_values = info["returned_episode_returns"][
-                        info["returned_episode"]
-                    ]
-                    timesteps = (
-                        info["timestep"][info["returned_episode"]] * self.num_envs
-                    )
-                    for t in range(len(timesteps)):
-                        print(
-                            f"global step={timesteps[t]}, episodic return={return_values[t]}"
-                        )
-                    # print(
-                    #     f"timestep={(info['timestep'][-1][0] * self.num_envs)}, eval rewards={info['eval_rewards']}"
-                    # )
-
-                jax.debug.callback(callback, metric)
 
             runner_state = (self, env_state, last_obs, rng)
-            return runner_state, _
+            return runner_state, metric
 
         if not self.is_initialized:
             self = self.init(key, env)
@@ -505,7 +483,7 @@ class PPOAgent(eqx.Module):
             obsv, env_state = jax.vmap(env.reset)(jax.random.split(key, self.num_envs))
             runner_state = (self, env_state, obsv, key)
             runner_state, metrics = jax.lax.scan(
-                train_iteration, runner_state, None, self.num_iterations
+                train_iteration, runner_state, jnp.arange(self.num_iterations)
             )
             return runner_state[0]
 

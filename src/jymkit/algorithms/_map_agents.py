@@ -1,5 +1,5 @@
 import functools
-from typing import Callable
+from typing import Callable, Literal, Optional
 
 import equinox as eqx
 import jax
@@ -35,8 +35,10 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
 
 
 def map_each_agent(
-    func: Callable = None, shared_argnames: list[str] = [], identity: bool = False
-):
+    func: Optional[Callable] = None,
+    shared_argnames: list[str] = [],
+    identity: bool = False,
+) -> Callable:
     assert callable(func) or func is None
 
     def _treemap_each_agent(agent_func: Callable, agent_args: dict):
@@ -96,3 +98,84 @@ def map_each_agent(
         return wrapper
 
     return decorator(func) if callable(func) else decorator
+
+
+def scan_logger(
+    func: Optional[Callable] = None,
+    log_function: Optional[Callable | Literal["tqdm", "simple"]] = None,
+    log_interval: int | float = 20,
+    n: Optional[int] = None,
+) -> Callable:
+    assert callable(func) or func is None
+
+    assert log_interval > 0, "log_interval must be greater than 0"
+    if log_interval < 1:
+        assert n is not None, "n must be provided if log_interval is less than 1"
+        log_interval = int(n * log_interval)
+
+    if log_function == "tqdm":
+        import tqdm.auto
+
+        progress_bar = []
+
+        def update_tqdm_bar(_, iteration):
+            if iteration == 0:
+                progress_bar.append(
+                    tqdm.auto.tqdm(
+                        total=n, desc="Training Progress", unit=" iterations "
+                    )
+                )
+
+            progress_bar[0].update(log_interval)
+
+    def simple_reward_logger(data, iteration):
+        if (
+            "returned_episode_returns" not in data
+            or "returned_episode" not in data
+            or "timestep" not in data
+        ):
+            raise ValueError(
+                "Missing keys in logging data. Is the environment wrapped with LogWrapper?"
+            )
+
+        num_envs = data["timestep"].shape[-1]
+        return_values = data["returned_episode_returns"][data["returned_episode"]]
+        timesteps = data["timestep"][data["returned_episode"]] * num_envs
+        for t in range(len(timesteps)):
+            print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
+
+    def maybe_log(iteration: int, data):
+        if log_function is not None and log_interval > 0:
+            if log_function == "tqdm":
+                log_fn = update_tqdm_bar
+            elif log_function == "simple":
+                log_fn = simple_reward_logger
+            else:
+                log_fn = log_function
+
+            _ = jax.lax.cond(
+                iteration % log_interval == 0,
+                lambda: jax.debug.callback(
+                    lambda d, i: log_fn(d, i) if callable(log_fn) else None,
+                    data,
+                    iteration,
+                ),
+                lambda: None,
+            )
+
+    def _scan_logger(func):
+        @functools.wraps(func)
+        def wrapper(carry, x):
+            if type(x) is tuple:
+                iter_num, *_ = x
+            else:
+                iter_num = x
+
+            result = func(carry, x)
+            this_iter_metrics = result[1]
+            maybe_log(iter_num, this_iter_metrics)
+            return result
+
+        return wrapper
+
+    return _scan_logger(func) if callable(func) else _scan_logger

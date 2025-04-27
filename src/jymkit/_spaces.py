@@ -45,7 +45,7 @@ class Box(Space):
 
     def contains(self, x: float) -> bool:
         """Check if x is in the box space."""
-        return np.all(np.logical_and(x >= self.low, x <= self.high))
+        return bool(np.all(np.logical_and(x >= self.low, x <= self.high)))
 
 
 @dataclass

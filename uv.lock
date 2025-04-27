@@ -311,7 +311,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "distrax", marker = "extra == 'algs'", specifier = ">=0.1.5" },
-    { name = "equinox", specifier = ">=0.11.12" },
+    { name = "equinox", specifier = "==0.12.1" },
     { name = "jax", specifier = ">=0.5.2" },
     { name = "jax", extras = ["cuda"], marker = "extra == 'gpu'", specifier = ">=0.5.2" },
     { name = "optax", marker = "extra == 'algs'", specifier = ">=0.2.4" },

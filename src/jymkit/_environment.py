@@ -1,18 +1,21 @@
 from abc import abstractmethod
-from typing import Tuple
+from typing import Generic, Tuple, TypeVar
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 from ._spaces import Space
-from ._types import Action, EnvState, Observation, TimeStep
+from ._types import TimeStep
 
 ORIGINAL_OBSERVATION_KEY = "_TERMINAL_OBSERVATION"
 
+TObservation = TypeVar("TObservation")
+TEnvState = TypeVar("TEnvState")
 
-class Environment(eqx.Module):
+
+class Environment(eqx.Module, Generic[TEnvState]):
     """
     Abstract environment template for reinforcement learning environments in JAX.
 
@@ -28,8 +31,11 @@ class Environment(eqx.Module):
     multi_agent: bool = eqx.field(default=False, kw_only=True)
 
     def step(
-        self, key: PRNGKeyArray, state: EnvState, action: Action
-    ) -> Tuple[TimeStep, EnvState]:
+        self,
+        key: PRNGKeyArray,
+        state: TEnvState,
+        action: PyTree[int | float | Array],
+    ) -> Tuple[TimeStep, TEnvState]:
         """
         Steps the environment forward with the given action and performs auto-reset when necessary.
         Environment-specific logic is defined in the `step_env` method. In principle, this function
@@ -59,7 +65,7 @@ class Environment(eqx.Module):
 
         return TimeStep(obs, reward, terminated, truncated, info), state
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[Observation, EnvState]:
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Resets the environment to an initial state and returns the initial observation.
         Environment-specific logic is defined in the `reset_env` method. In principle, this function
@@ -73,8 +79,8 @@ class Environment(eqx.Module):
 
     @abstractmethod
     def step_env(
-        self, key: PRNGKeyArray, state: EnvState, action: Action
-    ) -> Tuple[TimeStep, EnvState]:
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[TimeStep, TEnvState]:
         """
         Defines the environment-specific step logic.
 
@@ -87,7 +93,7 @@ class Environment(eqx.Module):
         pass
 
     @abstractmethod
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Observation, EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Defines the environment-specific reset logic.
 
