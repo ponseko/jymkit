@@ -1,6 +1,6 @@
 import time
 from dataclasses import replace
-from typing import Optional, Tuple
+from typing import Callable, Literal, Optional, Tuple
 
 import equinox as eqx
 import jax
@@ -10,8 +10,9 @@ from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
+from jymkit._wrappers import VecEnvWrapper, is_wrapped
 
-from ._map_agents import map_each_agent, scan_logger, split_key_over_agents
+from ._map_agents import map_each_agent, scan_callback, split_key_over_agents
 from .networks import ActorNetwork, CriticNetwork
 
 
@@ -105,7 +106,7 @@ class AgentState(eqx.Module):
     optimizer_state: optax.OptState
 
 
-class PPOAgent(eqx.Module):
+class PPO(eqx.Module):
     state: PyTree[AgentState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
@@ -129,7 +130,10 @@ class PPOAgent(eqx.Module):
         static=True, default=4
     )  # K epochs to update the policy
 
-    debug: bool = eqx.field(static=True, default=True)
+    log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
+        static=True, default="simple"
+    )
+    log_interval: int | float = eqx.field(static=True, default=0.05)
 
     @property
     def minibatch_size(self):
@@ -147,7 +151,7 @@ class PPOAgent(eqx.Module):
     def is_initialized(self):
         return self.state is not None
 
-    def init(self, key: PRNGKeyArray, env: jym.Environment) -> "PPOAgent":
+    def init(self, key: PRNGKeyArray, env: jym.Environment) -> "PPO":
         observation_space = env.observation_space
         action_space = env.action_space
         self = replace(self, multi_agent_env=env.multi_agent)
@@ -188,7 +192,7 @@ class PPOAgent(eqx.Module):
                 optimizer_state=optimizer_state,
             )
 
-        env_agent_structure = jax.tree.structure(observation_space)
+        env_agent_structure = env.agent_structure
         keys_per_agent = split_key_over_agents(key, env_agent_structure)
 
         # TODO: can define multiple optimizers by using map
@@ -223,7 +227,6 @@ class PPOAgent(eqx.Module):
         )(a=self.state, o=observation)
         return value
 
-    @jax.jit
     def forward_actor(self, observation, key, get_log_prob=True):
         # if self.multi_agent_env:
         #     _, structure = eqx.tree_flatten_one_level(observation)
@@ -288,7 +291,7 @@ class PPOAgent(eqx.Module):
             # take a step in the environment
             rng, key = jax.random.split(rng)
             step_key = jax.random.split(key, self.num_envs)
-            (obsv, reward, terminated, truncated, info), env_state = jax.vmap(env.step)(
+            (obsv, reward, terminated, truncated, info), env_state = env.step(
                 step_key, env_state, action
             )
 
@@ -304,8 +307,8 @@ class PPOAgent(eqx.Module):
             transition = Transition(
                 observation=last_obs,
                 action=action,
-                reward=jnp.asarray(reward),
-                terminated=jnp.asarray(terminated),
+                reward=reward,
+                terminated=terminated,
                 log_prob=log_prob,
                 info=info,
                 value=value,
@@ -358,12 +361,14 @@ class PPOAgent(eqx.Module):
 
         return rollout_state, trajectory_batch
 
-    def train(self, key: PRNGKeyArray, env: jym.Environment) -> "PPOAgent":
-        @scan_logger(log_function="simple", log_interval=0.05, n=self.num_iterations)
+    def train(self, key: PRNGKeyArray, env: jym.Environment) -> "PPO":
+        @scan_callback(
+            callback_fn=self.log_function,
+            callback_interval=self.log_interval,
+            n=self.num_iterations,
+        )
         def train_iteration(runner_state, _):
-            def update_epoch(
-                trajectory_batch: Transition, key: PRNGKeyArray
-            ) -> PPOAgent:
+            def update_epoch(trajectory_batch: Transition, key: PRNGKeyArray) -> PPO:
                 """Do one epoch of update"""
 
                 @eqx.filter_grad
@@ -459,7 +464,7 @@ class PPOAgent(eqx.Module):
                 )
                 return replace(self, state=updated_state)
 
-            self: PPOAgent = runner_state[0]
+            self: PPO = runner_state[0]
             # Do rollout of single trajactory
             rollout_state = runner_state[1:]
             (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
@@ -475,12 +480,16 @@ class PPOAgent(eqx.Module):
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
+        if not is_wrapped(env, VecEnvWrapper):
+            print("Wrapping environment in VecEnvWrapper")
+            env = VecEnvWrapper(env)
+
         if not self.is_initialized:
             self = self.init(key, env)
 
         def train_fn():
             # We wrap this logic so we can compile ahead of time
-            obsv, env_state = jax.vmap(env.reset)(jax.random.split(key, self.num_envs))
+            obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
             runner_state = (self, env_state, obsv, key)
             runner_state, metrics = jax.lax.scan(
                 train_iteration, runner_state, jnp.arange(self.num_iterations)

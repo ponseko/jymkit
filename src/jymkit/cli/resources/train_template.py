@@ -2,7 +2,7 @@ import jax
 from jaxtyping import PRNGKeyArray
 
 import jymkit as jym
-from jymkit.algorithms import PPOAgent
+from jymkit.algorithms import PPO
 
 # from <PROJECTNAME> import ExampleEnv
 
@@ -27,14 +27,14 @@ def do_random_evaluation(
 
 
 if __name__ == "__main__":
-    env = ExampleEnv()
+    env = ExampleEnv()  # noqa: F821
     rng = jax.random.PRNGKey(0)
 
     random_rewards = do_random_evaluation(rng, env)
     print(f"Random Agent average reward: {random_rewards}")
 
     # RL Training with PPO
-    agent = PPOAgent(
+    agent = PPO(
         total_timesteps=50000,
         num_steps=32,
         ent_coef=0.0,

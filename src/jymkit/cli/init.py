@@ -165,7 +165,7 @@ def main():
             if include_algorithm_source:
                 if line.strip().startswith("from jymkit.algorithms"):
                     # Replace the line with the correct import statement
-                    lines[i] = f"from {project_path.name}.algorithms import PPOAgent\n"
+                    lines[i] = f"from {project_path.name}.algorithms import PPO\n"
         with open(project_path / "train_example.py", "w") as file:
             file.writelines(lines)
 

@@ -1,6 +1,6 @@
 from typing import NamedTuple
 
-from jaxtyping import Array, PyTree
+from jaxtyping import Array, Bool, Float, PyTree
 
 
 class TimeStep(NamedTuple):
@@ -9,9 +9,9 @@ class TimeStep(NamedTuple):
     """
 
     observation: Array | PyTree
-    reward: float | PyTree[float]
-    terminated: bool | Array | PyTree
-    truncated: bool | Array | PyTree
+    reward: Float[Array, "..."] | PyTree[Float[Array, "..."]]
+    terminated: Bool[Array, "..."] | PyTree[Bool[Array, "..."]]
+    truncated: Bool[Array, "..."] | PyTree[Bool[Array, "..."]]
     info: dict
 
 

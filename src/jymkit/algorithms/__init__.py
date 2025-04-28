@@ -1,5 +1,5 @@
 try:
-    from .ppo import PPOAgent
+    from .ppo import PPO as PPO
 
 except ImportError:
     raise ImportError(

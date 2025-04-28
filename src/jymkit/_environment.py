@@ -4,7 +4,7 @@ from typing import Generic, Tuple, TypeVar
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 
 from ._spaces import Space
 from ._types import TimeStep
@@ -105,7 +105,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
     @property
     @abstractmethod
-    def action_space(self) -> PyTree[Space]:
+    def action_space(self) -> Space:
         """
         Defines the space of valid actions for the environment.
         """
@@ -113,8 +113,19 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
     @property
     @abstractmethod
-    def observation_space(self) -> PyTree[Space]:
+    def observation_space(self) -> Space:
         """
         Defines the space of possible observations from the environment.
         """
         pass
+
+    @property
+    def agent_structure(self) -> PyTreeDef:
+        """
+        Returns the structure of the agent space.
+        This is useful for environments with multiple agents.
+        """
+        if not self.multi_agent:
+            return jax.tree.structure(0)
+        _, agent_structure = eqx.tree_flatten_one_level(self.action_space)
+        return agent_structure

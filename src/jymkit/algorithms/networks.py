@@ -143,6 +143,7 @@ class ActorNetwork(eqx.Module):
             obs_space,
             # is_leaf=lambda x: isinstance(x, jym.Space),
         )
+
         input_dim = int(np.sum(np.array(input_shape)))
 
         for i, hidden_dim in enumerate(hidden_dims):

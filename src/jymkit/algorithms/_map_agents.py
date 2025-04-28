@@ -15,7 +15,7 @@ def _result_tuple_to_tuple_result(r):
     one_level_leaves, structure = eqx.tree_flatten_one_level(r)
     if isinstance(one_level_leaves[0], tuple):
         tupled = tuple([list(x) for x in zip(*one_level_leaves)])
-        r = tuple(jax.tree_unflatten(structure, leaves) for leaves in tupled)
+        r = tuple(jax.tree.unflatten(structure, leaves) for leaves in tupled)
     return r
 
 
@@ -100,21 +100,26 @@ def map_each_agent(
     return decorator(func) if callable(func) else decorator
 
 
-def scan_logger(
+def scan_callback(
     func: Optional[Callable] = None,
-    log_function: Optional[Callable | Literal["tqdm", "simple"]] = None,
-    log_interval: int | float = 20,
+    callback_fn: Optional[Callable | Literal["tqdm", "simple"]] = None,
+    callback_interval: int | float = 20,
     n: Optional[int] = None,
 ) -> Callable:
     assert callable(func) or func is None
 
-    assert log_interval > 0, "log_interval must be greater than 0"
-    if log_interval < 1:
-        assert n is not None, "n must be provided if log_interval is less than 1"
-        log_interval = int(n * log_interval)
+    assert callback_interval > 0, "callback_interval must be greater than 0"
+    if callback_interval < 1:
+        assert n is not None, "n must be provided if callback_interval is less than 1"
+        callback_interval = int(n * callback_interval)
 
-    if log_function == "tqdm":
-        import tqdm.auto
+    if callback_fn == "tqdm":
+        try:
+            import tqdm.auto
+        except ImportError:
+            raise ImportError(
+                "Ltqdm is not installed. Please install it with `pip install tqdm`."
+            )
 
         progress_bar = []
 
@@ -126,7 +131,7 @@ def scan_logger(
                     )
                 )
 
-            progress_bar[0].update(log_interval)
+            progress_bar[0].update(callback_interval)
 
     def simple_reward_logger(data, iteration):
         if (
@@ -145,16 +150,16 @@ def scan_logger(
             print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
 
     def maybe_log(iteration: int, data):
-        if log_function is not None and log_interval > 0:
-            if log_function == "tqdm":
+        if callback_fn is not None and callback_interval > 0:
+            if callback_fn == "tqdm":
                 log_fn = update_tqdm_bar
-            elif log_function == "simple":
+            elif callback_fn == "simple":
                 log_fn = simple_reward_logger
             else:
-                log_fn = log_function
+                log_fn = callback_fn
 
             _ = jax.lax.cond(
-                iteration % log_interval == 0,
+                iteration % callback_interval == 0,
                 lambda: jax.debug.callback(
                     lambda d, i: log_fn(d, i) if callable(log_fn) else None,
                     data,
@@ -163,7 +168,7 @@ def scan_logger(
                 lambda: None,
             )
 
-    def _scan_logger(func):
+    def _scan_callback(func):
         @functools.wraps(func)
         def wrapper(carry, x):
             if type(x) is tuple:
@@ -178,4 +183,4 @@ def scan_logger(
 
         return wrapper
 
-    return _scan_logger(func) if callable(func) else _scan_logger
+    return _scan_callback(func) if callable(func) else _scan_callback
