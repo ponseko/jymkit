@@ -3,9 +3,9 @@ from typing import Any, Tuple
 
 import equinox as eqx
 import jax
-import jax.flatten_util
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray, PyTree
+import numpy as np
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 
@@ -27,7 +27,23 @@ def is_wrapped(env: AbstractEnvironment, wrapper_class: type) -> bool:
 class Wrapper(AbstractEnvironment):
     """Base class for all wrappers."""
 
-    env: jym.Environment
+    env: AbstractEnvironment
+
+    @property
+    def action_space(self) -> jym.Space | PyTree[jym.Space]:
+        return self.env.action_space
+
+    @property
+    def observation_space(self) -> jym.Space | PyTree[jym.Space]:
+        return self.env.observation_space
+
+    @property
+    def agent_structure(self) -> PyTreeDef:
+        return self.env.agent_structure
+
+    @property
+    def multi_agent(self) -> bool:
+        return self.env.multi_agent
 
     def __getattr__(self, name):
         return getattr(self.env, name)
@@ -113,203 +129,187 @@ class LogWrapper(Wrapper):
         return jnp.array(jax.tree.leaves(rewards)).squeeze()
 
 
-# class NormalizeVecObsEnvState(eqx.Module):
-#     mean: Array
-#     var: Array
-#     count: float
-#     env_state: Any
+class NormalizeVecObsState(eqx.Module):
+    mean: Float[Array, "..."]
+    var: Float[Array, "..."]
+    count: float
 
 
-# class NormalizeVecObservation(Wrapper):
-#     def __check_init__(self):
-#         if not is_wrapped(self.env, VecEnvWrapper):
-#             raise ValueError(
-#                 "NormalizeVecReward wrapper must be used on top of a VecEnvWrapper.\n"
-#                 " Please wrap the environment with VecEnvWrapper first."
-#             )
+class NormalizeVecObsWrapper(Wrapper):
+    state: NormalizeVecObsState | None = None
 
-#     def reset(self, key: PRNGKeyArray):
-#         obs, state = self.env.reset(key)
+    def __check_init__(self):
+        if not is_wrapped(self.env, VecEnvWrapper):
+            raise ValueError(
+                "NormalizeVecReward wrapper must wrapped around a `VecEnvWrapper`.\n"
+                " Please wrap the environment with `VecEnvWrapper` first."
+            )
 
-#         state = NormalizeVecObsEnvState(
-#             mean=jax.tree.map(jnp.zeros_like, obs),
-#             var=jax.tree.map(jnp.ones_like, obs),
-#             count=1e-4,
-#             env_state=state,
-#         )
-#         batch_mean = jnp.mean(obs, axis=0)
-#         batch_var = jnp.var(obs, axis=0)
-#         batch_count = obs.shape[0]
+    def partition_obs_and_masks(self, tree):
+        """
+        Ensures we do not normalize the action masks if they are present.
+        """
+        observations = [tree]
+        if self.env.multi_agent:
+            observations, _ = eqx.tree_flatten_one_level(tree)
+        if all(not isinstance(o, jym.AgentObservation) for o in observations):
+            filter_spec = True
+        elif all(isinstance(o, jym.AgentObservation) for o in observations):
+            filter_spec = jym.AgentObservation(observation=True, action_mask=False)
+            filter_spec = jax.tree.map(
+                lambda _: filter_spec,
+                tree,
+                is_leaf=lambda x: isinstance(x, jym.AgentObservation),
+            )
+        else:
+            raise ValueError(
+                "Observations for all agents must be either AgentObservation or not."
+            )
+        return eqx.partition(tree, filter_spec=filter_spec)
 
-#         delta = batch_mean - state.mean
-#         tot_count = state.count + batch_count
+    def update_state_and_get_obs(self, obs):
+        obs, masks = self.partition_obs_and_masks(obs)
+        state = self.state
+        if state is None:
+            # initial init
+            state = NormalizeVecObsState(
+                mean=jax.tree.map(jnp.zeros_like, obs),
+                var=jax.tree.map(jnp.ones_like, obs),
+                count=1e-4,
+            )
+        batch_mean = jax.tree.map(lambda o: jnp.mean(o, axis=0), obs)
+        batch_var = jax.tree.map(lambda o: jnp.var(o, axis=0), obs)
+        batch_count = jax.tree.leaves(obs)[0].shape[0]
 
-#         new_mean = state.mean + delta * batch_count / tot_count
-#         m_a = state.var * state.count
-#         m_b = batch_var * batch_count
-#         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-#         new_var = M2 / tot_count
-#         new_count = tot_count
+        delta = jax.tree.map(lambda m, b: b - m, batch_mean, state.mean)
+        tot_count = state.count + batch_count
+        new_mean = jax.tree.map(
+            lambda m, d: m + d * batch_count / tot_count,
+            state.mean,
+            delta,
+        )
 
-#         state = NormalizeVecObsEnvState(
-#             mean=new_mean,
-#             var=new_var,
-#             count=new_count,
-#             env_state=state.env_state,
-#         )
+        m_a = jax.tree.map(lambda v: v * state.count, state.var)
+        m_b = jax.tree.map(lambda v: v * batch_count, batch_var)
+        M2 = jax.tree.map(
+            lambda a, b, d: a
+            + b
+            + jnp.square(d) * state.count * batch_count / tot_count,
+            m_a,
+            m_b,
+            delta,
+        )
+        new_var = jax.tree.map(lambda m: m / tot_count, M2)
+        new_count = tot_count
+        new_state = NormalizeVecObsState(mean=new_mean, var=new_var, count=new_count)
 
-#         return (obs - state.mean) / jnp.sqrt(state.var + 1e-8), state
+        normalized_obs = jax.tree.map(
+            lambda o, m, v: (o - m) / jnp.sqrt(v + 1e-8), obs, new_mean, new_var
+        )
+        normalized_obs = eqx.combine(normalized_obs, masks)
+        return normalized_obs, new_state
 
-#     def step(
-#         self,
-#         key: PRNGKeyArray,
-#         state: NormalizeVecObsEnvState,
-#         action: PyTree[int | float | Array],
-#     ):
-#         timestep, env_state = self._env.step(key, state.env_state, action)
-#         obs = timestep.observation
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, "NormalizeVecObsWrapper"]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, env = self.env.reset(key)
+        obs, state = self.update_state_and_get_obs(obs)
+        return obs, replace(self, env=env, state=state)
 
-#         batch_mean = jnp.mean(obs, axis=0)
-#         batch_var = jnp.var(obs, axis=0)
-#         batch_count = obs.shape[0]
-
-#         delta = batch_mean - state.mean
-#         tot_count = state.count + batch_count
-
-#         new_mean = state.mean + delta * batch_count / tot_count
-#         m_a = state.var * state.count
-#         m_b = batch_var * batch_count
-#         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-#         new_var = M2 / tot_count
-#         new_count = tot_count
-
-#         state = NormalizeVecObsEnvState(
-#             mean=new_mean,
-#             var=new_var,
-#             count=new_count,
-#             env_state=env_state,
-#         )
-
-#         normalized_obs = (obs - state.mean) / jnp.sqrt(state.var + 1e-8)
-#         timestep = timestep._replace(observation=normalized_obs)
-
-#         return timestep, state
-
-
-# class NormalizeVecRewEnvState(eqx.Module):
-#     mean: Float[Array, "..."]
-#     var: Float[Array, "..."]
-#     count: float
-#     return_val: Float[Array, "..."]
-#     env_state: Any
-
-#     def __init__(
-#         self,
-#         mean: Float[Array, "..."],
-#         var: Float[Array, "..."],
-#         count: float,
-#         return_val: Float[Array, "..."],
-#         env_state: Any,
-#     ):
-#         self.mean = mean
-#         self.var = var
-#         self.count = count
-#         self.return_val = return_val
-#         self.env_state = env_state
+    def step(
+        self, key: PRNGKeyArray, action: PyTree[int | float | Array]
+    ) -> Tuple[jym.TimeStep, "NormalizeVecObsWrapper"]:
+        assert self.state is not None, "Environment must be reset before stepping."
+        timestep, env = self.env.step(key, action)
+        obs = timestep.observation
+        obs, state = self.update_state_and_get_obs(obs)
+        return timestep._replace(observation=obs), replace(self, env=env, state=state)
 
 
-# class NormalizeVecReward(Wrapper):
-#     gamma: float
-#     state_constructor: Callable
+class NormalizeVecRewState(eqx.Module):
+    mean: Float[Array, "..."]
+    var: Float[Array, "..."]
+    count: float
+    return_val: Float[Array, "..."]
 
-#     def __init__(self, env: jym.Environment, gamma: float = 0.99):
-#         self.env = env
-#         self.multi_agent = env.multi_agent
-#         self.gamma = gamma
 
-#         dummy_key = jax.random.PRNGKey(0)
-#         dummy_obs, _ = self.env.reset(dummy_key)
-#         batch_count = jax.tree.leaves(dummy_obs)[0].shape[0]
-#         num_agents = self.env.agent_structure.num_leaves
-#         self.state_constructor = partial(
-#             NormalizeVecRewEnvState,
-#             mean=jnp.zeros(num_agents).squeeze(),
-#             var=jnp.ones(num_agents).squeeze(),
-#             count=1e-4,
-#             return_val=jnp.zeros((num_agents, batch_count)).squeeze(),
-#         )
+class NormalizeVecRewardWrapper(Wrapper):
+    gamma: float = 0.99
+    state: NormalizeVecRewState | None = None
 
-#     def __check_init__(self):
-#         if not is_wrapped(self.env, VecEnvWrapper):
-#             raise ValueError(
-#                 "NormalizeVecReward wrapper must be used on top of a VecEnvWrapper.\n"
-#                 " Please wrap the environment with VecEnvWrapper first."
-#             )
+    def __check_init__(self):
+        if not is_wrapped(self.env, VecEnvWrapper):
+            raise ValueError(
+                "NormalizeVecReward wrapper must wrapped around a `VecEnvWrapper`.\n"
+                " Please wrap the environment with `VecEnvWrapper` first."
+            )
 
-#     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecRewEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-#         obs, state = self.env.reset(key)
-#         batch_count = jax.tree.leaves(obs)[0].shape[0]
-#         num_agents = self.env.agent_structure.num_leaves
-#         state = NormalizeVecRewEnvState(
-#             mean=jnp.zeros(num_agents).squeeze(),
-#             var=jnp.ones(num_agents).squeeze(),
-#             count=1e-4,
-#             return_val=jnp.zeros((num_agents, batch_count)).squeeze(),
-#             env_state=state,
-#         )
-#         return obs, state
+    def first_init(self, obs) -> NormalizeVecRewState:
+        batch_count = jax.tree.leaves(obs)[0].shape[0]
+        num_agents = self.env.agent_structure.num_leaves
+        return NormalizeVecRewState(
+            mean=jnp.zeros(num_agents).squeeze(),
+            var=jnp.ones(num_agents).squeeze(),
+            count=1e-4,
+            return_val=jnp.zeros((num_agents, batch_count)).squeeze(),
+        )
 
-#     def step(
-#         self,
-#         key: PRNGKeyArray,
-#         state: NormalizeVecRewEnvState,
-#         action: PyTree[int | float | Array],
-#     ):
-#         (obs, reward, terminated, truncated, info), env_state = self.env.step(
-#             key, state.env_state, action
-#         )
+    def reset(
+        self, key: PRNGKeyArray
+    ) -> Tuple[TObservation, "NormalizeVecRewardWrapper"]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, env = self.env.reset(key)
+        if self.state is None:
+            state = self.first_init(obs)
+            return obs, replace(self, env=env, state=state)
+        return obs, replace(self, env=env)
 
-#         # get the rewards as a single matrix -- reconstruct later
-#         reward, reward_structure = jax.tree.flatten(reward)
-#         reward = jnp.array(reward).squeeze()
-#         done = jnp.logical_or(terminated, truncated)  # TODO ?
-#         return_val = state.return_val * self.gamma * (1 - done) + reward
+    def step(
+        self,
+        key: PRNGKeyArray,
+        action: PyTree[int | float | Array],
+    ) -> Tuple[jym.TimeStep, "NormalizeVecRewardWrapper"]:
+        assert self.state is not None, "Environment must be reset before stepping."
+        (obs, reward, terminated, truncated, info), env = self.env.step(key, action)
+        state = self.state
 
-#         batch_mean = jnp.mean(return_val, axis=-1)
-#         batch_var = jnp.var(return_val, axis=-1)
-#         batch_count = jax.tree.leaves(obs)[0].shape[0]
+        # get the rewards as a single matrix -- reconstruct later
+        reward, reward_structure = jax.tree.flatten(reward)
+        reward = jnp.array(reward).squeeze()
+        done = jnp.logical_or(terminated, truncated)  # TODO ?
+        return_val = state.return_val * self.gamma * (1 - done) + reward
 
-#         delta = batch_mean - state.mean
-#         tot_count = state.count + batch_count
+        batch_mean = jnp.mean(return_val, axis=-1)
+        batch_var = jnp.var(return_val, axis=-1)
+        batch_count = jax.tree.leaves(obs)[0].shape[0]
 
-#         new_mean = state.mean + delta * batch_count / tot_count
-#         m_a = state.var * state.count
-#         m_b = batch_var * batch_count
-#         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-#         new_var = M2 / tot_count
-#         new_count = tot_count
+        delta = batch_mean - state.mean
+        tot_count = state.count + batch_count
 
-#         state = NormalizeVecRewEnvState(
-#             mean=new_mean,
-#             var=new_var,
-#             count=new_count,
-#             return_val=return_val,
-#             env_state=env_state,
-#         )
+        new_mean = state.mean + delta * batch_count / tot_count
+        m_a = state.var * state.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
 
-#         if self.env.multi_agent:
-#             reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
-#             reward = jax.tree.unflatten(reward_structure, reward)
-#         else:
-#             reward = reward / jnp.sqrt(state.var + 1e-8)
+        state = NormalizeVecRewState(
+            mean=new_mean,
+            var=new_var,
+            count=new_count,
+            return_val=return_val,
+        )
 
-#         return jym.TimeStep(
-#             obs,
-#             reward,
-#             terminated,
-#             truncated,
-#             info,
-#         ), state
+        if np.any(self.env.multi_agent):  # type: ignore[reportGeneralTypeIssues]
+            reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
+            reward = jax.tree.unflatten(reward_structure, reward)
+        else:
+            reward = reward / jnp.sqrt(state.var + 1e-8)
+
+        return jym.TimeStep(
+            obs,
+            reward,
+            terminated,
+            truncated,
+            info,
+        ), replace(self, env=env, state=state)
 
 
 # class GymnaxWrapper(Wrapper):

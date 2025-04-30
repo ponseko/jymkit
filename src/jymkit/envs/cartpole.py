@@ -33,7 +33,6 @@ class CartPole(jym.Environment):
     x_threshold: float = 2.4
 
     max_episode_steps: int = 500
-    multi_agent: bool = False
 
     @property
     def total_mass(self):

@@ -27,15 +27,25 @@ class AbstractEnvironment(eqx.Module):
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, "AbstractEnvironment"]:  # pyright: ignore[reportInvalidTypeVarUse]
         pass
 
-    # @abstractmethod
-    # def step_env(
-    #     self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
-    # ) -> Tuple[TimeStep, TEnvState]:
-    #     pass
+    @property
+    @abstractmethod
+    def action_space(self) -> Space | PyTree[Space]:
+        pass
 
-    # @abstractmethod
-    # def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-    #     pass
+    @property
+    @abstractmethod
+    def observation_space(self) -> Space | PyTree[Space]:
+        pass
+
+    @property
+    @abstractmethod
+    def agent_structure(self) -> PyTreeDef:
+        pass
+
+    @property
+    @abstractmethod
+    def multi_agent(self) -> bool:
+        pass
 
 
 class Environment(AbstractEnvironment, Generic[TEnvState]):
@@ -52,7 +62,6 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
     """
 
     state: TEnvState = eqx.field(default=None)
-    multi_agent: bool = eqx.field(default=False, kw_only=True)
 
     def step(
         self,
@@ -144,6 +153,10 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
         Defines the space of possible observations from the environment.
         """
         pass
+
+    @property
+    def multi_agent(self) -> bool:
+        return False
 
     @property
     def agent_structure(self) -> PyTreeDef:

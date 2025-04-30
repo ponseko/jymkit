@@ -1,3 +1,4 @@
+import time
 from dataclasses import replace
 from typing import Callable, Literal, Optional, Tuple
 
@@ -150,7 +151,7 @@ class PPO(eqx.Module):
     def is_initialized(self):
         return self.state is not None
 
-    def init(self, key: PRNGKeyArray, env: jym.Environment) -> "PPO":
+    def init(self, key: PRNGKeyArray, env: AbstractEnvironment) -> "PPO":
         observation_space = env.observation_space
         action_space = env.action_space
         self = replace(self, multi_agent_env=env.multi_agent)
@@ -481,25 +482,25 @@ class PPO(eqx.Module):
 
         if not is_wrapped(env, VecEnvWrapper):
             print("Wrapping environment in VecEnvWrapper")
-            env = VecEnvWrapper(env=env)  # type: ignore
+            env = VecEnvWrapper(env=env)
 
         if not self.is_initialized:
-            self = self.init(key, env)  # type: ignore
+            self = self.init(key, env)
 
-        # def train_fn():
-        # We wrap this logic so we can compile ahead of time
-        obsv, env = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (self, env, obsv, key)
-        runner_state, metrics = jax.lax.scan(
-            train_iteration, runner_state, jnp.arange(self.num_iterations)
-        )
-        return runner_state[0]
+        def train_fn(env):
+            # We wrap this logic so we can compile ahead of time
+            obsv, env = env.reset(jax.random.split(key, self.num_envs))
+            runner_state = (self, env, obsv, key)
+            runner_state, metrics = jax.lax.scan(
+                train_iteration, runner_state, jnp.arange(self.num_iterations)
+            )
+            return runner_state[0]
 
-        # s_time = time.time()
-        # print("Starting JAX compilation...")
-        # train_fn = jax.jit(train_fn).lower().compile()
-        # print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
-        # s_time = time.time()
-        # updated_self = train_fn()
-        # print(f"Training finished in {(time.time() - s_time):.2f} seconds")
-        # return updated_self
+        s_time = time.time()
+        print("Starting JAX compilation...")
+        train_fn = jax.jit(train_fn).lower(env).compile()
+        print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
+        s_time = time.time()
+        updated_self = train_fn(env)
+        print(f"Training finished in {(time.time() - s_time):.2f} seconds")
+        return updated_self

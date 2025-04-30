@@ -11,10 +11,9 @@ from ._spaces import (
 )
 from ._types import AgentObservation as AgentObservation
 from ._wrappers import (
-    GymnaxWrapper as GymnaxWrapper,
     LogWrapper as LogWrapper,
-    NormalizeVecObservation as NormalizeVecObservation,
-    NormalizeVecReward as NormalizeVecReward,
+    NormalizeVecObsWrapper as NormalizeVecObsWrapper,
+    NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     is_wrapped as is_wrapped,
 )

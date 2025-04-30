@@ -134,7 +134,6 @@ def scan_callback(
             progress_bar[0].update(callback_interval)
 
     def simple_reward_logger(data, iteration):
-        breakpoint()
         if (
             "returned_episode_returns" not in data
             or "returned_episode" not in data
