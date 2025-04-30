@@ -10,7 +10,7 @@ from jaxtyping import PRNGKeyArray, PyTree, PyTreeDef
 import jymkit as jym
 
 
-def create_ffn_networks(key: PRNGKeyArray, obs_space, hidden_dims, output_space):
+def create_ffn_networks(key: PRNGKeyArray, obs_space, hidden_dims):
     """
     Create a feedforward neural network with the given hidden dimensions and output space.
     """
@@ -33,6 +33,50 @@ def create_ffn_networks(key: PRNGKeyArray, obs_space, hidden_dims, output_space)
     return layers
 
 
+def create_bronet_networks(key: PRNGKeyArray, obs_space, hidden_dims):
+    class BroNetBlock(eqx.Module):
+        layers: list
+        in_features: int = eqx.field(static=True)
+        out_features: int = eqx.field(static=True)
+
+        def __init__(self, key: PRNGKeyArray, shape: int):
+            key1, key2 = jax.random.split(key)
+            self.layers = [
+                eqx.nn.Linear(in_features=shape, out_features=shape, key=key1),
+                eqx.nn.LayerNorm(shape),
+                eqx.nn.Linear(in_features=shape, out_features=shape, key=key2),
+                eqx.nn.LayerNorm(shape),
+            ]
+            self.in_features = shape
+            self.out_features = shape
+
+        def __call__(self, x):
+            _x = self.layers[0](x)
+            _x = self.layers[1](_x)
+            _x = jax.nn.relu(_x)
+            _x = self.layers[2](_x)
+            _x = self.layers[3](_x)
+            return x + _x
+
+    keys = jax.random.split(key, len(hidden_dims))
+
+    # Flatten the input space
+    input_shape = jax.tree.map(
+        lambda x: np.array(x.shape).prod(),
+        obs_space,
+        # is_leaf=lambda x: isinstance(x, jym.Space),
+    )
+    input_dim = int(np.sum(np.array(input_shape)))
+    layers = [
+        eqx.nn.Linear(in_features=input_dim, out_features=hidden_dims[0], key=keys[0]),
+        eqx.nn.LayerNorm(hidden_dims[0]),
+    ]
+    for i, hidden_dim in enumerate(hidden_dims):
+        layers.append(BroNetBlock(keys[i], hidden_dim))
+
+    return layers
+
+
 class ActorNetwork(eqx.Module):
     """
     A Basic class for RL agents that can be used to create actor and critic networks
@@ -42,7 +86,7 @@ class ActorNetwork(eqx.Module):
 
     layers: list
     output_structure: PyTreeDef = eqx.field(static=True)
-    # use_bronet: bool = False  # TODO
+    use_bronet: bool = eqx.field(static=True, default=False)
 
     def __init__(
         self,
@@ -51,7 +95,10 @@ class ActorNetwork(eqx.Module):
         hidden_dims: List[int],
         output_space: int | PyTree[jym.Space],
     ):
-        self.layers = create_ffn_networks(key, obs_space, hidden_dims, output_space)
+        if self.use_bronet:
+            self.layers = create_bronet_networks(key, obs_space, hidden_dims)
+        else:
+            self.layers = create_ffn_networks(key, obs_space, hidden_dims)
 
         self.output_structure = jax.tree.structure(output_space)
         # TODO: Continuous action space
@@ -124,7 +171,7 @@ class CriticNetwork(eqx.Module):
     """
 
     layers: list
-    # use_bronet: bool = False  # TODO
+    use_bronet: bool = eqx.field(static=True, default=False)
 
     def __init__(
         self,
@@ -132,7 +179,10 @@ class CriticNetwork(eqx.Module):
         obs_space: PyTree[jym.Space],
         hidden_dims: List[int],
     ):
-        self.layers = create_ffn_networks(key, obs_space, hidden_dims, 1)
+        if self.use_bronet:
+            self.layers = create_bronet_networks(key, obs_space, hidden_dims)
+        else:
+            self.layers = create_ffn_networks(key, obs_space, hidden_dims)
         self.layers.append(eqx.nn.Linear(self.layers[-1].out_features, 1, key=key))
 
     def __call__(self, x):
