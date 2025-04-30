@@ -13,6 +13,7 @@ from ._types import AgentObservation as AgentObservation
 from ._wrappers import (
     GymnaxWrapper as GymnaxWrapper,
     LogWrapper as LogWrapper,
+    NormalizeVecObservation as NormalizeVecObservation,
     NormalizeVecReward as NormalizeVecReward,
     VecEnvWrapper as VecEnvWrapper,
     is_wrapped as is_wrapped,

@@ -442,7 +442,7 @@ class PPO(eqx.Module):
 
                 batch_idx = jax.random.permutation(key, self.batch_size)
 
-                # reshape (flatten over first dimension)
+                # reshape (flatten over num_steps and num_envs)
                 batch = jax.tree.map(
                     lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
                     trajectory_batch,

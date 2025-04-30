@@ -105,7 +105,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
     @property
     @abstractmethod
-    def action_space(self) -> Space:
+    def action_space(self) -> Space | PyTree[Space]:
         """
         Defines the space of valid actions for the environment.
         """
@@ -113,7 +113,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
     @property
     @abstractmethod
-    def observation_space(self) -> Space:
+    def observation_space(self) -> Space | PyTree[Space]:
         """
         Defines the space of possible observations from the environment.
         """

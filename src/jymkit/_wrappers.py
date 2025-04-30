@@ -1,5 +1,6 @@
 from dataclasses import replace
-from typing import Any, Tuple
+from functools import partial
+from typing import Any, Callable, Tuple
 
 import equinox as eqx
 import jax
@@ -91,7 +92,7 @@ class LogWrapper(Wrapper):
         initial_timestep = 0
         if is_wrapped(self.env, VecEnvWrapper):
             vec_count = jax.tree.leaves(obs)[0].shape[0]
-            initial_vals = jnp.zeros((structure.num_leaves, vec_count)).squeeze()
+            initial_vals = jnp.zeros((vec_count, structure.num_leaves)).squeeze()
             initial_timestep = jnp.zeros((vec_count,)).squeeze()
         state = LogEnvState(
             env_state=env_state,
@@ -132,78 +133,87 @@ class LogWrapper(Wrapper):
         return jnp.array(jax.tree.leaves(rewards)).squeeze()
 
 
-# class NormalizeVecObsEnvState(eqx.Module):
-#     mean: Array
-#     var: Array
-#     count: float
-#     env_state: Any
+class NormalizeVecObsEnvState(eqx.Module):
+    mean: Array
+    var: Array
+    count: float
+    env_state: Any
 
 
-# class NormalizeVecObservation(Wrapper):
-#     """TODO: does not work for arbitrarily shaped observations"""
+class NormalizeVecObservation(Wrapper):
+    def __check_init__(self):
+        if not is_wrapped(self.env, VecEnvWrapper):
+            raise ValueError(
+                "NormalizeVecReward wrapper must be used on top of a VecEnvWrapper.\n"
+                " Please wrap the environment with VecEnvWrapper first."
+            )
 
-#     def reset(self, key: PRNGKeyArray):
-#         obs, state = self._env.reset(key)
-#         state = NormalizeVecObsEnvState(
-#             mean=jnp.zeros_like(obs),
-#             var=jnp.ones_like(obs),
-#             count=1e-4,
-#             env_state=state,
-#         )
-#         batch_mean = jnp.mean(obs, axis=0)
-#         batch_var = jnp.var(obs, axis=0)
-#         batch_count = obs.shape[0]
+    def reset(self, key: PRNGKeyArray):
+        obs, state = self.env.reset(key)
 
-#         delta = batch_mean - state.mean
-#         tot_count = state.count + batch_count
+        state = NormalizeVecObsEnvState(
+            mean=jax.tree.map(jnp.zeros_like, obs),
+            var=jax.tree.map(jnp.ones_like, obs),
+            count=1e-4,
+            env_state=state,
+        )
+        batch_mean = jnp.mean(obs, axis=0)
+        batch_var = jnp.var(obs, axis=0)
+        batch_count = obs.shape[0]
 
-#         new_mean = state.mean + delta * batch_count / tot_count
-#         m_a = state.var * state.count
-#         m_b = batch_var * batch_count
-#         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-#         new_var = M2 / tot_count
-#         new_count = tot_count
+        delta = batch_mean - state.mean
+        tot_count = state.count + batch_count
 
-#         state = NormalizeVecObsEnvState(
-#             mean=new_mean,
-#             var=new_var,
-#             count=new_count,
-#             env_state=state.env_state,
-#         )
+        new_mean = state.mean + delta * batch_count / tot_count
+        m_a = state.var * state.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
 
-#         return (obs - state.mean) / jnp.sqrt(state.var + 1e-8), state
+        state = NormalizeVecObsEnvState(
+            mean=new_mean,
+            var=new_var,
+            count=new_count,
+            env_state=state.env_state,
+        )
 
-#     def step(
-#         self, key: PRNGKeyArray, state: NormalizeVecObsEnvState, action: jym.Action
-#     ):
-#         timestep, env_state = self._env.step(key, state.env_state, action)
-#         obs = timestep.observation
+        return (obs - state.mean) / jnp.sqrt(state.var + 1e-8), state
 
-#         batch_mean = jnp.mean(obs, axis=0)
-#         batch_var = jnp.var(obs, axis=0)
-#         batch_count = obs.shape[0]
+    def step(
+        self,
+        key: PRNGKeyArray,
+        state: NormalizeVecObsEnvState,
+        action: PyTree[int | float | Array],
+    ):
+        timestep, env_state = self._env.step(key, state.env_state, action)
+        obs = timestep.observation
 
-#         delta = batch_mean - state.mean
-#         tot_count = state.count + batch_count
+        batch_mean = jnp.mean(obs, axis=0)
+        batch_var = jnp.var(obs, axis=0)
+        batch_count = obs.shape[0]
 
-#         new_mean = state.mean + delta * batch_count / tot_count
-#         m_a = state.var * state.count
-#         m_b = batch_var * batch_count
-#         M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-#         new_var = M2 / tot_count
-#         new_count = tot_count
+        delta = batch_mean - state.mean
+        tot_count = state.count + batch_count
 
-#         state = NormalizeVecObsEnvState(
-#             mean=new_mean,
-#             var=new_var,
-#             count=new_count,
-#             env_state=env_state,
-#         )
+        new_mean = state.mean + delta * batch_count / tot_count
+        m_a = state.var * state.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
 
-#         normalized_obs = (obs - state.mean) / jnp.sqrt(state.var + 1e-8)
-#         timestep = timestep._replace(observation=normalized_obs)
+        state = NormalizeVecObsEnvState(
+            mean=new_mean,
+            var=new_var,
+            count=new_count,
+            env_state=env_state,
+        )
 
-#         return timestep, state
+        normalized_obs = (obs - state.mean) / jnp.sqrt(state.var + 1e-8)
+        timestep = timestep._replace(observation=normalized_obs)
+
+        return timestep, state
 
 
 class NormalizeVecRewEnvState(eqx.Module):
@@ -213,16 +223,41 @@ class NormalizeVecRewEnvState(eqx.Module):
     return_val: Float[Array, "..."]
     env_state: Any
 
+    def __init__(
+        self,
+        mean: Float[Array, "..."],
+        var: Float[Array, "..."],
+        count: float,
+        return_val: Float[Array, "..."],
+        env_state: Any,
+    ):
+        self.mean = mean
+        self.var = var
+        self.count = count
+        self.return_val = return_val
+        self.env_state = env_state
+
 
 class NormalizeVecReward(Wrapper):
-    """TODO: does not work for arbitrarily shaped observations"""
-
     gamma: float
+    state_constructor: Callable
 
     def __init__(self, env: jym.Environment, gamma: float = 0.99):
         self.env = env
         self.multi_agent = env.multi_agent
         self.gamma = gamma
+
+        dummy_key = jax.random.PRNGKey(0)
+        dummy_obs, _ = self.env.reset(dummy_key)
+        batch_count = jax.tree.leaves(dummy_obs)[0].shape[0]
+        num_agents = self.env.agent_structure.num_leaves
+        self.state_constructor = partial(
+            NormalizeVecRewEnvState,
+            mean=jnp.zeros(num_agents).squeeze(),
+            var=jnp.ones(num_agents).squeeze(),
+            count=1e-4,
+            return_val=jnp.zeros((num_agents, batch_count)).squeeze(),
+        )
 
     def __check_init__(self):
         if not is_wrapped(self.env, VecEnvWrapper):
@@ -250,7 +285,6 @@ class NormalizeVecReward(Wrapper):
         state: NormalizeVecRewEnvState,
         action: PyTree[int | float | Array],
     ):
-        jax.tree_util.treedef_children
         (obs, reward, terminated, truncated, info), env_state = self.env.step(
             key, state.env_state, action
         )
@@ -282,14 +316,16 @@ class NormalizeVecReward(Wrapper):
             return_val=return_val,
             env_state=env_state,
         )
-        # add axis to state.var
-        # reward = jnp.expand_dims(reward, axis=-1)
-        reward = reward / jnp.sqrt(state.var + 1e-8)
-        breakpoint()
-        reward = jax.tree.unflatten(reward_structure, reward)
+
+        if self.env.multi_agent:
+            reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
+            reward = jax.tree.unflatten(reward_structure, reward)
+        else:
+            reward = reward / jnp.sqrt(state.var + 1e-8)
+
         return jym.TimeStep(
             obs,
-            reward / jnp.sqrt(state.var + 1e-8),
+            reward,
             terminated,
             truncated,
             info,
