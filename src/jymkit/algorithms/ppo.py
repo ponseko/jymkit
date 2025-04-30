@@ -1,4 +1,3 @@
-import time
 from dataclasses import replace
 from typing import Callable, Literal, Optional, Tuple
 
@@ -9,7 +8,7 @@ import optax
 from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
-from jymkit._environment import ORIGINAL_OBSERVATION_KEY
+from jymkit._environment import ORIGINAL_OBSERVATION_KEY, AbstractEnvironment
 from jymkit._wrappers import VecEnvWrapper, is_wrapped
 
 from ._map_agents import map_each_agent, scan_callback, split_key_over_agents
@@ -260,7 +259,7 @@ class PPO(eqx.Module):
             action = self.forward_actor(obs, action_key, get_log_prob=False)
 
             (obs, reward, terminated, truncated, info), env_state = env.step(
-                step_key, env_state, action
+                step_key, action
             )
             done = jnp.logical_or(terminated, truncated)
             episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
@@ -279,9 +278,9 @@ class PPO(eqx.Module):
 
         return episode_reward
 
-    def _collect_rollout(self, rollout_state: tuple, env: jym.Environment):
+    def _collect_rollout(self, rollout_state: tuple):
         def env_step(rollout_state, _):
-            env_state, last_obs, rng = rollout_state
+            env, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
@@ -291,8 +290,8 @@ class PPO(eqx.Module):
             # take a step in the environment
             rng, key = jax.random.split(rng)
             step_key = jax.random.split(key, self.num_envs)
-            (obsv, reward, terminated, truncated, info), env_state = env.step(
-                step_key, env_state, action
+            (obsv, reward, terminated, truncated, info), env = env.step(
+                step_key, action
             )
 
             value = jax.vmap(self.forward_critic)(last_obs)
@@ -315,7 +314,7 @@ class PPO(eqx.Module):
                 next_value=next_value,
             )
 
-            rollout_state = (env_state, obsv, rng)
+            rollout_state = (env, obsv, rng)
             return rollout_state, transition
 
         def compute_gae(gae, transition: Transition):
@@ -361,7 +360,7 @@ class PPO(eqx.Module):
 
         return rollout_state, trajectory_batch
 
-    def train(self, key: PRNGKeyArray, env: jym.Environment) -> "PPO":
+    def train(self, key: PRNGKeyArray, env: AbstractEnvironment) -> "PPO":
         @scan_callback(
             callback_fn=self.log_function,
             callback_interval=self.log_interval,
@@ -467,8 +466,8 @@ class PPO(eqx.Module):
             self: PPO = runner_state[0]
             # Do rollout of single trajactory
             rollout_state = runner_state[1:]
-            (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-                rollout_state, env
+            (_env, last_obs, rng), trajectory_batch = self._collect_rollout(
+                rollout_state
             )
 
             epoch_keys = jax.random.split(rng, self.update_epochs)
@@ -477,30 +476,30 @@ class PPO(eqx.Module):
 
             metric = trajectory_batch.info
 
-            runner_state = (self, env_state, last_obs, rng)
+            runner_state = (self, _env, last_obs, rng)
             return runner_state, metric
 
         if not is_wrapped(env, VecEnvWrapper):
             print("Wrapping environment in VecEnvWrapper")
-            env = VecEnvWrapper(env)
+            env = VecEnvWrapper(env=env)  # type: ignore
 
         if not self.is_initialized:
-            self = self.init(key, env)
+            self = self.init(key, env)  # type: ignore
 
-        def train_fn():
-            # We wrap this logic so we can compile ahead of time
-            obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-            runner_state = (self, env_state, obsv, key)
-            runner_state, metrics = jax.lax.scan(
-                train_iteration, runner_state, jnp.arange(self.num_iterations)
-            )
-            return runner_state[0]
+        # def train_fn():
+        # We wrap this logic so we can compile ahead of time
+        obsv, env = env.reset(jax.random.split(key, self.num_envs))
+        runner_state = (self, env, obsv, key)
+        runner_state, metrics = jax.lax.scan(
+            train_iteration, runner_state, jnp.arange(self.num_iterations)
+        )
+        return runner_state[0]
 
-        s_time = time.time()
-        print("Starting JAX compilation...")
-        train_fn = jax.jit(train_fn).lower().compile()
-        print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
-        s_time = time.time()
-        updated_self = train_fn()
-        print(f"Training finished in {(time.time() - s_time):.2f} seconds")
-        return updated_self
+        # s_time = time.time()
+        # print("Starting JAX compilation...")
+        # train_fn = jax.jit(train_fn).lower().compile()
+        # print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
+        # s_time = time.time()
+        # updated_self = train_fn()
+        # print(f"Training finished in {(time.time() - s_time):.2f} seconds")
+        # return updated_self
