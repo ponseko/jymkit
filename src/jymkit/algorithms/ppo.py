@@ -177,10 +177,7 @@ class PPO(eqx.Module):
                 output_space=output_space,
             )
             critic = CriticNetwork(
-                key=critic_key,
-                obs_space=obs_space,
-                hidden_dims=critic_features,
-                output_space=1,
+                key=critic_key, obs_space=obs_space, hidden_dims=critic_features
             )
             optimizer_state = optimizer.init(
                 eqx.filter((actor, critic), eqx.is_inexact_array)
