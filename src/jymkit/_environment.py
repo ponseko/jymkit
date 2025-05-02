@@ -1,5 +1,4 @@
 from abc import abstractmethod
-from dataclasses import replace
 from typing import Generic, Tuple, TypeVar
 
 import equinox as eqx
@@ -16,15 +15,15 @@ TObservation = TypeVar("TObservation")
 TEnvState = TypeVar("TEnvState")
 
 
-class AbstractEnvironment(eqx.Module):
+class AbstractEnvironment(eqx.Module, Generic[TEnvState]):
     @abstractmethod
     def step(
-        self, key: PRNGKeyArray, action: PyTree[int | float | Array]
-    ) -> Tuple[TimeStep, "AbstractEnvironment"]:
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[TimeStep, TEnvState]:
         pass
 
     @abstractmethod
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, "AbstractEnvironment"]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         pass
 
     @property
@@ -48,7 +47,7 @@ class AbstractEnvironment(eqx.Module):
         pass
 
 
-class Environment(AbstractEnvironment, Generic[TEnvState]):
+class Environment(AbstractEnvironment):
     """
     Abstract environment template for reinforcement learning environments in JAX.
 
@@ -61,13 +60,12 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
 
     """
 
-    state: TEnvState = eqx.field(default=None)
-
     def step(
         self,
         key: PRNGKeyArray,
+        state: TEnvState,
         action: PyTree[int | float | Array],
-    ) -> Tuple[TimeStep, "AbstractEnvironment"]:
+    ) -> Tuple[TimeStep, TEnvState]:
         """
         Steps the environment forward with the given action and performs auto-reset when necessary.
         Environment-specific logic is defined in the `step_env` method. In principle, this function
@@ -81,7 +79,7 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
         """
 
         (obs_step, reward, terminated, truncated, info), state_step = self.step_env(
-            key, self.state, action
+            key, state, action
         )
 
         # Auto-reset
@@ -95,11 +93,9 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
         # To bootstrap correctly on truncated episodes
         info[ORIGINAL_OBSERVATION_KEY] = obs_step
 
-        return TimeStep(obs, reward, terminated, truncated, info), replace(
-            self, state=state
-        )
+        return TimeStep(obs, reward, terminated, truncated, info), state
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, "AbstractEnvironment"]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Resets the environment to an initial state and returns the initial observation.
         Environment-specific logic is defined in the `reset_env` method. In principle, this function
@@ -110,7 +106,7 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
         - `key`: JAX PRNG key.
         """
         obs, state = self.reset_env(key)
-        return obs, replace(self, state=state)
+        return obs, state
 
     @abstractmethod
     def step_env(
@@ -156,6 +152,9 @@ class Environment(AbstractEnvironment, Generic[TEnvState]):
 
     @property
     def multi_agent(self) -> bool:
+        """
+        Indicates if the environment supports multiple agents.
+        """
         return False
 
     @property

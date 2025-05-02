@@ -1,103 +1,22 @@
+import json
 import time
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import Callable, Literal, Optional, Tuple
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jymkit as jym
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY, AbstractEnvironment
-from jymkit._wrappers import VecEnvWrapper, is_wrapped
+from jymkit._wrappers import VecEnvWrapper, is_wrapped, remove_wrapper
 
-from ._map_agents import map_each_agent, scan_callback, split_key_over_agents
+from ._agent_mapping import map_each_agent, split_key_over_agents
+from ._logging import scan_callback
+from ._transition import Transition
 from .networks import ActorNetwork, CriticNetwork
-
-
-# Define a simple tuple to hold the state of the environment.
-# This is the format we will use to store transitions in our buffer.
-class Transition(eqx.Module):
-    observation: Array
-    action: Array
-    reward: Float[Array, "..."]
-    terminated: Bool[Array, "..."]
-    log_prob: Array
-    info: dict
-    value: Array
-    next_value: Array
-    return_: Optional[Array] = None
-    advantage_: Optional[Array] = None
-
-    @property
-    def structure(self) -> PyTreeDef:
-        """
-        Returns the top-level structure of the transition objects (using reward as a reference).
-        This is either PyTreeDef(*) for single agents
-        or PyTreeDef((*, x num_agents)) for multi-agent environments.
-        usefull for unflattening Transition.flat.properties back to the original structure.
-        """
-        return jax.tree.structure(self.reward)
-
-    @property
-    def view_flat(self) -> "Transition":
-        """
-        Returns a flattened version of the transition.
-        Where possible, this is a jnp.stack of the leaves.
-        Otherwise, it returns a list of leaves.
-        """
-
-        def return_as_stack_or_list(x):
-            x = jax.tree.leaves(x)
-            try:
-                return jnp.stack(x, axis=-1).squeeze()
-            except ValueError:
-                return x
-
-        return jax.tree.map(
-            return_as_stack_or_list,
-            self,
-            is_leaf=lambda y: y is not self,
-        )
-
-    @property
-    def view_transposed(self) -> PyTree["Transition"]:
-        """
-        The original transition is a Transition of PyTrees
-            e.g. Transition(observation={a1: ..., a2: ...}, action={a1: ..., a2: ...}, ...)
-        The transposed transition is a PyTree of Transitions
-            e.g. {a1: Transition(observation=..., action=..., ...), a2: Transition(observation=..., action=..., ...), ...}
-        This is useful for multi-agent environments where we want to have a single Transition object per agent.
-        In single-agent environments, this will be the same as the original transition.
-        """
-        if self.structure.num_leaves == 1:  # single agent
-            return self
-
-        field_names = list(self.__dataclass_fields__.keys())
-
-        fields = {}
-        for f in field_names:
-            attr = getattr(self, f)
-            fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
-
-        per_agent_transitions = []
-        for i in range(len(fields[field_names[0]])):
-            agent_transition = Transition(
-                **{
-                    field_name: fields[field_name][i]
-                    for field_name in field_names
-                    if field_name != "info"
-                    and (fields[field_name] is not None)
-                    # and field_name != "advantage_"
-                    and field_name != "terminated"
-                },
-                terminated=fields["terminated"][0],
-                info=fields["info"],
-            )
-            per_agent_transitions.append(agent_transition)
-
-        return jax.tree.unflatten(self.structure, per_agent_transitions)
 
 
 class AgentState(eqx.Module):
@@ -111,24 +30,20 @@ class PPO(eqx.Module):
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
 
-    learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
-    gamma: float = eqx.field(static=True, default=0.99)
-    gae_lambda: float = eqx.field(static=True, default=0.95)
-    max_grad_norm: float = eqx.field(static=True, default=0.5)
-    clip_coef: float = eqx.field(static=True, default=0.2)
-    clip_coef_vf: float = eqx.field(
-        static=True, default=10.0
-    )  # Depends on the reward scaling !
-    ent_coef: float = eqx.field(static=True, default=0.01)
-    vf_coef: float = eqx.field(static=True, default=0.25)
+    learning_rate: float | optax.Schedule = 2.5e-4
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    max_grad_norm: float = 0.5
+    clip_coef: float = 0.2
+    clip_coef_vf: float = 10.0  # Depends on the reward scaling !
+    ent_coef: float = 0.01
+    vf_coef: float = 0.25
 
-    total_timesteps: int = eqx.field(static=True, default=1e6)
+    total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=6)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
-    update_epochs: int = eqx.field(
-        static=True, default=4
-    )  # K epochs to update the policy
+    update_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
@@ -151,10 +66,11 @@ class PPO(eqx.Module):
     def is_initialized(self):
         return self.state is not None
 
-    def init(self, key: PRNGKeyArray, env: AbstractEnvironment) -> "PPO":
+    def init(self, key: PRNGKeyArray, env: AbstractEnvironment, **hyperparams) -> "PPO":
         observation_space = env.observation_space
         action_space = env.action_space
-        self = replace(self, multi_agent_env=env.multi_agent)
+        hyperparams["multi_agent_env"] = env.multi_agent
+        self = replace(self, **hyperparams)
 
         @map_each_agent(
             shared_argnames=["actor_features", "critic_features", "optimizer"],
@@ -217,6 +133,36 @@ class PPO(eqx.Module):
         )
         return agent
 
+    def save(self, file_path: str):
+        with open(file_path, "wb") as f:
+            non_hyperparams = ["state", "optimizer"]
+            hyperparams = {}
+            for field in fields(self):
+                if field.name in non_hyperparams:
+                    continue
+                try:
+                    hyperparams[field.name] = getattr(self, field.name).item()
+                except AttributeError:
+                    hyperparams[field.name] = getattr(self, field.name)
+            breakpoint()
+            hyperparam_str = json.dumps(hyperparams)
+            f.write((hyperparam_str + "\n").encode())
+            eqx.tree_serialise_leaves(f, self.state)
+
+    @classmethod
+    def load(cls, file_path: str) -> "PPO":
+        from jymkit.envs.cartpole import CartPole
+
+        agent = cls()
+        with open(file_path, "rb") as f:
+            hyperparams = json.loads(f.readline().decode())
+            agent = agent.init(jax.random.PRNGKey(0), CartPole(), **hyperparams)
+
+            # Load the state
+            state = eqx.tree_deserialise_leaves(f, agent.state)
+            agent = replace(agent, state=state)
+        return agent
+
     def forward_critic(self, observation: PyTree[Array]):
         value = map_each_agent(
             lambda a, o: a.critic(o),
@@ -225,9 +171,9 @@ class PPO(eqx.Module):
         return value
 
     def forward_actor(self, observation, key, get_log_prob=True):
-        # if self.multi_agent_env:
-        #     _, structure = eqx.tree_flatten_one_level(observation)
-        #     key = split_key_over_agents(key, structure)
+        if self.multi_agent_env:
+            _, structure = eqx.tree_flatten_one_level(observation)
+            key = split_key_over_agents(key, structure)
         action_dist = map_each_agent(
             lambda a, o: a.actor(o), identity=not self.multi_agent_env
         )(a=self.state, o=observation)
@@ -235,7 +181,7 @@ class PPO(eqx.Module):
         action = map_each_agent(
             lambda dist, seed: dist.sample(seed=seed),
             identity=not self.multi_agent_env,
-            shared_argnames=["seed"],  # NOTE: not sharing the seed is causing nans
+            # shared_argnames=["seed"],  # NOTE: not sharing the seed is causing nans
         )(dist=action_dist, seed=key)
 
         if not get_log_prob:
@@ -249,36 +195,51 @@ class PPO(eqx.Module):
 
         return action, log_prob
 
-    def evaluate(self, key: PRNGKeyArray, env: jym.Environment):
-        def step_env(carry):
-            rng, obs, env_state, done, episode_reward = carry
-            rng, action_key, step_key = jax.random.split(rng, 3)
+    def evaluate(
+        self, key: PRNGKeyArray, env: AbstractEnvironment, num_eval_episodes: int = 100
+    ) -> Float[Array, "..."]:
+        if is_wrapped(env, VecEnvWrapper):
+            # Cannot vectorize because terminations may occur at different times
+            # NOTE: add flag to enable when we know envs are of equal length?
+            # NOTE: alternatively, just sample x steps?
+            env = remove_wrapper(env, VecEnvWrapper)
 
-            action = self.forward_actor(obs, action_key, get_log_prob=False)
+        def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
+            def step_env(carry):
+                rng, obs, env_state, done, episode_reward = carry
+                rng, action_key, step_key = jax.random.split(rng, 3)
 
-            (obs, reward, terminated, truncated, info), env_state = env.step(
-                step_key, action
+                action = self.forward_actor(obs, action_key, get_log_prob=False)
+
+                (obs, reward, terminated, truncated, info), env_state = env.step(
+                    step_key, env_state, action
+                )
+                done = jnp.logical_or(terminated, truncated)
+                episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
+                return (rng, obs, env_state, done, episode_reward)
+
+            key, reset_key = jax.random.split(key)
+            obs, env_state = env.reset(reset_key)
+            done = False
+            episode_reward = 0.0
+
+            key, obs, env_state, done, episode_reward = jax.lax.while_loop(
+                lambda carry: jnp.logical_not(carry[3]),
+                step_env,
+                (key, obs, env_state, done, episode_reward),
             )
-            done = jnp.logical_or(terminated, truncated)
-            episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
-            return (rng, obs, env_state, done, episode_reward)
 
-        key, reset_key = jax.random.split(key)
-        obs, env_state = env.reset(reset_key)
-        done = False
-        episode_reward = 0.0
+            return key, episode_reward
 
-        key, obs, env_state, done, episode_reward = jax.lax.while_loop(
-            lambda carry: jnp.logical_not(carry[3]),
-            step_env,
-            (key, obs, env_state, done, episode_reward),
+        _, episode_rewards = jax.lax.scan(
+            eval_episode, key, jnp.arange(num_eval_episodes)
         )
 
-        return episode_reward
+        return episode_rewards
 
-    def _collect_rollout(self, rollout_state: tuple):
+    def _collect_rollout(self, rollout_state: tuple, env: AbstractEnvironment):
         def env_step(rollout_state, _):
-            env, last_obs, rng = rollout_state
+            env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
@@ -288,8 +249,8 @@ class PPO(eqx.Module):
             # take a step in the environment
             rng, key = jax.random.split(rng)
             step_key = jax.random.split(key, self.num_envs)
-            (obsv, reward, terminated, truncated, info), env = env.step(
-                step_key, action
+            (obsv, reward, terminated, truncated, info), env_state = env.step(
+                step_key, env_state, action
             )
 
             value = jax.vmap(self.forward_critic)(last_obs)
@@ -312,7 +273,7 @@ class PPO(eqx.Module):
                 next_value=next_value,
             )
 
-            rollout_state = (env, obsv, rng)
+            rollout_state = (env_state, obsv, rng)
             return rollout_state, transition
 
         def compute_gae(gae, transition: Transition):
@@ -464,8 +425,8 @@ class PPO(eqx.Module):
             self: PPO = runner_state[0]
             # Do rollout of single trajactory
             rollout_state = runner_state[1:]
-            (_env, last_obs, rng), trajectory_batch = self._collect_rollout(
-                rollout_state
+            (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
+                rollout_state, env
             )
 
             epoch_keys = jax.random.split(rng, self.update_epochs)
@@ -474,7 +435,7 @@ class PPO(eqx.Module):
 
             metric = trajectory_batch.info
 
-            runner_state = (self, _env, last_obs, rng)
+            runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
         if not is_wrapped(env, VecEnvWrapper):
@@ -484,10 +445,10 @@ class PPO(eqx.Module):
         if not self.is_initialized:
             self = self.init(key, env)
 
-        def train_fn(env):
+        def train_fn():
             # We wrap this logic so we can compile ahead of time
-            obsv, env = env.reset(jax.random.split(key, self.num_envs))
-            runner_state = (self, env, obsv, key)
+            obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
+            runner_state = (self, env_state, obsv, key)
             runner_state, metrics = jax.lax.scan(
                 train_iteration, runner_state, jnp.arange(self.num_iterations)
             )
@@ -495,9 +456,9 @@ class PPO(eqx.Module):
 
         s_time = time.time()
         print("Starting JAX compilation...")
-        train_fn = jax.jit(train_fn).lower(env).compile()
+        train_fn = jax.jit(train_fn).lower().compile()
         print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
         s_time = time.time()
-        updated_self = train_fn(env)
+        updated_self = train_fn()
         print(f"Training finished in {(time.time() - s_time):.2f} seconds")
         return updated_self
