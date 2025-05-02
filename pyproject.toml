@@ -1,15 +1,14 @@
 [project]
 name = "jymkit"
-version = "0.0.dev6"
-description = "A lightweight utility library for building reinforcement learning projects in JAX."
+version = "0.0.a1"
+description = "A lightweight utility library for reinforcement learning projects in JAX and Equinox."
 readme = "README.md"
 authors = [
     { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "equinox==0.12.1",
-    "jax>=0.5.2",
+    "equinox>=0.12.1",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +37,8 @@ jymkit = "jymkit.cli.init:main"
 dev = [
     "pytest>=8.3.5",
     "ruff>=0.11.0",
+    "pre-commit>=4.2.0",
+    "tqdm>=4.67.1"
 ]
 
 [tool.ruff.format]
@@ -52,6 +53,5 @@ combine-as-imports = true
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-
 include = ["src"] # "tests"
 exclude = ["src/jymkit/envs/econojax.py", "src/jymkit/cli/*"]

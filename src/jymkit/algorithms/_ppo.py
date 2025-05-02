@@ -10,13 +10,16 @@ import optax
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jymkit as jym
-from jymkit._environment import ORIGINAL_OBSERVATION_KEY, Environment
-from jymkit._wrappers import VecEnvWrapper, is_wrapped, remove_wrapper
-
-from ._agent_mapping import map_each_agent, split_key_over_agents
-from ._logging import scan_callback
-from ._transition import Transition
-from .networks import ActorNetwork, CriticNetwork
+from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
+from jymkit._environment import ORIGINAL_OBSERVATION_KEY
+from jymkit.algorithms.utils import (
+    ActorNetwork,
+    CriticNetwork,
+    Transition,
+    map_each_agent,
+    scan_callback,
+    split_key_over_agents,
+)
 
 
 class AgentState(eqx.Module):

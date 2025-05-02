@@ -16,4 +16,5 @@ from ._wrappers import (
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     is_wrapped as is_wrapped,
+    remove_wrapper as remove_wrapper,
 )

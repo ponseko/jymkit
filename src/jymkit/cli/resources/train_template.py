@@ -27,7 +27,8 @@ def do_random_evaluation(
 
 
 if __name__ == "__main__":
-    env = ExampleEnv()  # noqa: F821
+    env = ExampleEnv()  # noqa: F821 # type: ignore[reportUndefinedVariable]
+    env = jym.LogWrapper(env=env)
     rng = jax.random.PRNGKey(0)
 
     random_rewards = do_random_evaluation(rng, env)
@@ -37,8 +38,7 @@ if __name__ == "__main__":
     agent = PPO(
         total_timesteps=50000,
         num_steps=32,
-        ent_coef=0.0,
-        debug=True,  # Log rewards during training
         learning_rate=2.5e-3,
+        ent_coef=0.0,
     )
     agent = agent.train(rng, env)

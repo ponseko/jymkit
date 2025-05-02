@@ -142,7 +142,14 @@ def main():
 
     if include_algorithm_source:
         with pkg_resources.path("jymkit", "algorithms") as template_path:
-            shutil.copytree(template_path, src_path / "algorithms", dirs_exist_ok=True)
+            # ignore the "utils" folder in "algorithms"
+            ignored_folders = ["utils"]
+            shutil.copytree(
+                template_path,
+                src_path / "algorithms",
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(*ignored_folders),
+            )
 
     with pkg_resources.path(
         "jymkit.cli.resources", "train_template.py"
