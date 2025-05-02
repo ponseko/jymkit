@@ -15,39 +15,7 @@ TObservation = TypeVar("TObservation")
 TEnvState = TypeVar("TEnvState")
 
 
-class AbstractEnvironment(eqx.Module, Generic[TEnvState]):
-    @abstractmethod
-    def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
-    ) -> Tuple[TimeStep, TEnvState]:
-        pass
-
-    @abstractmethod
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        pass
-
-    @property
-    @abstractmethod
-    def action_space(self) -> Space | PyTree[Space]:
-        pass
-
-    @property
-    @abstractmethod
-    def observation_space(self) -> Space | PyTree[Space]:
-        pass
-
-    @property
-    @abstractmethod
-    def agent_structure(self) -> PyTreeDef:
-        pass
-
-    @property
-    @abstractmethod
-    def multi_agent(self) -> bool:
-        pass
-
-
-class Environment(AbstractEnvironment):
+class Environment(eqx.Module, Generic[TEnvState]):
     """
     Abstract environment template for reinforcement learning environments in JAX.
 

@@ -9,10 +9,10 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 
-from ._environment import AbstractEnvironment, TEnvState, TObservation
+from ._environment import Environment, TEnvState, TObservation
 
 
-def is_wrapped(wrapped_env: AbstractEnvironment, wrapper_class: type) -> bool:
+def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
     """
     Check if the environment is wrapped with a specific wrapper class.
     """
@@ -24,9 +24,7 @@ def is_wrapped(wrapped_env: AbstractEnvironment, wrapper_class: type) -> bool:
     return False
 
 
-def remove_wrapper(
-    wrapped_env: AbstractEnvironment, wrapper_class: type
-) -> AbstractEnvironment:
+def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
     """
     Remove a specific wrapper class from the environment.
     """
@@ -38,10 +36,18 @@ def remove_wrapper(
     return wrapped_env
 
 
-class Wrapper(AbstractEnvironment):
+class Wrapper(Environment):
     """Base class for all wrappers."""
 
-    env: AbstractEnvironment
+    env: Environment
+
+    def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        return self.env.reset_env(key)
+
+    def step_env(
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[jym.TimeStep, TEnvState]:
+        return self.env.step_env(key, state, action)
 
     @property
     def action_space(self) -> jym.Space | PyTree[jym.Space]:

@@ -10,7 +10,7 @@ import optax
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jymkit as jym
-from jymkit._environment import ORIGINAL_OBSERVATION_KEY, AbstractEnvironment
+from jymkit._environment import ORIGINAL_OBSERVATION_KEY, Environment
 from jymkit._wrappers import VecEnvWrapper, is_wrapped, remove_wrapper
 
 from ._agent_mapping import map_each_agent, split_key_over_agents
@@ -66,7 +66,7 @@ class PPO(eqx.Module):
     def is_initialized(self):
         return self.state is not None
 
-    def init(self, key: PRNGKeyArray, env: AbstractEnvironment, **hyperparams) -> "PPO":
+    def init(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
         observation_space = env.observation_space
         action_space = env.action_space
         hyperparams["multi_agent_env"] = env.multi_agent
@@ -149,7 +149,7 @@ class PPO(eqx.Module):
             eqx.tree_serialise_leaves(f, self.state)
 
     @classmethod
-    def load(cls, file_path: str, env: AbstractEnvironment) -> "PPO":
+    def load(cls, file_path: str, env: Environment) -> "PPO":
         agent = cls()
         with open(file_path, "rb") as f:
             hyperparams = json.loads(f.readline().decode())
@@ -191,7 +191,7 @@ class PPO(eqx.Module):
         return action, log_prob
 
     def evaluate(
-        self, key: PRNGKeyArray, env: AbstractEnvironment, num_eval_episodes: int = 100
+        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 100
     ) -> Float[Array, "..."]:
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
@@ -232,7 +232,7 @@ class PPO(eqx.Module):
 
         return episode_rewards
 
-    def _collect_rollout(self, rollout_state: tuple, env: AbstractEnvironment):
+    def _collect_rollout(self, rollout_state: tuple, env: Environment):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
@@ -314,7 +314,7 @@ class PPO(eqx.Module):
 
         return rollout_state, trajectory_batch
 
-    def train(self, key: PRNGKeyArray, env: AbstractEnvironment) -> "PPO":
+    def train(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         @scan_callback(
             callback_fn=self.log_function,
             callback_interval=self.log_interval,
