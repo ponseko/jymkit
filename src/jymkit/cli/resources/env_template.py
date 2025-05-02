@@ -1,6 +1,8 @@
+from typing import Tuple
+
 import equinox as eqx
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 
 import jymkit as jym
 
@@ -19,8 +21,8 @@ class ExampleEnv(jym.Environment):
     max_episode_steps: int = 100
 
     def step_env(
-        self, key: PRNGKeyArray, state: jym.EnvState, action: jym.Action
-    ) -> jym.EnvState:
+        self, key: PRNGKeyArray, state: EnvState, action: int
+    ) -> Tuple[jym.TimeStep, EnvState]:
         """
         Update the environment state based on the action taken.
         """
@@ -30,28 +32,40 @@ class ExampleEnv(jym.Environment):
         # action 3 -> move left
         new_x = state.x + (action == 0) - (action == 2)
         new_y = state.y + (action == 1) - (action == 3)
-        return EnvState(x=new_x, y=new_y, time=state.time + 1)
 
-    def reset_env(self, key: PRNGKeyArray) -> jym.EnvState:
+        state = EnvState(x=new_x, y=new_y, time=state.time + 1)
+
+        timestep = jym.TimeStep(
+            observation=self.get_observation(state),
+            reward=self.get_reward(),
+            terminated=self.get_terminated(state),
+            truncated=state.time >= self.max_episode_steps,
+            info={},
+        )
+        return timestep, state
+
+    def reset_env(self, key: PRNGKeyArray) -> Tuple[Tuple[int, int], EnvState]:
         """
         Reset the environment to its initial state.
         """
-        return EnvState(x=5, y=5)  # Start in the center
+        state = EnvState(x=5, y=5)  # Start in the center
+        observation = self.get_observation(state)
+        return observation, state
 
-    def get_observation(self, state: jym.EnvState) -> jym.Observation:
+    def get_observation(self, state: EnvState) -> Tuple[int, int]:
         """
         Get the observation from the environment state.
         """
         return state.location
 
-    def get_reward(self, state: jym.EnvState, prev_state: jym.EnvState) -> float:
+    def get_reward(self) -> float:
         """
         Get the reward from the environment state.
         """
         # Example reward function: 1 for each step taken
         return 1.0
 
-    def get_terminated(self, state: jym.EnvState) -> bool:
+    def get_terminated(self, state: EnvState) -> Float[Array, "1"]:
         """
         Check if the episode has terminated.
         """

@@ -1,8 +1,10 @@
+from typing import Tuple
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
 
 import jymkit as jym
 
@@ -41,8 +43,8 @@ class CartPole(jym.Environment):
         return self.masspole * self.length
 
     def step_env(
-        self, key: PRNGKeyArray, state: EnvState, action: jym.Action
-    ) -> EnvState:
+        self, key: PRNGKeyArray, state: EnvState, action: int
+    ) -> Tuple[jym.TimeStep, EnvState]:
         force = self.force_mag * action - self.force_mag * (1 - action)
         costheta = jnp.cos(state.theta)
         sintheta = jnp.sin(state.theta)
@@ -67,9 +69,18 @@ class CartPole(jym.Environment):
             theta_dot=theta_dot,
             time=state.time + 1,
         )
-        return state
 
-    def reset_env(self, key: PRNGKeyArray) -> EnvState:
+        timestep = jym.TimeStep(
+            self.get_observation(state),
+            self.get_reward(),
+            self.get_terminated(state),
+            self.get_truncated(state),
+            {},
+        )
+
+        return timestep, state
+
+    def reset_env(self, key: PRNGKeyArray) -> Tuple[Array, EnvState]:
         state_variables = jax.random.uniform(key, shape=(4,), minval=-0.05, maxval=0.05)
         state = EnvState(
             x=state_variables[0],
@@ -77,17 +88,18 @@ class CartPole(jym.Environment):
             theta=state_variables[2],
             theta_dot=state_variables[3],
         )
-        return state
+        observation = self.get_observation(state)
+        return observation, state
 
-    def get_observation(self, state: EnvState) -> jym.Observation:
+    def get_observation(self, state: EnvState) -> Array:
         return jnp.array(
             [state.x, state.x_dot, state.theta, state.theta_dot], dtype=jnp.float32
         )
 
-    def get_reward(self, state: EnvState, prev_state: EnvState) -> float:
+    def get_reward(self) -> float:
         return 1.0
 
-    def get_terminated(self, state: EnvState) -> bool:
+    def get_terminated(self, state: EnvState) -> Array:
         return jnp.logical_or(
             jnp.abs(state.x) > self.x_threshold,
             jnp.abs(state.theta) > self.theta_threshold_radians,
@@ -98,7 +110,7 @@ class CartPole(jym.Environment):
 
     @property
     def observation_space(self) -> jym.Space:
-        high = np.array(
+        high = jnp.array(
             [
                 self.x_threshold * 2,
                 np.finfo(jnp.float32).max,

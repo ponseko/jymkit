@@ -35,11 +35,11 @@ For existing projects, you can simply install JymKit via `pip` and import the re
 > ```python
 > import jax
 > import jymkit as jym
-> from jymkit.algorithms import PPOAgent
+> from jymkit.algorithms import PPO
 > from jymkit.envs import CartPole
 > 
 > env = CartPole()
 > rng = jax.random.PRNGKey(0)
-> agent = PPOAgent(total_timesteps=5e5, debug=True, learning_rate=2.5e-3)
+> agent = PPO(total_timesteps=5e5, debug=True, learning_rate=2.5e-3)
 > agent = agent.train(rng, env)
 > ```

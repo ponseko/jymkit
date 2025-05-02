@@ -1,11 +1,6 @@
-from typing import NamedTuple, TypeVar
+from typing import NamedTuple
 
-import equinox as eqx
-from jaxtyping import Array
-
-Observation = TypeVar("Observation")
-Action = TypeVar("Action")
-EnvState = TypeVar("EnvState", eqx.Module, dict)
+from jaxtyping import Array, Bool, Float, PyTree
 
 
 class TimeStep(NamedTuple):
@@ -13,10 +8,10 @@ class TimeStep(NamedTuple):
     A container for the output of the step function.
     """
 
-    observation: Observation
-    reward: Array
-    terminated: Array
-    truncated: Array
+    observation: Array | PyTree
+    reward: Float[Array, "..."] | PyTree[Float[Array, "..."]]
+    terminated: Bool[Array, "..."] | PyTree[Bool[Array, "..."]]
+    truncated: Bool[Array, "..."] | PyTree[Bool[Array, "..."]]
     info: dict
 
 
@@ -28,5 +23,5 @@ class AgentObservation(NamedTuple):
     action masking is included in the environment.
     """
 
-    observation: Observation
-    action_mask: Array = None
+    observation: Array | PyTree
+    action_mask: Array | PyTree | None = None

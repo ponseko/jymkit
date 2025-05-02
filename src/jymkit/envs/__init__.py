@@ -1,1 +1,1 @@
-from .cartpole import CartPole
+from .cartpole import CartPole as CartPole
