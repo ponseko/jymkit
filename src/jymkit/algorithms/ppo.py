@@ -144,23 +144,18 @@ class PPO(eqx.Module):
                     hyperparams[field.name] = getattr(self, field.name).item()
                 except AttributeError:
                     hyperparams[field.name] = getattr(self, field.name)
-            breakpoint()
             hyperparam_str = json.dumps(hyperparams)
             f.write((hyperparam_str + "\n").encode())
             eqx.tree_serialise_leaves(f, self.state)
 
     @classmethod
-    def load(cls, file_path: str) -> "PPO":
-        from jymkit.envs.cartpole import CartPole
-
+    def load(cls, file_path: str, env: AbstractEnvironment) -> "PPO":
         agent = cls()
         with open(file_path, "rb") as f:
             hyperparams = json.loads(f.readline().decode())
-            agent = agent.init(jax.random.PRNGKey(0), CartPole(), **hyperparams)
-
-            # Load the state
+            agent = agent.init(jax.random.PRNGKey(0), env, **hyperparams)
             state = eqx.tree_deserialise_leaves(f, agent.state)
-            agent = replace(agent, state=state)
+        agent = replace(agent, state=state)
         return agent
 
     def forward_critic(self, observation: PyTree[Array]):
