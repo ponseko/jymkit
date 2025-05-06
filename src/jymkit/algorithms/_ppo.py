@@ -1,6 +1,6 @@
 import json
-import time
 from dataclasses import fields, replace
+from functools import partial
 from typing import Callable, Literal, Optional, Tuple
 
 import equinox as eqx
@@ -33,13 +33,13 @@ class PPO(eqx.Module):
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
 
-    learning_rate: float | optax.Schedule = 2.5e-4
+    learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     max_grad_norm: float = 0.5
     clip_coef: float = 0.2
     clip_coef_vf: float = 10.0  # Depends on the reward scaling !
-    ent_coef: float = 0.01
+    ent_coef: float | optax.Schedule = eqx.field(static=True, default=0.01)
     vf_coef: float = 0.25
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
@@ -139,6 +139,10 @@ class PPO(eqx.Module):
     def save(self, file_path: str):
         with open(file_path, "wb") as f:
             non_hyperparams = ["state", "optimizer"]
+            if not isinstance(self.learning_rate, float):
+                non_hyperparams.append("learning_rate")  # TODO: save something
+            if not isinstance(self.ent_coef, float):
+                non_hyperparams.append("ent_coef")
             hyperparams = {}
             for field in fields(self):
                 if field.name in non_hyperparams:
@@ -161,14 +165,14 @@ class PPO(eqx.Module):
         agent = replace(agent, state=state)
         return agent
 
-    def forward_critic(self, observation: PyTree[Array]):
+    def get_value(self, observation: PyTree[Array]):
         value = map_each_agent(
             lambda a, o: a.critic(o),
             identity=not self.multi_agent_env,
         )(a=self.state, o=observation)
         return value
 
-    def forward_actor(self, observation, key, get_log_prob=True):
+    def get_action(self, key, observation, get_log_prob=False):
         if self.multi_agent_env:
             _, structure = eqx.tree_flatten_one_level(observation)
             key = split_key_over_agents(key, structure)
@@ -198,8 +202,7 @@ class PPO(eqx.Module):
     ) -> Float[Array, "..."]:
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
-            # NOTE: add flag to enable when we know envs are of equal length?
-            # NOTE: alternatively, just sample x steps?
+            # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
             env = remove_wrapper(env, VecEnvWrapper)
 
         def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
@@ -207,7 +210,7 @@ class PPO(eqx.Module):
                 rng, obs, env_state, done, episode_reward = carry
                 rng, action_key, step_key = jax.random.split(rng, 3)
 
-                action = self.forward_actor(obs, action_key, get_log_prob=False)
+                action = self.get_action(action_key, obs)
 
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
@@ -242,7 +245,8 @@ class PPO(eqx.Module):
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            action, log_prob = jax.vmap(self.forward_actor)(last_obs, sample_key)
+            get_action_and_log_prob = partial(self.get_action, get_log_prob=True)
+            action, log_prob = jax.vmap(get_action_and_log_prob)(sample_key, last_obs)
 
             # take a step in the environment
             rng, key = jax.random.split(rng)
@@ -251,8 +255,8 @@ class PPO(eqx.Module):
                 step_key, env_state, action
             )
 
-            value = jax.vmap(self.forward_critic)(last_obs)
-            next_value = jax.vmap(self.forward_critic)(info[ORIGINAL_OBSERVATION_KEY])
+            value = jax.vmap(self.get_value)(last_obs)
+            next_value = jax.vmap(self.get_value)(info[ORIGINAL_OBSERVATION_KEY])
 
             # gamma = self.gamma
             # if "discount" in info:
@@ -327,61 +331,71 @@ class PPO(eqx.Module):
             def update_epoch(trajectory_batch: Transition, key: PRNGKeyArray) -> PPO:
                 """Do one epoch of update"""
 
-                @eqx.filter_grad
-                def __ppo_los_fn(
-                    params: Tuple[ActorNetwork, CriticNetwork], train_batch: Transition
-                ):
-                    assert train_batch.advantage_ is not None
-                    assert train_batch.return_ is not None
-
-                    actor, critic = params
-                    action_dist = jax.vmap(actor)(train_batch.observation)
-                    log_prob = action_dist.log_prob(train_batch.action)
-                    entropy = action_dist.entropy().mean()
-                    value = jax.vmap(critic)(train_batch.observation)
-
-                    init_log_prob = train_batch.log_prob
-                    if log_prob.ndim == 2:  # MultiDiscrete Action Space
-                        log_prob = jnp.sum(log_prob, axis=-1)
-                        init_log_prob = jnp.sum(init_log_prob, axis=-1)
-
-                    # actor loss
-                    ratio = jnp.exp(log_prob - init_log_prob)
-                    _advantages = (
-                        train_batch.advantage_ - train_batch.advantage_.mean()
-                    ) / (train_batch.advantage_.std() + 1e-8)
-                    actor_loss1 = _advantages * ratio
-
-                    actor_loss2 = (
-                        jnp.clip(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
-                        * _advantages
-                    )
-                    actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-                    # critic loss
-                    value_pred_clipped = train_batch.value + (
-                        jnp.clip(
-                            value - train_batch.value,
-                            -self.clip_coef_vf,
-                            self.clip_coef_vf,
-                        )
-                    )
-                    value_losses = jnp.square(value - train_batch.return_)
-                    value_losses_clipped = jnp.square(
-                        value_pred_clipped - train_batch.return_
-                    )
-                    value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-                    # Total loss
-                    total_loss = (
-                        actor_loss + self.vf_coef * value_loss - self.ent_coef * entropy
-                    )
-                    return total_loss  # , (actor_loss, value_loss, entropy)
-
                 @map_each_agent(identity=not self.multi_agent_env)
                 def __update_state_over_minibatch(
                     current_state: AgentState, minibatch: Transition
                 ):
+                    @eqx.filter_grad
+                    def __ppo_los_fn(
+                        params: Tuple[ActorNetwork, CriticNetwork],
+                        train_batch: Transition,
+                    ):
+                        assert train_batch.advantage_ is not None
+                        assert train_batch.return_ is not None
+
+                        actor, critic = params
+                        action_dist = jax.vmap(actor)(train_batch.observation)
+                        log_prob = action_dist.log_prob(train_batch.action)
+                        entropy = action_dist.entropy().mean()
+                        value = jax.vmap(critic)(train_batch.observation)
+
+                        init_log_prob = train_batch.log_prob
+                        if log_prob.ndim == 2:  # MultiDiscrete Action Space
+                            log_prob = jnp.sum(log_prob, axis=-1)
+                            init_log_prob = jnp.sum(init_log_prob, axis=-1)
+
+                        # actor loss
+                        ratio = jnp.exp(log_prob - init_log_prob)
+                        _advantages = (
+                            train_batch.advantage_ - train_batch.advantage_.mean()
+                        ) / (train_batch.advantage_.std() + 1e-8)
+                        actor_loss1 = _advantages * ratio
+
+                        actor_loss2 = (
+                            jnp.clip(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
+                            * _advantages
+                        )
+                        actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
+
+                        # critic loss
+                        value_pred_clipped = train_batch.value + (
+                            jnp.clip(
+                                value - train_batch.value,
+                                -self.clip_coef_vf,
+                                self.clip_coef_vf,
+                            )
+                        )
+                        value_losses = jnp.square(value - train_batch.return_)
+                        value_losses_clipped = jnp.square(
+                            value_pred_clipped - train_batch.return_
+                        )
+                        value_loss = jnp.maximum(
+                            value_losses, value_losses_clipped
+                        ).mean()
+
+                        ent_coef = self.ent_coef
+                        if not isinstance(ent_coef, float):
+                            # ent_coef is a schedule # TODO
+                            ent_coef = ent_coef(  # pyright: ignore
+                                current_state.optimizer_state[1][1].count  # type: ignore
+                            )
+
+                        # Total loss
+                        total_loss = (
+                            actor_loss + self.vf_coef * value_loss - ent_coef * entropy
+                        )
+                        return total_loss  # , (actor_loss, value_loss, entropy)
+
                     actor, critic = current_state.actor, current_state.critic
                     grads = __ppo_los_fn((actor, critic), minibatch)
                     updates, optimizer_state = self.optimizer.update(
@@ -443,20 +457,10 @@ class PPO(eqx.Module):
         if not self.is_initialized:
             self = self.init(key, env)
 
-        def train_fn():
-            # We wrap this logic so we can compile ahead of time
-            obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-            runner_state = (self, env_state, obsv, key)
-            runner_state, metrics = jax.lax.scan(
-                train_iteration, runner_state, jnp.arange(self.num_iterations)
-            )
-            return runner_state[0]
-
-        s_time = time.time()
-        print("Starting JAX compilation...")
-        train_fn = jax.jit(train_fn).lower().compile()
-        print(f"Compilation took {(time.time() - s_time):.2f} s, starting training...")
-        s_time = time.time()
-        updated_self = train_fn()
-        print(f"Training finished in {(time.time() - s_time):.2f} seconds")
+        obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
+        runner_state = (self, env_state, obsv, key)
+        runner_state, metrics = jax.lax.scan(
+            train_iteration, runner_state, jnp.arange(self.num_iterations)
+        )
+        updated_self = runner_state[0]
         return updated_self

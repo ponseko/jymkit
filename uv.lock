@@ -322,7 +322,7 @@ wheels = [
 
 [[package]]
 name = "jymkit"
-version = "0.0.dev6"
+version = "0.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "equinox" },
@@ -349,7 +349,7 @@ dev = [
 requires-dist = [
     { name = "distrax", marker = "extra == 'algs'", specifier = ">=0.1.5" },
     { name = "equinox", specifier = ">=0.12.1" },
-    { name = "jax", extras = ["cuda"], marker = "extra == 'gpu'", specifier = ">=0.4.38" },
+    { name = "jax", extras = ["cuda"], marker = "extra == 'gpu'", specifier = ">=0.5.2" },
     { name = "optax", marker = "extra == 'algs'", specifier = ">=0.2.4" },
 ]
 provides-extras = ["algs", "gpu"]

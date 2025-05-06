@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 
 from ._spaces import Space
-from ._types import TimeStep
+from ._types import AgentObservation, TimeStep
 
 ORIGINAL_OBSERVATION_KEY = "_TERMINAL_OBSERVATION"
 
@@ -58,7 +58,15 @@ class Environment(eqx.Module, Generic[TEnvState]):
         )
         obs = jax.tree.map(lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step)
 
-        # To bootstrap correctly on truncated episodes
+        # Insert the original observation in info to bootstrap correctly
+        try:  # remove action mask if present
+            obs_step = jax.tree.map(
+                lambda o: o.observation,
+                obs_step,
+                is_leaf=lambda x: isinstance(x, AgentObservation),
+            )
+        except Exception:
+            pass
         info[ORIGINAL_OBSERVATION_KEY] = obs_step
 
         return TimeStep(obs, reward, terminated, truncated, info), state
