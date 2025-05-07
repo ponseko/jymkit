@@ -38,20 +38,23 @@ def scan_callback(
             progress_bar[0].update(callback_interval)
 
     def simple_reward_logger(data, iteration):
-        if (
-            "returned_episode_returns" not in data
-            or "returned_episode" not in data
-            or "timestep" not in data
-        ):
-            raise ValueError(
-                "Missing keys in logging data. Is the environment wrapped with LogWrapper?"
-            )
+        assert (
+            "returned_episode_returns" in data
+            and "returned_episode" in data
+            and "timestep" in data
+        ), "Missing keys in logging data. Is the environment wrapped with LogWrapper?"
 
         num_envs = data["timestep"].shape[-1]
-        return_values = data["returned_episode_returns"][data["returned_episode"]]
+        return_values = jax.tree.map(
+            lambda x: x[data["returned_episode"]], data["returned_episode_returns"]
+        )
         timesteps = data["timestep"][data["returned_episode"]] * num_envs
         for t in range(len(timesteps)):
-            print(f"global step={timesteps[t]}, episodic return={return_values[t]}")
+            return_values_t = jax.tree.map(
+                lambda x: x[t].item() if hasattr(x[t], "item") else x[t], return_values
+            )
+            return_values_t = jax.tree.map(lambda x: round(x, 3), return_values_t)
+            print(f"global step={timesteps[t]}, episodic return={return_values_t}")
 
     def maybe_log(iteration: int, data):
         if callback_fn is not None and callback_interval > 0:

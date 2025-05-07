@@ -107,11 +107,12 @@ class LogWrapper(Wrapper):
             vec_count = jax.tree.leaves(obs)[0].shape[0]
             initial_vals = jnp.zeros((vec_count, structure.num_leaves)).squeeze()
             initial_timestep = jnp.zeros((vec_count,)).squeeze()
+        initial_returns = jax.tree.unflatten(structure, initial_vals.T)
         state = LogEnvState(
             env_state=env_state,
-            episode_returns=initial_vals,
+            episode_returns=initial_returns,
             episode_lengths=initial_vals,
-            returned_episode_returns=initial_vals,
+            returned_episode_returns=initial_returns,
             returned_episode_lengths=initial_vals,
             timestep=initial_timestep,
         )
@@ -121,16 +122,22 @@ class LogWrapper(Wrapper):
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[jym.TimeStep, LogEnvState]:
         timestep, env_state = self.env.step(key, state.env_state, action)
-        reward = self._flat_reward(timestep.reward)
-        done = jnp.logical_or(timestep.terminated, timestep.truncated)
-        new_episode_return = state.episode_returns + reward
+        done = jnp.logical_or(timestep.terminated, timestep.truncated).any()
+        new_episode_return = jax.tree.map(
+            lambda _r, r: (_r + r), state.episode_returns, timestep.reward
+        )
         new_episode_length = state.episode_lengths + 1
         state = LogEnvState(
             env_state=env_state,
-            episode_returns=new_episode_return * (1 - done),
+            episode_returns=jax.tree.map(
+                lambda n_r: n_r * (1 - done), new_episode_return
+            ),
             episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns=state.returned_episode_returns * (1 - done)
-            + new_episode_return * done,
+            returned_episode_returns=jax.tree.map(
+                lambda r, n_r: r * (1 - done) + n_r * done,
+                state.returned_episode_returns,
+                new_episode_return,
+            ),
             returned_episode_lengths=state.returned_episode_lengths * (1 - done)
             + new_episode_length * done,
             timestep=state.timestep + 1,

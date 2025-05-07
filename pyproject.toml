@@ -1,6 +1,6 @@
 [project]
 name = "jymkit"
-version = "0.0.b1"
+version = "0.0.b2"
 description = "A lightweight utility library for reinforcement learning projects in JAX and Equinox."
 readme = "README.md"
 authors = [

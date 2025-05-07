@@ -128,23 +128,23 @@ class ActorNetwork(eqx.Module):
             x = jnp.concatenate(x)
         for layer in self.layers[:-1]:
             x = jax.nn.relu(layer(x))
+
         if not isinstance(self.layers[-1], list):  # single-dimensional output
-            return distrax.Categorical(self.layers[-1](x))
+            logits = self.layers[-1](x)
+        else:  # multi-dimensional output
+            try:
+                # TODO: maybe move the map.stack to the init
+                # If homogeneous output, we can stack the outputs and use vmap
+                final_layers = jax.tree.map(lambda *v: jnp.stack(v), *self.layers[-1])
+                outputs = jax.vmap(lambda layer: layer(x))(final_layers)
+                if self.output_structure.num_leaves == 1:
+                    outputs = [outputs]
+                else:
+                    outputs = outputs.tolist()  # TODO: test
+            except ValueError:
+                outputs = jax.tree.map(lambda x: x(x), self.layers[-1])
 
-        try:
-            # TODO: maybe move the map.stack to the init
-            # If homogeneous output, we can stack the outputs and use vmap
-            final_layers = jax.tree.map(lambda *v: jnp.stack(v), *self.layers[-1])
-            outputs = jax.vmap(lambda layer: layer(x))(final_layers)
-            if self.output_structure.num_leaves == 1:
-                outputs = [outputs]
-            else:
-                outputs = outputs.tolist()  # TODO: test
-        except ValueError:
-            outputs = jax.tree.map(lambda x: x(x), self.layers[-1])
-
-        logits = jax.tree.unflatten(self.output_structure, outputs)
-
+            logits = jax.tree.unflatten(self.output_structure, outputs)
         if action_mask is not None:
             logits = self._apply_action_mask(logits, action_mask)
 
