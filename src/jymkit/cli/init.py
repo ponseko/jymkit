@@ -133,6 +133,7 @@ def main():
         shutil.move(src_path, project_path / project_path.name.lower())
         if (project_path / "src").exists():
             shutil.rmtree(project_path / "src")
+        src_path = project_path / project_path.name.lower()
 
     # Update the dependencies in pyproject.toml
     update_project_dependencies(pyproject_file)

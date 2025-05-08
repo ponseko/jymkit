@@ -322,7 +322,7 @@ wheels = [
 
 [[package]]
 name = "jymkit"
-version = "0.0b2"
+version = "0.0b3"
 source = { editable = "." }
 dependencies = [
     { name = "equinox" },

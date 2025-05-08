@@ -1,5 +1,7 @@
 try:
-    from ._algorithm import RLAlgorithm as RLAlgorithm
+    # Weird import for proper copy from the CLI
+    from jymkit.algorithms._algorithm import RLAlgorithm as RLAlgorithm
+
     from ._networks import (
         ActorNetwork as ActorNetwork,
         CriticNetwork as CriticNetwork,
