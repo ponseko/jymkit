@@ -46,6 +46,7 @@ docstring-code-format = true
 
 [tool.ruff.lint]
 extend-select = ["I"]
+ignore = ["F722"] # jaxtyping
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

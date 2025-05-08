@@ -107,6 +107,8 @@ class LogWrapper(Wrapper):
             vec_count = jax.tree.leaves(obs)[0].shape[0]
             initial_vals = jnp.zeros((vec_count, structure.num_leaves)).squeeze()
             initial_timestep = jnp.zeros((vec_count,)).squeeze()
+        if initial_vals.ndim == 0:
+            initial_vals = jnp.expand_dims(initial_vals, axis=0)
         initial_returns = jax.tree.unflatten(structure, initial_vals.T)
         state = LogEnvState(
             env_state=env_state,
