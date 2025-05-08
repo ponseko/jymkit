@@ -1,4 +1,9 @@
 try:
+    from ._algorithm import RLAlgorithm as RLAlgorithm
+    from ._networks import (
+        ActorNetwork as ActorNetwork,
+        CriticNetwork as CriticNetwork,
+    )
     from ._ppo import PPO as PPO
 
 except ImportError:

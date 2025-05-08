@@ -5,8 +5,4 @@ from ._agent_mapping import (
 from ._logging import (
     scan_callback as scan_callback,
 )
-from ._networks import (
-    ActorNetwork as ActorNetwork,
-    CriticNetwork as CriticNetwork,
-)
 from ._transition import Transition as Transition

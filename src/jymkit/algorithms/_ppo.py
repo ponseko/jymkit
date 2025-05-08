@@ -1,5 +1,4 @@
-import json
-from dataclasses import fields, replace
+from dataclasses import replace
 from functools import partial
 from typing import Callable, Literal, Optional, Tuple
 
@@ -12,9 +11,8 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
+from jymkit.algorithms import ActorNetwork, CriticNetwork, RLAlgorithm
 from jymkit.algorithms.utils import (
-    ActorNetwork,
-    CriticNetwork,
     Transition,
     map_each_agent,
     scan_callback,
@@ -22,14 +20,49 @@ from jymkit.algorithms.utils import (
 )
 
 
-class AgentState(eqx.Module):
+class PPOState(eqx.Module):
     actor: ActorNetwork
     critic: CriticNetwork
     optimizer_state: optax.OptState
 
+    @classmethod
+    def make(
+        cls,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        output_space: jym.Space,
+        actor_features: list,
+        critic_features: list,
+        use_bronet: bool,
+        optimizer: optax.GradientTransformation,
+    ):
+        actor_key, critic_key = jax.random.split(key)
+        actor = ActorNetwork(
+            key=actor_key,
+            obs_space=obs_space,
+            hidden_dims=actor_features,
+            output_space=output_space,
+            use_bronet=use_bronet,
+        )
+        critic = CriticNetwork(
+            key=critic_key,
+            obs_space=obs_space,
+            hidden_dims=critic_features,
+            use_bronet=use_bronet,
+        )
+        optimizer_state = optimizer.init(
+            eqx.filter((actor, critic), eqx.is_inexact_array)
+        )
 
-class PPO(eqx.Module):
-    state: PyTree[AgentState] = None
+        return cls(
+            actor=actor,
+            critic=critic,
+            optimizer_state=optimizer_state,
+        )
+
+
+class PPO(RLAlgorithm):
+    state: PyTree[PPOState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
     multi_agent_env: bool = eqx.field(static=True, default=False)
 
@@ -47,6 +80,9 @@ class PPO(eqx.Module):
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     update_epochs: int = eqx.field(static=True, default=4)  # K epochs
+    actor_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
+    critic_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
+    use_bronet: bool = eqx.field(static=True, default=False)
 
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
@@ -75,39 +111,6 @@ class PPO(eqx.Module):
         hyperparams["multi_agent_env"] = env.multi_agent
         self = replace(self, **hyperparams)
 
-        @map_each_agent(
-            shared_argnames=["actor_features", "critic_features", "optimizer"],
-            identity=not self.multi_agent_env,
-        )
-        def create_agent_state(
-            key: PRNGKeyArray,
-            obs_space: jym.Space,
-            output_space: int | jym.Space,
-            actor_features: list,
-            critic_features: list,
-            optimizer: optax.GradientTransformation,
-        ) -> AgentState:
-            actor_key, critic_key = jax.random.split(key)
-
-            actor = ActorNetwork(
-                key=actor_key,
-                obs_space=obs_space,
-                hidden_dims=actor_features,
-                output_space=output_space,
-            )
-            critic = CriticNetwork(
-                key=critic_key, obs_space=obs_space, hidden_dims=critic_features
-            )
-            optimizer_state = optimizer.init(
-                eqx.filter((actor, critic), eqx.is_inexact_array)
-            )
-
-            return AgentState(
-                actor=actor,
-                critic=critic,
-                optimizer_state=optimizer_state,
-            )
-
         env_agent_structure = env.agent_structure
         keys_per_agent = split_key_over_agents(key, env_agent_structure)
 
@@ -120,12 +123,22 @@ class PPO(eqx.Module):
             ),
         )
 
-        agent_states = create_agent_state(
+        agent_states = map_each_agent(
+            PPOState.make,
+            shared_argnames=[
+                "actor_features",
+                "critic_features",
+                "optimizer",
+                "use_bronet",
+            ],
+            identity=not self.multi_agent_env,
+        )(
             output_space=action_space,
             key=keys_per_agent,
-            actor_features=[64, 64],
-            critic_features=[64, 64],
+            actor_features=self.actor_features,
+            critic_features=self.critic_features,
             obs_space=observation_space,
+            use_bronet=self.use_bronet,
             optimizer=optimizer,
         )
 
@@ -134,35 +147,6 @@ class PPO(eqx.Module):
             state=agent_states,
             optimizer=optimizer,
         )
-        return agent
-
-    def save(self, file_path: str):
-        with open(file_path, "wb") as f:
-            non_hyperparams = ["state", "optimizer"]
-            if not isinstance(self.learning_rate, float):
-                non_hyperparams.append("learning_rate")  # TODO: save something
-            if not isinstance(self.ent_coef, float):
-                non_hyperparams.append("ent_coef")
-            hyperparams = {}
-            for field in fields(self):
-                if field.name in non_hyperparams:
-                    continue
-                try:
-                    hyperparams[field.name] = getattr(self, field.name).item()
-                except AttributeError:
-                    hyperparams[field.name] = getattr(self, field.name)
-            hyperparam_str = json.dumps(hyperparams)
-            f.write((hyperparam_str + "\n").encode())
-            eqx.tree_serialise_leaves(f, self.state)
-
-    @classmethod
-    def load(cls, file_path: str, env: Environment) -> "PPO":
-        agent = cls()
-        with open(file_path, "rb") as f:
-            hyperparams = json.loads(f.readline().decode())
-            agent = agent.init(jax.random.PRNGKey(0), env, **hyperparams)
-            state = eqx.tree_deserialise_leaves(f, agent.state)
-        agent = replace(agent, state=state)
         return agent
 
     def get_value(self, observation: PyTree[Array]):
@@ -183,7 +167,6 @@ class PPO(eqx.Module):
         action = map_each_agent(
             lambda dist, seed: dist.sample(seed=seed),
             identity=not self.multi_agent_env,
-            # shared_argnames=["seed"],  # NOTE: not sharing the seed is causing nans
         )(dist=action_dist, seed=key)
 
         if not get_log_prob:
@@ -198,8 +181,8 @@ class PPO(eqx.Module):
         return action, log_prob
 
     def evaluate(
-        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 100
-    ) -> Float[Array, "..."]:
+        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
+    ) -> Float[Array, " num_eval_episodes"]:
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
@@ -258,6 +241,7 @@ class PPO(eqx.Module):
             value = jax.vmap(self.get_value)(last_obs)
             next_value = jax.vmap(self.get_value)(info[ORIGINAL_OBSERVATION_KEY])
 
+            # TODO: variable gamma from env
             # gamma = self.gamma
             # if "discount" in info:
             #     gamma = info["discount"]
@@ -333,7 +317,7 @@ class PPO(eqx.Module):
 
                 @map_each_agent(identity=not self.multi_agent_env)
                 def __update_state_over_minibatch(
-                    current_state: AgentState, minibatch: Transition
+                    current_state: PPOState, minibatch: Transition
                 ):
                     @eqx.filter_grad
                     def __ppo_los_fn(
@@ -402,7 +386,7 @@ class PPO(eqx.Module):
                         grads, current_state.optimizer_state
                     )
                     new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
-                    updated_state = AgentState(
+                    updated_state = PPOState(
                         actor=new_actor,
                         critic=new_critic,
                         optimizer_state=optimizer_state,

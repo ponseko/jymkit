@@ -143,12 +143,12 @@ def main():
     if include_algorithm_source:
         with pkg_resources.path("jymkit", "algorithms") as template_path:
             # ignore the "utils" folder in "algorithms"
-            ignored_folders = ["utils"]
+            ignored = ["utils", "_algorithm.py"]
             shutil.copytree(
                 template_path,
                 src_path / "algorithms",
                 dirs_exist_ok=True,
-                ignore=shutil.ignore_patterns(*ignored_folders),
+                ignore=shutil.ignore_patterns(*ignored),
             )
 
     with pkg_resources.path(
