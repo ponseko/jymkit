@@ -128,6 +128,12 @@ def main():
     pyproject_file = project_path / "pyproject.toml"
     src_path = project_path / "src" / project_path.name.lower()
 
+    # move the current path folder outside of the src folder and delete the src folder
+    if src_path.exists():
+        shutil.move(src_path, project_path / project_path.name.lower())
+        if (project_path / "src").exists():
+            shutil.rmtree(project_path / "src")
+
     # Update the dependencies in pyproject.toml
     update_project_dependencies(pyproject_file)
 
