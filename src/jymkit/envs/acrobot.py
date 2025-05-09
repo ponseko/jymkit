@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Bool, Float, PRNGKeyArray
 
-import jymkit as jym
+from jymkit._environment import Environment, TimeStep
+from jymkit._spaces import Box, Discrete
 
 
 class EnvState(eqx.Module):
@@ -17,7 +18,7 @@ class EnvState(eqx.Module):
     time: int
 
 
-class Acrobot(jym.Environment):
+class Acrobot(Environment):
     """
     Acrobot environment from OpenAI Gym.
     """
@@ -41,7 +42,7 @@ class Acrobot(jym.Environment):
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: int
-    ) -> Tuple[jym.TimeStep, EnvState]:
+    ) -> Tuple[TimeStep, EnvState]:
         torque = self.avail_torque[action]
 
         # Add noise to the force action
@@ -74,7 +75,7 @@ class Acrobot(jym.Environment):
             time=state.time + 1,
         )
 
-        timestep = jym.TimeStep(
+        timestep = TimeStep(
             self.get_observation(state),
             self.get_reward(state),
             self.get_terminated(state),
@@ -125,9 +126,9 @@ class Acrobot(jym.Environment):
         return state.time >= self.max_steps_in_episode
 
     @property
-    def observation_space(self) -> jym.Space:
+    def observation_space(self) -> Box:
         high = jnp.array([1.0, 1.0, 1.0, 1.0, self.max_vel_1, self.max_vel_2])
-        return jym.Box(
+        return Box(
             low=-high,
             high=high,
             shape=(6,),
@@ -135,8 +136,8 @@ class Acrobot(jym.Environment):
         )
 
     @property
-    def action_space(self) -> jym.Space:
-        return jym.Discrete(len(self.avail_torque))
+    def action_space(self) -> Discrete:
+        return Discrete(len(self.avail_torque))
 
     # Environment functions
     def _dsdt(self, s_augmented: Array, _: float) -> Array:

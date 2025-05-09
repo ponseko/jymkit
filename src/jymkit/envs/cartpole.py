@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, PRNGKeyArray
 
-import jymkit as jym
+from jymkit._environment import Environment, TimeStep
+from jymkit._spaces import Box, Discrete
 
 
 class EnvState(eqx.Module):
@@ -17,7 +18,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
-class CartPole(jym.Environment):
+class CartPole(Environment):
     """
     CartPole environment from OpenAI Gym.
     """
@@ -44,7 +45,7 @@ class CartPole(jym.Environment):
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: int
-    ) -> Tuple[jym.TimeStep, EnvState]:
+    ) -> Tuple[TimeStep, EnvState]:
         force = self.force_mag * action - self.force_mag * (1 - action)
         costheta = jnp.cos(state.theta)
         sintheta = jnp.sin(state.theta)
@@ -70,7 +71,7 @@ class CartPole(jym.Environment):
             time=state.time + 1,
         )
 
-        timestep = jym.TimeStep(
+        timestep = TimeStep(
             self.get_observation(state),
             self.get_reward(),
             self.get_terminated(state),
@@ -109,7 +110,7 @@ class CartPole(jym.Environment):
         return state.time >= self.max_episode_steps
 
     @property
-    def observation_space(self) -> jym.Space:
+    def observation_space(self) -> Box:
         high = jnp.array(
             [
                 self.x_threshold * 2,
@@ -118,7 +119,7 @@ class CartPole(jym.Environment):
                 np.finfo(jnp.float32).max,
             ]
         )
-        return jym.Box(
+        return Box(
             low=-high,
             high=high,
             shape=(4,),
@@ -126,5 +127,5 @@ class CartPole(jym.Environment):
         )
 
     @property
-    def action_space(self) -> jym.Space:
-        return jym.Discrete(2)
+    def action_space(self) -> Discrete:
+        return Discrete(2)

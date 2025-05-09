@@ -1,6 +1,7 @@
 from importlib.metadata import version
 
 __version__ = version("jymkit")
+from jymkit import _make
 
 from ._environment import Environment as Environment, TimeStep as TimeStep
 from ._spaces import (
@@ -18,3 +19,5 @@ from ._wrappers import (
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,
 )
+
+make = _make.make

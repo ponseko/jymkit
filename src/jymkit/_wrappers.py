@@ -5,11 +5,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
-import jymkit as jym
-
-from ._environment import Environment, TEnvState, TObservation
+from ._environment import (
+    AgentObservation,
+    Environment,
+    TEnvState,
+    TimeStep,
+    TObservation,
+)
+from ._spaces import Box, Discrete, Space
 
 
 def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
@@ -20,7 +25,7 @@ def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
     while isinstance(current_env, Wrapper):
         if isinstance(current_env, wrapper_class):
             return True
-        current_env = current_env.env
+        current_env = current_env._env
     return False
 
 
@@ -31,53 +36,52 @@ def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment
     current_env = wrapped_env
     while isinstance(current_env, Wrapper):
         if isinstance(current_env, wrapper_class):
-            return current_env.env
-        current_env = current_env.env
+            return current_env._env
+        current_env = current_env._env
     return wrapped_env
 
 
 class Wrapper(Environment):
     """Base class for all wrappers."""
 
-    env: Environment
+    _env: Environment
 
     def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        return self.env.reset_env(key)
+        return self._env.reset_env(key)
 
     def step_env(
         self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
-    ) -> Tuple[jym.TimeStep, TEnvState]:
-        return self.env.step_env(key, state, action)
+    ) -> Tuple[TimeStep, TEnvState]:
+        return self._env.step_env(key, state, action)
 
     @property
-    def action_space(self) -> jym.Space | PyTree[jym.Space]:
-        return self.env.action_space
+    def action_space(self) -> Space | PyTree[Space]:
+        return self._env.action_space
 
     @property
-    def observation_space(self) -> jym.Space | PyTree[jym.Space]:
-        return self.env.observation_space
-
-    @property
-    def agent_structure(self) -> PyTreeDef:
-        return self.env.agent_structure
+    def observation_space(self) -> Space | PyTree[Space]:
+        return self._env.observation_space
 
     @property
     def multi_agent(self) -> bool:
-        return self.env.multi_agent
+        # if multi_agent is not set, return it as False
+        if not hasattr(self._env, "multi_agent"):
+            return False
+        return self._env.multi_agent
 
     def __getattr__(self, name):
-        return getattr(self.env, name)
+        return getattr(self._env, name)
 
 
 class VecEnvWrapper(Wrapper):
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, Any]:  # pyright: ignore[reportInvalidTypeVarUse]
-        obs, state = jax.vmap(self.env.reset)(key)
+        obs, state = jax.vmap(self._env.reset)(key)
         return obs, state
 
     def step(
         self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
-    ) -> Tuple[jym.TimeStep, TEnvState]:
-        timestep, state = jax.vmap(self.env.step)(key, state, action)
+    ) -> Tuple[TimeStep, TEnvState]:
+        timestep, state = jax.vmap(self._env.step)(key, state, action)
         return timestep, state
 
 
@@ -95,15 +99,15 @@ class LogWrapper(Wrapper):
     Log the episode returns and lengths.
 
     **Arguments:**
-    - `env`: Environment to wrap.
+    - `_env`: Environment to wrap.
     """
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, LogEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        obs, env_state = self.env.reset(key)
-        structure = self.env.agent_structure
+        obs, env_state = self._env.reset(key)
+        structure = self._env.agent_structure
         initial_vals = jnp.zeros(structure.num_leaves).squeeze()
         initial_timestep = 0
-        if is_wrapped(self.env, VecEnvWrapper):
+        if is_wrapped(self._env, VecEnvWrapper):
             vec_count = jax.tree.leaves(obs)[0].shape[0]
             initial_vals = jnp.zeros((vec_count, structure.num_leaves)).squeeze()
             initial_timestep = jnp.zeros((vec_count,)).squeeze()
@@ -122,8 +126,8 @@ class LogWrapper(Wrapper):
 
     def step(
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
-    ) -> Tuple[jym.TimeStep, LogEnvState]:
-        timestep, env_state = self.env.step(key, state.env_state, action)
+    ) -> Tuple[TimeStep, LogEnvState]:
+        timestep, env_state = self._env.step(key, state.env_state, action)
         done = jnp.logical_or(timestep.terminated, timestep.truncated).any()
         new_episode_return = jax.tree.map(
             lambda _r, r: (_r + r), state.episode_returns, timestep.reward
@@ -164,7 +168,7 @@ class NormalizeVecObsState(eqx.Module):
 
 class NormalizeVecObsWrapper(Wrapper):
     def __check_init__(self):
-        if not is_wrapped(self.env, VecEnvWrapper):
+        if not is_wrapped(self._env, VecEnvWrapper):
             raise ValueError(
                 "NormalizeVecReward wrapper must wrapped around a `VecEnvWrapper`.\n"
                 " Please wrap the environment with `VecEnvWrapper` first."
@@ -175,16 +179,16 @@ class NormalizeVecObsWrapper(Wrapper):
         Ensures we do not normalize the action masks if they are present.
         """
         observations = [tree]
-        if self.env.multi_agent:
+        if self._env.multi_agent:
             observations, _ = eqx.tree_flatten_one_level(tree)
-        if all(not isinstance(o, jym.AgentObservation) for o in observations):
+        if all(not isinstance(o, AgentObservation) for o in observations):
             filter_spec = True
-        elif all(isinstance(o, jym.AgentObservation) for o in observations):
-            filter_spec = jym.AgentObservation(observation=True, action_mask=False)
+        elif all(isinstance(o, AgentObservation) for o in observations):
+            filter_spec = AgentObservation(observation=True, action_mask=False)
             filter_spec = jax.tree.map(
                 lambda _: filter_spec,
                 tree,
-                is_leaf=lambda x: isinstance(x, jym.AgentObservation),
+                is_leaf=lambda x: isinstance(x, AgentObservation),
             )
         else:
             raise ValueError(
@@ -227,7 +231,7 @@ class NormalizeVecObsWrapper(Wrapper):
         return normalized_obs, new_state
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecObsState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        obs, env_state = self.env.reset(key)
+        obs, env_state = self._env.reset(key)
         obs, masks = self.partition_obs_and_masks(obs)
         state = NormalizeVecObsState(
             env_state=env_state,
@@ -244,8 +248,8 @@ class NormalizeVecObsWrapper(Wrapper):
         key: PRNGKeyArray,
         state: NormalizeVecObsState,
         action: PyTree[int | float | Array],
-    ) -> Tuple[jym.TimeStep, NormalizeVecObsState]:
-        timestep, env_state = self.env.step(key, state.env_state, action)
+    ) -> Tuple[TimeStep, NormalizeVecObsState]:
+        timestep, env_state = self._env.step(key, state.env_state, action)
         obs = timestep.observation
         obs, masks = self.partition_obs_and_masks(obs)
         state = replace(state, env_state=env_state)
@@ -266,16 +270,16 @@ class NormalizeVecRewardWrapper(Wrapper):
     gamma: float = 0.99
 
     def __check_init__(self):
-        if not is_wrapped(self.env, VecEnvWrapper):
+        if not is_wrapped(self._env, VecEnvWrapper):
             raise ValueError(
                 "NormalizeVecReward wrapper must wrapped around a `VecEnvWrapper`.\n"
                 " Please wrap the environment with `VecEnvWrapper` first."
             )
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecRewState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        obs, env_state = self.env.reset(key)
+        obs, env_state = self._env.reset(key)
         batch_count = jax.tree.leaves(obs)[0].shape[0]
-        num_agents = self.env.agent_structure.num_leaves
+        num_agents = self._env.agent_structure.num_leaves
         state = NormalizeVecRewState(
             env_state=env_state,
             mean=jnp.zeros(num_agents).squeeze(),
@@ -291,8 +295,8 @@ class NormalizeVecRewardWrapper(Wrapper):
         key: PRNGKeyArray,
         state: NormalizeVecRewState,
         action: PyTree[int | float | Array],
-    ) -> Tuple[jym.TimeStep, NormalizeVecRewState]:
-        (obs, reward, terminated, truncated, info), env_state = self.env.step(
+    ) -> Tuple[TimeStep, NormalizeVecRewState]:
+        (obs, reward, terminated, truncated, info), env_state = self._env.step(
             key, state.env_state, action
         )
 
@@ -324,56 +328,70 @@ class NormalizeVecRewardWrapper(Wrapper):
             return_val=return_val,
         )
 
-        if np.any(self.env.multi_agent):  # type: ignore[reportGeneralTypeIssues]
+        if np.any(self._env.multi_agent):  # type: ignore[reportGeneralTypeIssues]
             reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
             reward = jax.tree.unflatten(reward_structure, reward)
         else:
             reward = reward / jnp.sqrt(state.var + 1e-8)
 
-        return jym.TimeStep(obs, reward, terminated, truncated, info), state
+        return TimeStep(obs, reward, terminated, truncated, info), state
 
 
-# class GymnaxWrapper(Wrapper):
-#     """
-#     Wrapper for Gymnax environments.
-#     Since Gymnax does not expose truncated information, we can optionally
-#     retrieve it by taking an additional step in the environment with altered timestep
-#     information. Since this introduces additional overhead, it is disabled by default.
+class GymnaxWrapper(Wrapper):
+    """
+    Wrapper for Gymnax environments.
+    Since Gymnax does not expose truncated information, we can optionally
+    retrieve it by taking an additional step in the environment with altered timestep
+    information. Since this introduces additional overhead, it is disabled by default.
 
-#     **Arguments:**
-#     - `env`: Gymnax environment.
-#     - `retrieve_truncated_info`: If True, retrieves truncated information by taking an additional step.
-#     """
+    **Arguments:**
+    - `_env`: Gymnax environment.
+    """
 
-#     env: Any
-#     retrieve_truncated_info: bool = False
+    _env: Any
 
-#     def step(
-#         self, key: PRNGKeyArray, state: Any, action: int | float
-#     ) -> Tuple[jym.TimeStep, "GymnaxWrapper"]:
-#         obs, env_state, done, reward, info = self.env.step(key, state, action)
-#         terminated, truncated = done, False
-#         if self.retrieve_truncated_info:
-#             # Retrieve truncated info by taking an additional step
-#             try:
-#                 back_in_time_env_state = replace(state, time=0)
-#                 _, _, done_alt, _, _ = self.env.step(
-#                     key, back_in_time_env_state, action
-#                 )
-#                 # terminated if done is True and done_alt is False
-#                 terminated = jnp.logical_and(done, ~done_alt)
-#                 truncated = jnp.logical_and(done, ~terminated)
-#             except Exception as e:
-#                 print(
-#                     "retrieve_truncated_info is enabled, but retrieving truncated info failed."
-#                 )
-#                 raise e
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        params = self._env.default_params
+        obs, env_state = self._env.reset(key, params)
+        return obs, env_state
 
-#         timestep = jym.TimeStep(
-#             observation=obs,
-#             reward=reward,
-#             terminated=terminated,
-#             truncated=truncated,
-#             info=info,
-#         )
-#         return timestep, env_state
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: int | float
+    ) -> Tuple[TimeStep, TEnvState]:
+        obs, env_state, reward, done, info = self._env.step(key, state, action)
+        terminated, truncated = done, False
+        timestep = TimeStep(
+            observation=obs,
+            reward=reward,
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
+        )
+        return timestep, env_state
+
+    def _convert_gymnax_space_to_jymkit_space(self, space: Any) -> Space:
+        # Convert Gymnax space to jymkit space
+        if hasattr(space, "n"):
+            return Discrete(space.n)
+        elif hasattr(space, "low") and hasattr(space, "high"):
+            return Box(
+                low=space.low,
+                high=space.high,
+                shape=space.shape,
+            )
+        else:
+            raise ValueError(
+                "Gymnax action space is not supported. Please use a discrete or box action space."
+            )
+
+    @property
+    def observation_space(self) -> Space:
+        params = self._env.default_params
+        observation_space = self._env.observation_space(params)
+        return self._convert_gymnax_space_to_jymkit_space(observation_space)
+
+    @property
+    def action_space(self) -> Space:
+        params = self._env.default_params
+        action_space = self._env.action_space(params)
+        return self._convert_gymnax_space_to_jymkit_space(action_space)

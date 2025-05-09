@@ -125,6 +125,10 @@ class PPO(RLAlgorithm):
 
         make_ppo_state = PPOState.make
         if self.multi_agent_env:
+            print(
+                "Multi-agent environment detected.",
+                f"Generating {env.agent_structure.num_leaves} agents.",
+            )
             make_ppo_state = transform_multi_agent(
                 PPOState.make,
                 shared_argnames=[
@@ -237,7 +241,12 @@ class PPO(RLAlgorithm):
             )
 
             value = jax.vmap(self.get_value)(last_obs)
-            next_value = jax.vmap(self.get_value)(info[ORIGINAL_OBSERVATION_KEY])
+            try:  # Try to bootstrap correctly
+                next_value = jax.vmap(self.get_value)(info[ORIGINAL_OBSERVATION_KEY])
+            except KeyError:
+                next_value = jax.vmap(self.get_value)(obsv)
+                done = jnp.logical_or(terminated, truncated)
+                next_value = jax.tree.map(lambda nv, d: nv * (1 - d), next_value, done)
 
             # TODO: variable gamma from env
             # gamma = self.gamma
@@ -507,7 +516,7 @@ class PPO(RLAlgorithm):
 
         if not is_wrapped(env, VecEnvWrapper):
             print("Wrapping environment in VecEnvWrapper")
-            env = VecEnvWrapper(env=env)
+            env = VecEnvWrapper(env)
 
         if not self.is_initialized:
             self = self.init(key, env)
