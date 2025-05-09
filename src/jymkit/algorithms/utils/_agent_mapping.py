@@ -34,7 +34,7 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
     return jax.tree.unflatten(agent_structure, keys)
 
 
-def map_each_agent(
+def transform_multi_agent(
     func: Optional[Callable] = None,
     shared_argnames: list[str] = [],
     identity: bool = False,
