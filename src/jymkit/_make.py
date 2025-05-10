@@ -16,9 +16,9 @@ GYMNAX_ENVS = [
     "Pendulum-v1",
     "MountainCar-v0",
     "MountainCarContinuous-v0",
-    # "Asterix-MinAtar",
+    "Asterix-MinAtar",  # Gymnax no longer compatible with newer versions of Jax for this env
     "Breakout-MinAtar",
-    # "Freeway-MinAtar",
+    "Freeway-MinAtar",  # Gymnax no longer compatible with newer versions of Jax for this env
     "SpaceInvaders-MinAtar",
     "DeepSea-bsuite",
 ]

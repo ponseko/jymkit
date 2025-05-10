@@ -13,3 +13,6 @@ wheels/
 **/.ipynb_checkpoints
 
 .dev/*
+dev*.py
+dev*.ipynb
+*.eqx

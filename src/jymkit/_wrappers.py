@@ -14,7 +14,7 @@ from ._environment import (
     TimeStep,
     TObservation,
 )
-from ._spaces import Box, Discrete, Space
+from ._spaces import Space
 
 
 def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
@@ -369,29 +369,12 @@ class GymnaxWrapper(Wrapper):
         )
         return timestep, env_state
 
-    def _convert_gymnax_space_to_jymkit_space(self, space: Any) -> Space:
-        # Convert Gymnax space to jymkit space
-        if hasattr(space, "n"):
-            return Discrete(space.n)
-        elif hasattr(space, "low") and hasattr(space, "high"):
-            return Box(
-                low=space.low,
-                high=space.high,
-                shape=space.shape,
-            )
-        else:
-            raise ValueError(
-                "Gymnax action space is not supported. Please use a discrete or box action space."
-            )
-
     @property
     def observation_space(self) -> Space:
         params = self._env.default_params
-        observation_space = self._env.observation_space(params)
-        return self._convert_gymnax_space_to_jymkit_space(observation_space)
+        return self._env.observation_space(params)
 
     @property
     def action_space(self) -> Space:
         params = self._env.default_params
-        action_space = self._env.action_space(params)
-        return self._convert_gymnax_space_to_jymkit_space(action_space)
+        return self._env.action_space(params)

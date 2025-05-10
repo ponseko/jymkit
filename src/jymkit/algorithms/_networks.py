@@ -1,29 +1,38 @@
-from typing import List
+from typing import List, Literal
 
 import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import PRNGKeyArray, PyTree, PyTreeDef
+import optax
+from jaxtyping import PRNGKeyArray, PyTree
 
 import jymkit as jym
 
 
-def create_ffn_networks(key: PRNGKeyArray, obs_space, hidden_dims):
+def _get_flat_input_dim(obs_space: jym.Space) -> int:
+    """
+    Get the flattened input dimension of the observation space.
+    """
+    input_shape = jax.tree.map(
+        lambda x: np.array(x.shape).prod(),
+        obs_space,
+    )
+    input_dim = int(np.sum(np.array(jax.tree.leaves(input_shape))))
+    return input_dim
+
+
+def create_ffn_networks(
+    key: PRNGKeyArray, obs_space: jym.Space, hidden_dims: List[int]
+):
     """
     Create a feedforward neural network with the given hidden dimensions and output space.
     """
     layers = []
     keys = jax.random.split(key, len(hidden_dims))
 
-    # Flatten the input space
-    input_shape = jax.tree.map(
-        lambda x: np.array(x.shape).prod(),
-        obs_space,
-        # is_leaf=lambda x: isinstance(x, jym.Space),
-    )
-    input_dim = int(np.sum(np.array(input_shape)))
+    input_dim = _get_flat_input_dim(obs_space)
     for i, hidden_dim in enumerate(hidden_dims):
         layers.append(
             eqx.nn.Linear(in_features=input_dim, out_features=hidden_dim, key=keys[i])
@@ -33,7 +42,14 @@ def create_ffn_networks(key: PRNGKeyArray, obs_space, hidden_dims):
     return layers
 
 
-def create_bronet_networks(key: PRNGKeyArray, obs_space, hidden_dims):
+def create_bronet_networks(
+    key: PRNGKeyArray, obs_space: jym.Space, hidden_dims: List[int]
+):
+    """
+    Create a BroNet neural network with the given hidden dimensions and output space.
+    https://arxiv.org/html/2405.16158v1
+    """
+
     class BroNetBlock(eqx.Module):
         layers: list
         in_features: int = eqx.field(static=True)
@@ -60,13 +76,7 @@ def create_bronet_networks(key: PRNGKeyArray, obs_space, hidden_dims):
 
     keys = jax.random.split(key, len(hidden_dims))
 
-    # Flatten the input space
-    input_shape = jax.tree.map(
-        lambda x: np.array(x.shape).prod(),
-        obs_space,
-        # is_leaf=lambda x: isinstance(x, jym.Space),
-    )
-    input_dim = int(np.sum(np.array(input_shape)))
+    input_dim = _get_flat_input_dim(obs_space)
     layers = [
         eqx.nn.Linear(in_features=input_dim, out_features=hidden_dims[0], key=keys[0]),
         eqx.nn.LayerNorm(hidden_dims[0]),
@@ -77,77 +87,51 @@ def create_bronet_networks(key: PRNGKeyArray, obs_space, hidden_dims):
     return layers
 
 
-class ActorNetwork(eqx.Module):
-    """
-    A Basic class for RL agents that can be used to create actor and critic networks
-    with different architectures.
-    This agent will flatten all observations and treat it as a single vector.
-    """
-
+class ActionLinear(eqx.Module):
     layers: list
-    output_structure: PyTreeDef = eqx.field(static=True)
+    space_type: Literal["Discrete", "MultiDiscrete", "Continuous"] = eqx.field(
+        static=True
+    )
 
-    def __init__(
-        self,
-        key: PRNGKeyArray,
-        obs_space: PyTree[jym.Space],
-        hidden_dims: List[int],
-        output_space: int | PyTree[jym.Space],
-        use_bronet: bool = False,
-    ):
-        if use_bronet:
-            self.layers = create_bronet_networks(key, obs_space, hidden_dims)
+    def __init__(self, key: PRNGKeyArray, space: jym.Space, in_features: int):
+        assert len(space.shape) <= 1, (
+            f"Currently, only 0D or 1D spaces are supported. Got {space.shape}. ",
+            "For higher dimensions, use a composite of spaces or a custom network.",
+        )
+
+        # Determine the type of space and get the number and dimension of outputs
+        if hasattr(space, "nvec"):
+            self.space_type = "MultiDiscrete"
+            num_outputs: list = np.array(space.nvec).tolist()  # pyright: ignore[reportAttributeAccessIssue]
+        elif hasattr(space, "n"):
+            self.space_type = "Discrete"
+            num_outputs = [space.n]  # pyright: ignore[reportAttributeAccessIssue]
+        else:  # Box (Continuous)
+            self.space_type = "Continuous"
+            assert hasattr(space, "low") and hasattr(space, "high")
+            num_outputs = (np.ones(space.shape, dtype=int) * 2).tolist()  # mean, std
+        keys = optax.tree_utils.tree_split_key_like(key, num_outputs)
+        self.layers = jax.tree.map(
+            lambda o, k: eqx.nn.Linear(in_features, o, key=k), num_outputs, keys
+        )
+        if len(self.layers) == 1:
+            self.layers = self.layers[0]
+
+    def __call__(self, x, action_mask):
+        if isinstance(self.layers, eqx.nn.Linear):
+            logits = self.layers(x)  # single-dimensional output
         else:
-            self.layers = create_ffn_networks(key, obs_space, hidden_dims)
+            try:  # If actions are homogeneous, we can stack the outputs and use vmap
+                stacked_layers = jax.tree.map(lambda *v: jnp.stack(v), *self.layers)
+                logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
+            except ValueError:  # Else just map
+                logits = jax.tree.map(lambda layer: layer(x), self.layers[-1])
 
-        self.output_structure = jax.tree.structure(output_space)
-        # TODO: Continuous action space
-        num_outputs = jax.tree.map(
-            lambda o: np.array(o.high) - np.array(o.low),
-            output_space,
-            # is_leaf=lambda x: isinstance(x, jym.Space),
-        )
-        num_outputs = jax.tree.map(
-            lambda o: o.tolist() if eqx.is_array(o) else o,
-            num_outputs,
-        )
-        output_nets = jax.tree.map(
-            lambda x: eqx.nn.Linear(self.layers[-1].out_features, x, key=key),
-            num_outputs,
-        )
-        self.layers.append(output_nets)
-
-    def __call__(self, x):
-        action_mask = None
-        if isinstance(x, jym.AgentObservation):
-            action_mask = x.action_mask
-            x = x.observation
-
-        x = jax.tree.map(lambda x: jnp.reshape(x, -1), x)  # flatten the input
-        if not isinstance(x, jnp.ndarray):
-            x = jnp.concatenate(x)
-        for layer in self.layers[:-1]:
-            x = jax.nn.relu(layer(x))
-
-        if not isinstance(self.layers[-1], list):  # single-dimensional output
-            logits = self.layers[-1](x)
-        else:  # multi-dimensional output
-            try:
-                # TODO: maybe move the map.stack to the init
-                # If homogeneous output, we can stack the outputs and use vmap
-                final_layers = jax.tree.map(lambda *v: jnp.stack(v), *self.layers[-1])
-                outputs = jax.vmap(lambda layer: layer(x))(final_layers)
-                if self.output_structure.num_leaves == 1:
-                    outputs = [outputs]
-                else:
-                    outputs = outputs.tolist()  # TODO: test
-            except ValueError:
-                outputs = jax.tree.map(lambda x: x(x), self.layers[-1])
-
-            logits = jax.tree.unflatten(self.output_structure, outputs)
         if action_mask is not None:
             logits = self._apply_action_mask(logits, action_mask)
 
+        if self.space_type == "Continuous":
+            return distrax.Normal(loc=logits[0], scale=jax.nn.softplus(logits[1]))
         return distrax.Categorical(logits=logits)
 
     def _apply_action_mask(self, logits, action_mask):
@@ -161,6 +145,64 @@ class ActorNetwork(eqx.Module):
             action_mask,
         )
         return masked_logits
+
+
+class ActorNetwork(eqx.Module):
+    """
+    A Basic class for RL agents that can be used to create actor and critic networks
+    with different architectures.
+    This agent will flatten all observations and treat it as a single vector.
+    """
+
+    layers: list
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        obs_space: PyTree[jym.Space],
+        hidden_dims: List[int],
+        output_space: PyTree[jym.Space],
+        use_bronet: bool = False,
+    ):
+        if use_bronet:
+            self.layers = create_bronet_networks(key, obs_space, hidden_dims)
+        else:
+            self.layers = create_ffn_networks(key, obs_space, hidden_dims)
+
+        keys = optax.tree_utils.tree_split_key_like(key, output_space)
+        output_nets = jax.tree.map(
+            lambda o, k: ActionLinear(k, o, self.layers[-1].out_features),
+            output_space,
+            keys,
+        )
+        self.layers.append(output_nets)
+
+    def __call__(self, x):
+        action_mask = None
+        if isinstance(x, jym.AgentObservation):
+            action_mask = x.action_mask
+            x = x.observation
+
+        x = jax.tree.map(lambda x: jnp.reshape(x, -1), x)  # flatten the input
+        if not isinstance(x, jnp.ndarray):
+            x = jnp.concatenate(x)
+
+        for layer in self.layers[:-1]:
+            x = jax.nn.relu(layer(x))
+
+        if action_mask is None:  # Create dummy PyTree for action mask
+            action_mask = jax.tree.map(
+                lambda _: None,
+                self.layers[-1],
+                is_leaf=lambda x: isinstance(x, ActionLinear),
+            )
+        action_dists = jax.tree.map(
+            lambda action_layer, mask: action_layer(x, mask),
+            self.layers[-1],
+            action_mask,
+            is_leaf=lambda x: isinstance(x, ActionLinear),
+        )
+        return action_dists
 
 
 class CriticNetwork(eqx.Module):

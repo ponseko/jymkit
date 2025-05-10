@@ -1,6 +1,6 @@
 [project]
 name = "jymkit"
-version = "0.0.5"
+version = "0.0.6"
 description = "A lightweight utility library for reinforcement learning projects in JAX and Equinox."
 readme = "README.md"
 authors = [
@@ -38,7 +38,7 @@ dev = [
     "pytest>=8.3.5",
     "ruff>=0.11.0",
     "pre-commit>=4.2.0",
-    "tqdm>=4.67.1"
+    "tqdm>=4.67.1",
 ]
 
 [tool.ruff.format]
@@ -46,7 +46,7 @@ docstring-code-format = true
 
 [tool.ruff.lint]
 extend-select = ["I"]
-ignore = ["F722"] # jaxtyping
+ignore = ["F722", "E731"] 
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -54,5 +54,5 @@ combine-as-imports = true
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-include = ["src"] # "tests"
+include = ["src", "tests"]
 exclude = ["src/jymkit/cli/*"]

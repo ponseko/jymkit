@@ -79,7 +79,7 @@ class PPO(RLAlgorithm):
     num_envs: int = eqx.field(static=True, default=6)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
-    update_epochs: int = eqx.field(static=True, default=4)  # K epochs
+    num_epochs: int = eqx.field(static=True, default=4)  # K epochs
     actor_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
     critic_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
     use_bronet: bool = eqx.field(static=True, default=False)
@@ -183,7 +183,7 @@ class PPO(RLAlgorithm):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         assert self.is_initialized, (
-            "Agent not initialized. Call init() or train() first."
+            "Agent state is not initialized. Create one via e.g. train() or init()."
         )
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
@@ -419,78 +419,6 @@ class PPO(RLAlgorithm):
         updated_self = replace(self, state=updated_state)
         return updated_self
 
-    def _update_state_over_minibatch(
-        self, current_state: PPOState, minibatch: Transition
-    ):
-        @eqx.filter_grad
-        def __ppo_los_fn(
-            params: Tuple[ActorNetwork, CriticNetwork],
-            train_batch: Transition,
-        ):
-            assert train_batch.advantage_ is not None
-            assert train_batch.return_ is not None
-
-            actor, critic = params
-            action_dist = jax.vmap(actor)(train_batch.observation)
-            log_prob = action_dist.log_prob(train_batch.action)
-            entropy = action_dist.entropy().mean()
-            value = jax.vmap(critic)(train_batch.observation)
-
-            init_log_prob = train_batch.log_prob
-            if log_prob.ndim == 2:  # MultiDiscrete Action Space
-                log_prob = jnp.sum(log_prob, axis=-1)
-                init_log_prob = jnp.sum(init_log_prob, axis=-1)
-
-            # actor loss
-            ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage_ - train_batch.advantage_.mean()) / (
-                train_batch.advantage_.std() + 1e-8
-            )
-            actor_loss1 = _advantages * ratio
-
-            actor_loss2 = (
-                jnp.clip(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
-                * _advantages
-            )
-            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-            # critic loss
-            value_pred_clipped = train_batch.value + (
-                jnp.clip(
-                    value - train_batch.value,
-                    -self.clip_coef_vf,
-                    self.clip_coef_vf,
-                )
-            )
-            value_losses = jnp.square(value - train_batch.return_)
-            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
-            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-            ent_coef = self.ent_coef
-            if not isinstance(ent_coef, float):
-                # ent_coef is a schedule # TODO
-                ent_coef = ent_coef(  # pyright: ignore
-                    current_state.optimizer_state[1][1].count  # type: ignore
-                )
-
-            # Total loss
-            total_loss = actor_loss + self.vf_coef * value_loss - ent_coef * entropy
-            return total_loss  # , (actor_loss, value_loss, entropy)
-
-        actor, critic = current_state.actor, current_state.critic
-        grads = __ppo_los_fn((actor, critic), minibatch)
-        updates, optimizer_state = self.optimizer.update(
-            grads, current_state.optimizer_state
-        )
-        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
-        updated_state = PPOState(
-            actor=new_actor,
-            critic=new_critic,
-            optimizer_state=optimizer_state,
-        )
-
-        return updated_state, None
-
     def train(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         @scan_callback(
             callback_fn=self.log_function,
@@ -507,7 +435,7 @@ class PPO(RLAlgorithm):
             )
 
             # Update for k epochs # NOTE: we create "new" minibatches for each epoch
-            for key in list(jax.random.split(rng, self.update_epochs)):
+            for key in list(jax.random.split(rng, self.num_epochs)):
                 self = self._update_epoch(key, trajectory_batch)
 
             metric = trajectory_batch.info
