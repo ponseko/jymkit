@@ -108,7 +108,7 @@ class PPO(RLAlgorithm):
     def init(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
         observation_space = env.observation_space
         action_space = env.action_space
-        hyperparams["multi_agent_env"] = env.multi_agent
+        hyperparams["multi_agent_env"] = getattr(env, "_multi_agent", False)
         self = replace(self, **hyperparams)
 
         env_agent_structure = env.agent_structure

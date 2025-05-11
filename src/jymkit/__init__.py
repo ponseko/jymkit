@@ -12,6 +12,7 @@ from ._spaces import (
 )
 from ._types import AgentObservation as AgentObservation
 from ._wrappers import (
+    GymnaxWrapper as GymnaxWrapper,
     LogWrapper as LogWrapper,
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,

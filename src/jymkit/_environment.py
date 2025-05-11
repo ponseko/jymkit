@@ -17,10 +17,11 @@ TEnvState = TypeVar("TEnvState")
 
 class Environment(eqx.Module, Generic[TEnvState]):
     """
-    Abstract environment template for reinforcement learning environments in JAX.
+    Base environment class for JAX-compatible environments. Create your environment by subclassing this.
 
-    Provides a standardized interface for RL environments with JAX compatibility.
-    Subclasses must implement the abstract methods to define specific environment behaviors.
+    `step` and `reset` should typically not be overridden, as they merely handle the
+    auto-reset logic. Instead, the environment-specific logic should be implemented in the
+    `step_env` and `reset_env` methods.
 
     **Properties:**
 
@@ -127,11 +128,11 @@ class Environment(eqx.Module, Generic[TEnvState]):
         pass
 
     @property
-    def multi_agent(self) -> bool:
+    def _multi_agent(self) -> bool:
         """
         Indicates if the environment supports multiple agents.
         """
-        return False
+        return getattr(self, "multi_agent", False)
 
     @property
     def agent_structure(self) -> PyTreeDef:
@@ -139,7 +140,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         Returns the structure of the agent space.
         This is useful for environments with multiple agents.
         """
-        if not self.multi_agent:
+        if not self._multi_agent:
             return jax.tree.structure(0)
         _, agent_structure = eqx.tree_flatten_one_level(self.action_space)
         return agent_structure

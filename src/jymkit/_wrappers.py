@@ -62,13 +62,6 @@ class Wrapper(Environment):
     def observation_space(self) -> Space | PyTree[Space]:
         return self._env.observation_space
 
-    @property
-    def multi_agent(self) -> bool:
-        # if multi_agent is not set, return it as False
-        if not hasattr(self._env, "multi_agent"):
-            return False
-        return self._env.multi_agent
-
     def __getattr__(self, name):
         return getattr(self._env, name)
 
@@ -179,7 +172,7 @@ class NormalizeVecObsWrapper(Wrapper):
         Ensures we do not normalize the action masks if they are present.
         """
         observations = [tree]
-        if self._env.multi_agent:
+        if self._env._multi_agent:
             observations, _ = eqx.tree_flatten_one_level(tree)
         if all(not isinstance(o, AgentObservation) for o in observations):
             filter_spec = True
