@@ -10,20 +10,14 @@ from jymkit import Environment
 class RLAlgorithm(eqx.Module):
     state: eqx.AbstractVar[PyTree[eqx.Module]]
 
-    def save(self, file_path: str):
-        # TODO
-        raise NotImplementedError()
+    def save_state(self, file_path: str):
         with open(file_path, "wb") as f:
             eqx.tree_serialise_leaves(f, self.state)
 
-    @classmethod
-    def load(cls, file_path: str, env: Environment) -> "RLAlgorithm":
-        # TODO
-        raise NotImplementedError()
-        agent = cls()  # pyright: ignore[reportCallIssue]
+    def load_state(self, file_path: str) -> "RLAlgorithm":
         with open(file_path, "rb") as f:
-            state = eqx.tree_deserialise_leaves(f, agent.state)
-        agent = replace(agent, state=state)
+            state = eqx.tree_deserialise_leaves(f, self.state)
+        agent = replace(self, state=state)
         return agent
 
     @abstractmethod
