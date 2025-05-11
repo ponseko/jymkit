@@ -12,6 +12,8 @@ JYMKIT_ENVS = [
     "Acrobot",
 ]
 
+# Gymnax environments, requires gymnax package to be installed
+# Included for convenience, but not all environments are compatible with the latest version of Jax
 GYMNAX_ENVS = [
     "Pendulum-v1",
     "MountainCar-v0",
@@ -21,6 +23,21 @@ GYMNAX_ENVS = [
     "Freeway-MinAtar",  # Gymnax no longer compatible with newer versions of Jax for this env
     "SpaceInvaders-MinAtar",
     "DeepSea-bsuite",
+    # Untested envs:
+    "Catch-bsuite",
+    "MemoryChain-bsuite",
+    "UmbrellaChain-bsuite",
+    "DiscountingChain-bsuite",
+    "MNISTBandit-bsuite",
+    "SimpleBandit-bsuite",
+    "FourRooms-misc",
+    "MetaMaze-misc",
+    "PointRobot-misc",
+    "BernoulliBandit-misc",
+    "GaussianBandit-misc",
+    "Reacher-misc",
+    "Swimmer-misc",
+    "Pong-misc",
 ]
 
 ALL_ENVS = JYMKIT_ENVS + GYMNAX_ENVS
@@ -56,8 +73,10 @@ def make(
             import gymnax
         except ImportError:
             raise ImportError(
-                "Gymnax is not installed. Please install it with `pip install gymnax`."
+                "Using an environment from Gymnax, but Gymnax is not installed."
+                "Please install it with `pip install gymnax`."
             )
+        print(f"Using an environment from Gymnax via gymnax.make({env_name}).")
         env, _ = gymnax.make(env_name, **env_kwargs)
         if wrapper is None:
             print(
@@ -67,10 +86,20 @@ def make(
             env = GymnaxWrapper(env)
     else:
         matches = difflib.get_close_matches(env_name, ALL_ENVS, n=1, cutoff=0.6)
+        envs_per_line = 3
+        max_length = max(len(env) for env in ALL_ENVS)  # Longest env name
         suggestion = (
             f" Did you mean {matches[0]}?"
             if matches
-            else " Available environments are:\n" + "\n".join(ALL_ENVS)
+            else " \nAvailable environments are:\n"
+            + "\n".join(
+                [
+                    " | ".join(
+                        env.ljust(max_length) for env in ALL_ENVS[i : i + envs_per_line]
+                    )
+                    for i in range(0, len(ALL_ENVS), envs_per_line)
+                ]
+            )
         )
         raise ValueError(f"Environment {env_name} not found.{suggestion}")
 
