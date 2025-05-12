@@ -22,7 +22,7 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pip install --upgrade pip pytest '.[args]'
+          python -m pip install --upgrade pip pytest '.[algs]'
           python -m pytest
 
       - name: Check that docs can be built
