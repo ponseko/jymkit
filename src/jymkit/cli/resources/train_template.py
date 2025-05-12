@@ -40,5 +40,6 @@ if __name__ == "__main__":
         num_steps=32,
         learning_rate=2.5e-3,
         ent_coef=0.0,
+        num_epochs=1,
     )
     agent = agent.train(rng, env)
