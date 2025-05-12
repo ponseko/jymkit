@@ -78,6 +78,12 @@ def main():
     # Parse the project name argument
     parser = argparse.ArgumentParser(description="Initialize a new jymkit project.")
     parser.add_argument("projectname", help="The path to the new project directory.")
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Automatically answer 'yes' to all prompts.",
+    )
     args = parser.parse_args()
     projectname = args.projectname
 
@@ -92,10 +98,10 @@ def main():
     #     )
     #     print(f"\n{BOLD}🚀 Setting up: {projectname}{RESET}\n")
 
-    build_environment_template = yes_no_prompt(
+    build_environment_template = args.yes or yes_no_prompt(
         "Would you like to include a environment template?"
     )
-    include_algorithm_source = yes_no_prompt(
+    include_algorithm_source = args.yes or yes_no_prompt(
         "Instead of importing, would you like to copy the algorithm source code into your project?",
         default="n",
     )
@@ -111,9 +117,10 @@ def main():
     )
 
     # Confirm setup
-    if not yes_no_prompt("\nDo you want to proceed with this configuration?"):
-        print("Setup cancelled.")
-        return
+    if not args.yes:
+        if not yes_no_prompt("\nDo you want to proceed with this configuration?"):
+            print("Setup cancelled.")
+            return
 
     # Determine the command to run
     command = (

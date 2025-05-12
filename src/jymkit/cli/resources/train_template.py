@@ -28,7 +28,7 @@ def do_random_evaluation(
 
 if __name__ == "__main__":
     env = ExampleEnv()  # noqa: F821 # type: ignore[reportUndefinedVariable]
-    env = jym.LogWrapper(env=env)
+    env = jym.LogWrapper(env)
     rng = jax.random.PRNGKey(0)
 
     random_rewards = do_random_evaluation(rng, env)
