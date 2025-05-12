@@ -1,20 +1,13 @@
 
-# <center>JymKit</center>
+# JymKit
 
-JymKit is your lightweight utility library for building reinforcement learning projects in JAX. 
+JymKit is your lightweight utility library for reinforcement learning projects in JAX. 
 
+📖 [Documentation](https://ponseko.github.io/jymkit/)
 
-> JymKit is in an early stage of development. Functionality is limited and may change at any moment. More features will be added in the near future.
+## 🚀 Getting started
 
-JymKit revolves around three main pillars which complement each other but may be used separately and combined with different libraries or your own code.
-
-- An environment API, sticking close to [Gymnax](https://github.com/RobertTLange/gymnax), but properly handling truncation when required and allowing for variable discounting. JymKit Environments are built as [Equinox](https://docs.kidger.site/equinox/) Modules, neatly integrating them into the JAX ecosystem.
-- JymKit provides general algorithms that train according to the [PureJaxRL](https://github.com/luchris429/purejaxrl) pattern for maximum performance, but are built as [Equinox](https://docs.kidger.site/equinox/) Modules. The algorithms are built as single-file implementations, follow a class-based approach and their API resembles that of the stable-baselines.
-- JymKit can bootstrap your project by providing some template code for building your reinforcement learning project via `pipx run jymkit <projectname>`.
-
-## Getting started
-
-For new projects, the easiest way to get started is via [uv](https://docs.astral.sh/uv/getting-started/installation/):
+JymKit lets you bootstrap your new reinforcement learning projects directly from the command line. As such, for new projects, the easiest way to get started is via [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 > ```bash
 > uvx jymkit <projectname>
@@ -22,7 +15,7 @@ For new projects, the easiest way to get started is via [uv](https://docs.astral
 > 
 > # ... or via pipx
 > pipx run jymkit <projectname>
-> # ... active a virtual environment in your prefered way
+> # activate a virtual environment in your prefered way, e.g. conda
 > python example_train.py
 > ```
 
@@ -36,10 +29,66 @@ For existing projects, you can simply install JymKit via `pip` and import the re
 > import jax
 > import jymkit as jym
 > from jymkit.algorithms import PPO
-> from jymkit.envs import CartPole
 > 
-> env = CartPole()
+> env = jym.make("CartPole")
+> env = jymkit.LogWrapper(env)
 > rng = jax.random.PRNGKey(0)
-> agent = PPO(total_timesteps=5e5, debug=True, learning_rate=2.5e-3)
+> agent = PPO(total_timesteps=5e5, learning_rate=2.5e-3)
 > agent = agent.train(rng, env)
 > ```
+
+## 🏠 Environments
+
+JymKit is not aimed at delivering a full environment suite. However, it does come equiped with the a `jym.make(...)` command to import environments from existing suites and wrap them appropriately to the JymKit API standard. For example, using environments from Gymnax:
+
+```python
+import jymkit as jym
+from jymkit.algorithms import PPO
+import jax
+
+env = jym.make("Breakout-MinAtar")
+env = jym.FlattenObservationWrapper(env)
+env = jym.LogWrapper(env)
+
+agent = PPO(**some_good_hyperparameters)
+agent = agent.train(jax.random.PRNGKey(0), env)
+
+# > Using an environment from Gymnax via gymnax.make(Breakout-MinAtar).
+# > Wrapping Gymnax environment with GymnaxWrapper
+# >  Disable this behavior by passing wrapper=False
+# > Wrapping environment in VecEnvWrapper
+# > ... training results
+```
+
+> For convenience, JymKit will include the 5 [classic-control environments](https://gymnasium.farama.org/environments/classic_control/) (2/5 currently).
+
+
+> Currently, only Gymnax environments can be imported directly. More libraries are coming up. Note that some Gymnax environments no longer work properly with newer versions of JAX. 
+
+### Environment API
+
+The JymKit API stays close to the *somewhat* established [Gymnax](https://github.com/RobertTLange/gymnax) API for the `reset()` and `step()` function, but allows for truncated episodes in a manner closer to [Gymnasium](https://gymnasium.farama.org/).
+
+```python
+env = jym.make(...)
+
+obs, env_state = env.reset(key) # <-- Mirroring Gymnax
+(obs, reward, terminated, truncated, info), env_state = env.step(key, state, action) # <-- Gymnasium Timestep tuple with state information
+```
+
+## 🤖 Algorithms
+
+Algorithms in `jymkit.algorithms` are built following a near-single-file implementation philosophy in mind. In contrast to implementations in [CleanRL](https://github.com/vwxyzjn/cleanrl) or [PureJaxRL](https://github.com/luchris429/purejaxrl), JymKit algorithms are build in Equinox and follow a class based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3) API. 
+
+Each algorithm supports both discrete- and continuous action/observation space -- adjusting based on the provided environment `observation_space` and `action_space`. Additionally, the implementations support multi-agent environments out of the box.
+
+> Currently, only a `PPO` implementation is implemented. More will be included in the near future, but the general idea is not to recreate every algorithm.
+
+```python
+from jymkit.algorithms import PPO
+import jax
+
+env = ...
+agent = PPO(**some_good_hyperparameters)
+agent = agent.train(jax.random.PRNGKey(0), env)
+```

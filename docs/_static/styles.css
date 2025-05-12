@@ -6,6 +6,10 @@ html {
 
 /* Fit the Twitter handle alongside the GitHub one in the top right. */
 
+.md-grid {
+    max-width: 72rem; /* Overall width */
+}
+
 div.md-header__source {
     width: revert;
     max-width: revert;
