@@ -4,7 +4,7 @@ from typing import Generic, Tuple, TypeVar
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef, Real
 
 from ._spaces import Space
 from ._types import AgentObservation, TimeStep
@@ -23,22 +23,23 @@ class Environment(eqx.Module, Generic[TEnvState]):
     auto-reset logic. Instead, the environment-specific logic should be implemented in the
     `step_env` and `reset_env` methods.
 
-    **Properties:**
-
-    - `multi_agent`: Indicates if the environment supports multiple agents.
-
     """
 
     def step(
         self,
         key: PRNGKeyArray,
         state: TEnvState,
-        action: PyTree[int | float | Array],
+        action: PyTree[Real[Array, "..."]],
     ) -> Tuple[TimeStep, TEnvState]:
         """
         Steps the environment forward with the given action and performs auto-reset when necessary.
-        Environment-specific logic is defined in the `step_env` method. In principle, this function
-        should not be overridden.
+        Additionally, this function inserts the original observation (before auto-resetting) in
+        the info dictionary to bootstrap correctly on truncated episodes (`info={"_TERMINAL_OBSERVATION": obs, ...}`)
+
+        This function should typically not be overridden. Instead, the environment-specific logic
+        should be implemented in the `step_env` method.
+
+        Returns a TimeStep object (observation, reward, terminated, truncated, info) and the new state.
 
         **Arguments:**
 
@@ -75,8 +76,10 @@ class Environment(eqx.Module, Generic[TEnvState]):
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Resets the environment to an initial state and returns the initial observation.
-        Environment-specific logic is defined in the `reset_env` method. In principle, this function
+        Environment-specific logic is defined in the `reset_env` method. Typically, this function
         should not be overridden.
+
+        Returns the initial observation and the initial state of the environment.
 
         **Arguments:**
 
@@ -87,10 +90,13 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
     @abstractmethod
     def step_env(
-        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[Real[Array, "..."]]
     ) -> Tuple[TimeStep, TEnvState]:
         """
-        Defines the environment-specific step logic.
+        Defines the environment-specific step logic. I.e. here the state of the environment is updated
+        according to the transition function.
+
+        Returns a [`TimeStep`](.#timestep) object (observation, reward, terminated, truncated, info) and the new state.
 
         **Arguments:**
 
@@ -105,6 +111,8 @@ class Environment(eqx.Module, Generic[TEnvState]):
         """
         Defines the environment-specific reset logic.
 
+        Returns the initial observation and the initial state of the environment.
+
         **Arguments:**
 
         - `key`: JAX PRNG key.
@@ -116,6 +124,8 @@ class Environment(eqx.Module, Generic[TEnvState]):
     def action_space(self) -> Space | PyTree[Space]:
         """
         Defines the space of valid actions for the environment.
+        For multi-agent environments, this should be a PyTree of spaces.
+        See [`jymkit.spaces`](Spaces.md) for more information on how to define (composite) action spaces.
         """
         pass
 
@@ -124,13 +134,16 @@ class Environment(eqx.Module, Generic[TEnvState]):
     def observation_space(self) -> Space | PyTree[Space]:
         """
         Defines the space of possible observations from the environment.
+        For multi-agent environments, this should be a PyTree of spaces.
+        See [`jymkit.spaces`](Spaces.md) for more information on how to define (composite) observation spaces.
         """
         pass
 
     @property
     def _multi_agent(self) -> bool:
         """
-        Indicates if the environment supports multiple agents.
+        Indicates if the environment is a multi-agent environment.
+        For multi-agent environments, include a property `multi_agent = True` in the subclass.
         """
         return getattr(self, "multi_agent", False)
 

@@ -11,12 +11,20 @@ from jaxtyping import PRNGKeyArray, PyTree
 import jymkit as jym
 
 
-def _get_flat_input_dim(obs_space: jym.Space) -> int:
+def _get_input_dim_of_flat_obs(obs_space: jym.Space | PyTree[jym.Space]) -> int:
     """
     Get the flattened input dimension of the observation space.
     """
+    # Check if each obs_space is a 0D or 1D space
+    below_2d = jax.tree.leaves(jax.tree.map(lambda x: len(x.shape) < 2, obs_space))
+    assert all(below_2d), (
+        "This model requires all observations to be 0D or 1D spaces."
+        "Flatten the observations with `jymkit.FlattenObservationWrapper` or "
+        "use a custom network.",
+        f"spaces={obs_space}",
+    )
     input_shape = jax.tree.map(
-        lambda x: np.array(x.shape).prod(),
+        lambda x: int(np.array(x.shape).prod()),
         obs_space,
     )
     input_dim = int(np.sum(np.array(jax.tree.leaves(input_shape))))
@@ -32,7 +40,7 @@ def create_ffn_networks(
     layers = []
     keys = jax.random.split(key, len(hidden_dims))
 
-    input_dim = _get_flat_input_dim(obs_space)
+    input_dim = _get_input_dim_of_flat_obs(obs_space)
     for i, hidden_dim in enumerate(hidden_dims):
         layers.append(
             eqx.nn.Linear(in_features=input_dim, out_features=hidden_dim, key=keys[i])
@@ -76,7 +84,7 @@ def create_bronet_networks(
 
     keys = jax.random.split(key, len(hidden_dims))
 
-    input_dim = _get_flat_input_dim(obs_space)
+    input_dim = _get_input_dim_of_flat_obs(obs_space)
     layers = [
         eqx.nn.Linear(in_features=input_dim, out_features=hidden_dims[0], key=keys[0]),
         eqx.nn.LayerNorm(hidden_dims[0]),
@@ -183,9 +191,11 @@ class ActorNetwork(eqx.Module):
             action_mask = x.action_mask
             x = x.observation
 
-        x = jax.tree.map(lambda x: jnp.reshape(x, -1), x)  # flatten the input
-        if not isinstance(x, jnp.ndarray):
-            x = jnp.concatenate(x)
+        # If multiple spaces of observations, concat them (assuming they are all 1D)
+        # This should have been enforced in the creation of the networks
+        x = jax.tree.leaves(x)
+        x = jax.tree.map(jnp.atleast_1d, x)
+        x = jnp.concatenate(x)
 
         for layer in self.layers[:-1]:
             x = jax.nn.relu(layer(x))
@@ -231,9 +241,12 @@ class CriticNetwork(eqx.Module):
         if isinstance(x, jym.AgentObservation):
             x = x.observation
 
-        x = jax.tree.map(lambda x: jnp.reshape(x, -1), x)  # flatten the input
-        if not isinstance(x, jnp.ndarray):
-            x = jnp.concatenate(x)
+        # If multiple spaces of observations, concat them (assuming they are all 1D)
+        # This should have been enforced in the creation of the networks
+        x = jax.tree.leaves(x)
+        x = jax.tree.map(jnp.atleast_1d, x)
+        x = jnp.concatenate(x)
+
         for layer in self.layers[:-1]:
             x = jax.nn.relu(layer(x))
         return jnp.squeeze(self.layers[-1](x), axis=-1)

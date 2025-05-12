@@ -49,6 +49,8 @@ def make(
     external_package: Optional[str] = None,
     **env_kwargs,
 ) -> Environment:
+    if env_name is None:
+        raise ValueError("Environment name cannot be None.")
     if external_package is not None:
         # try to import package_name
         try:

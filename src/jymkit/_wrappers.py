@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any, Tuple
 
@@ -5,7 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree, Real
 
 from ._environment import (
     AgentObservation,
@@ -41,6 +42,50 @@ def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment
     return wrapped_env
 
 
+def _partition_obs_and_masks(
+    observation_tree: PyTree[TObservation], multi_agent: bool
+) -> Tuple[PyTree, PyTree]:
+    """
+    Seperates a PyTree of observations of type `AgentObservation` into two trees:
+    one with the observations and one with the masks.
+    If the observation is not of type `AgentObservation`, the second tree will only
+    contain `None` values.
+    This is used such that wrappers can act on the observations only when action masks
+    are present.
+
+    Useage:
+    ```python
+    (observation, ...), env_state = self._env.step/reset(...)
+    obs, masks = self.partition_obs_and_masks(observation)
+    obs = ... # do something with obs ...
+    observation = eqx.combine(obs, masks)
+    ```
+
+    **Arguments:**
+
+    - `observation_tree`: (PyTree of) observations to be partitioned.
+    - `multi_agent`: Whether the environment is multi-agent or not.
+
+    """
+    observations = [observation_tree]
+    if multi_agent:
+        observations, _ = eqx.tree_flatten_one_level(observation_tree)
+    if all(not isinstance(o, AgentObservation) for o in observations):
+        filter_spec = True
+    elif all(isinstance(o, AgentObservation) for o in observations):
+        filter_spec = AgentObservation(observation=True, action_mask=False)
+        filter_spec = jax.tree.map(
+            lambda _: filter_spec,
+            observation_tree,
+            is_leaf=lambda x: isinstance(x, AgentObservation),
+        )
+    else:
+        raise ValueError(
+            "Observations for all agents must be either AgentObservation or not."
+        )
+    return eqx.partition(observation_tree, filter_spec=filter_spec)
+
+
 class Wrapper(Environment):
     """Base class for all wrappers."""
 
@@ -67,12 +112,23 @@ class Wrapper(Environment):
 
 
 class VecEnvWrapper(Wrapper):
+    """
+    Wrapper to vectorize environments.
+    Simply calls `jax.vmap` on the `reset` and `step` methods of the environment.
+    The number of environmnents is determined by the leading axis of the
+    inputs to the `reset` and `step` methods, as if you would call `jax.vmap` directly.
+
+    We use a wrapper instead of `jax.vmap` in each algorithm directly to control where
+    the vectorization happens. This allows other wrappers to act on the vectorized
+    environment, e.g. `NormalizeVecObsWrapper` and `NormalizeVecRewardWrapper`.
+    """
+
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, Any]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, state = jax.vmap(self._env.reset)(key)
         return obs, state
 
     def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[Real[Array, "..."]]
     ) -> Tuple[TimeStep, TEnvState]:
         timestep, state = jax.vmap(self._env.step)(key, state, action)
         return timestep, state
@@ -89,9 +145,23 @@ class LogEnvState(eqx.Module):
 
 class LogWrapper(Wrapper):
     """
-    Log the episode returns and lengths.
+    Log the episode returns and lengths. Modeled after the LogWrapper in
+    [PureJaxRL](https://github.com/luchris429/purejaxrl/blob/31756b197773a52db763fdbe6d635e4b46522a73/purejaxrl/wrappers.py#L73).
+
+    This wrapper inserts episode returns and lengths into the `info` dictionary of the
+    `TimeStep` object. The `returned_episode_returns` and `returned_episode_lengths`
+    are the returns and lengths of the last completed episode.
+
+    After collecting a trajectory of `n` steps and collecting all the info dicts,
+    the episode returns may be collected via:
+    ```python
+    return_values = jax.tree.map(
+        lambda x: x[data["returned_episode"]], data["returned_episode_returns"]
+    )
+    ```
 
     **Arguments:**
+
     - `_env`: Environment to wrap.
     """
 
@@ -160,34 +230,22 @@ class NormalizeVecObsState(eqx.Module):
 
 
 class NormalizeVecObsWrapper(Wrapper):
+    """
+    Normalize the observations of the environment via running mean and variance.
+    This wrapper acts on vectorized environments and in turn should be wrapped within
+    a `VecEnvWrapper`.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    """
+
     def __check_init__(self):
         if not is_wrapped(self._env, VecEnvWrapper):
             raise ValueError(
                 "NormalizeVecReward wrapper must wrapped around a `VecEnvWrapper`.\n"
                 " Please wrap the environment with `VecEnvWrapper` first."
             )
-
-    def partition_obs_and_masks(self, tree):
-        """
-        Ensures we do not normalize the action masks if they are present.
-        """
-        observations = [tree]
-        if self._env._multi_agent:
-            observations, _ = eqx.tree_flatten_one_level(tree)
-        if all(not isinstance(o, AgentObservation) for o in observations):
-            filter_spec = True
-        elif all(isinstance(o, AgentObservation) for o in observations):
-            filter_spec = AgentObservation(observation=True, action_mask=False)
-            filter_spec = jax.tree.map(
-                lambda _: filter_spec,
-                tree,
-                is_leaf=lambda x: isinstance(x, AgentObservation),
-            )
-        else:
-            raise ValueError(
-                "Observations for all agents must be either AgentObservation or not."
-            )
-        return eqx.partition(tree, filter_spec=filter_spec)
 
     def update_state_and_get_obs(self, obs, state: NormalizeVecObsState):
         batch_mean = jax.tree.map(lambda o: jnp.mean(o, axis=0), obs)
@@ -225,7 +283,7 @@ class NormalizeVecObsWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecObsState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = self.partition_obs_and_masks(obs)
+        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
         state = NormalizeVecObsState(
             env_state=env_state,
             mean=jax.tree.map(jnp.zeros_like, obs),
@@ -244,7 +302,7 @@ class NormalizeVecObsWrapper(Wrapper):
     ) -> Tuple[TimeStep, NormalizeVecObsState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
         obs = timestep.observation
-        obs, masks = self.partition_obs_and_masks(obs)
+        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
         state = replace(state, env_state=env_state)
         normalized_obs, state = self.update_state_and_get_obs(obs, state)
         normalized_obs = eqx.combine(normalized_obs, masks)
@@ -260,6 +318,17 @@ class NormalizeVecRewState(eqx.Module):
 
 
 class NormalizeVecRewardWrapper(Wrapper):
+    """
+    Normalize the rewards of the environment via running mean and variance.
+    This wrapper acts on vectorized environments and in turn should be wrapped within
+    a `VecEnvWrapper`.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    - `gamma`: Discount factor for the rewards.
+    """
+
     gamma: float = 0.99
 
     def __check_init__(self):
@@ -321,7 +390,7 @@ class NormalizeVecRewardWrapper(Wrapper):
             return_val=return_val,
         )
 
-        if np.any(self._env.multi_agent):  # type: ignore[reportGeneralTypeIssues]
+        if np.any(self._env._multi_agent):  # type: ignore[reportGeneralTypeIssues]
             reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
             reward = jax.tree.unflatten(reward_structure, reward)
         else:
@@ -332,12 +401,10 @@ class NormalizeVecRewardWrapper(Wrapper):
 
 class GymnaxWrapper(Wrapper):
     """
-    Wrapper for Gymnax environments.
-    Since Gymnax does not expose truncated information, we can optionally
-    retrieve it by taking an additional step in the environment with altered timestep
-    information. Since this introduces additional overhead, it is disabled by default.
+    Wrapper for Gymnax environments to transform them into the Jymkit environment interface.
 
     **Arguments:**
+
     - `_env`: Gymnax environment.
     """
 
@@ -371,3 +438,51 @@ class GymnaxWrapper(Wrapper):
     def action_space(self) -> Space:
         params = self._env.default_params
         return self._env.action_space(params)
+
+
+class FlattenObservationWrapper(Wrapper):
+    """Flatten the observations of the environment.
+
+    Flattens each observation in the environment to a single vector.
+    When the observation is a PyTree of arrays, it flattens each array
+    and returns the same PyTree structure with the flattened arrays.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    """
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, env_state = self._env.reset(key)
+        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
+        obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
+        obs = eqx.combine(obs, masks)
+        return obs, env_state
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[TimeStep, TEnvState]:
+        timestep, env_state = self._env.step(key, state, action)
+        obs, masks = _partition_obs_and_masks(
+            timestep.observation, self._env._multi_agent
+        )
+        obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
+        if not isinstance(obs, jnp.ndarray):
+            obs = jnp.concatenate(obs)
+        obs = eqx.combine(obs, masks)
+        timestep = timestep._replace(observation=obs)
+        return timestep, env_state
+
+    @property
+    def observation_space(self) -> Space:
+        obs_space = self._env.observation_space
+
+        def get_flat_shape(space):
+            if not hasattr(space, "shape") or space.shape == ():
+                return space
+            _space = deepcopy(space)
+            flat_space_shape = int(np.prod(np.array(space.shape)))
+            _space.shape = (flat_space_shape,)
+            return _space
+
+        return jax.tree.map(get_flat_shape, obs_space)

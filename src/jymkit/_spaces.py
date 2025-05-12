@@ -7,22 +7,25 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Int, PRNGKeyArray
 
-"""
-    Space definitions for JymKit. Spaces are purposefully not registered PyTree nodes.
-    Composite spaces can be created by simply combining these spaces in a PyTree.
+
+class Space(ABC):
+    """
+    The base class for all spaces in JymKit. Instead of using this class directly,
+    use the subclasses `Box`, `Discrete`, and `MultiDiscrete`.
+    Composite spaces can be created by simply combining spaces in an arbitrary PyTree.
     For example, a tuple of Box spaces can be created as follows:
     ```python
     from jymkit import Box
-    
+
     box1 = Box(low=0, high=1, shape=(3,))
     box2 = Box(low=0, high=1, shape=(4,))
     box3 = Box(low=0, high=1, shape=(5,))
     composite_space = (box1, box2, box3)
     ```
 
-    JymKit algorithms assume multi-agent environments are such a composite space.
+    JymKit algorithms assume multi-agent environments are such a composite space,
     where the first level of the PyTree is the agent dimension.
-    For example, a multi-agent observation space can be created as follows:
+    For example, a multi-agent environment observation space may look like this:
     ```python
     from jymkit import Box
     from jymkit import MultiDiscrete
@@ -36,11 +39,10 @@ from jaxtyping import Array, Int, PRNGKeyArray
         "agent3": agent3_obs,
     }
     ```
-    
-"""
 
+    Spaces are purposefully not registered PyTree nodes.
+    """
 
-class Space(ABC):
     shape: eqx.AbstractVar[tuple[int, ...]]
 
     @abstractmethod
@@ -54,8 +56,18 @@ class Space(ABC):
 
 @dataclass
 class Box(Space):
-    """The standard Box space for continuous action/observation spaces."""
+    """
+    The standard Box space for continuous action/observation spaces.
 
+    **Arguments:**
+
+    - `low` (int / Array[int]): The lower bound of the space.
+    - `high` (int / Array[int]): The upper bound of the space.
+    - `shape`: The shape of the space.
+    - `dtype`: The data type of the space. Default is jnp.float32.
+    """
+
+    eqx.nn.Linear
     low: float | Array = eqx.field(converter=np.asarray, default=0.0)
     high: float | Array = eqx.field(converter=np.asarray, default=1.0)
     shape: tuple[int, ...] = ()
@@ -77,7 +89,14 @@ class Box(Space):
 
 @dataclass
 class Discrete(Space):
-    """The standard discrete space for discrete action/observation spaces."""
+    """
+    The standard discrete space for discrete action/observation spaces.
+
+    **Arguments:**
+
+    - `n` (int): The number of discrete actions.
+    - `dtype`: The data type of the space. Default is jnp.int16.
+    """
 
     n: int
     dtype: type
@@ -97,11 +116,12 @@ class Discrete(Space):
 @dataclass
 class MultiDiscrete(Space):
     """
-    MultiDiscrete space for discrete action/observation spaces.
-    This is a vector of discrete spaces, each with its own number of actions.
-    For example, a MultiDiscrete space with nvec=[2, 3] has two discrete actions:
-    - The first action has 2 options (0, 1)
-    - The second action has 3 options (0, 1, 2)
+    The standard multi-discrete space for discrete action/observation spaces.
+
+    **Arguments:**
+
+    - `nvec` (Array[int]): The number of discrete actions for each dimension.
+    - `dtype`: The data type of the space. Default is jnp.int16.
     """
 
     nvec: Int[Array | np.ndarray, " num_actions"]
