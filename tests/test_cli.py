@@ -9,22 +9,27 @@ def test_init_cli_with_pipx(tmp_path, monkeypatch):
     """Test that jymkit works when invoked through pipx."""
     test_dir = tmp_path / "test_project"
 
-    # Check if pipx is available
+    # try with uvx first
     try:
-        subprocess.run(["pipx", "--version"], check=True, capture_output=True)
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pytest.skip("pipx not available")
+        subprocess.run(["uvx", ".", test_dir, "-y"])
+    except subprocess.SubprocessError:
+        # Check if pipx is available
+        print("uvx not available, trying pipx")
+        try:
+            subprocess.run(["pipx", "--version"], check=True, capture_output=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pytest.skip("pipx not available")
 
-    # Run through pipx
-    # Run through pipx - store the result for checking
-    result = subprocess.run(
-        ["pipx", "run", "--no-cache", "--spec", ".", "jymkit", test_dir, "-y"],
-        capture_output=True,
-        text=True,
-    )
+        # Run through pipx
+        # Run through pipx - store the result for checking
+        result = subprocess.run(
+            ["pipx", "run", "--no-cache", "--spec", ".", "jymkit", test_dir, "-y"],
+            capture_output=True,
+            text=True,
+        )
 
-    # Check the command executed successfully
-    assert result.returncode == 0, f"CLI failed with: {result.stderr}"
+        # Check the command executed successfully
+        assert result.returncode == 0, f"CLI failed with: {result.stderr}"
 
     # Verify the directory was created
     assert test_dir.exists(), "Project directory wasn't created"
