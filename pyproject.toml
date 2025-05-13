@@ -30,6 +30,9 @@ include = ["src/jymkit"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/jymkit"]
 
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
 [project.scripts]
 jymkit = "jymkit.cli.init:main"
 
