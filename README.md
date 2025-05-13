@@ -15,7 +15,7 @@ JymKit lets you bootstrap your new reinforcement learning projects directly from
 > 
 > # ... or via pipx
 > pipx run jymkit <projectname>
-> # activate a virtual environment in your prefered way, e.g. conda
+> # activate a virtual environment in your preferred way, e.g. conda
 > python example_train.py
 > ```
 
@@ -39,7 +39,7 @@ For existing projects, you can simply install JymKit via `pip` and import the re
 
 ## 🏠 Environments
 
-JymKit is not aimed at delivering a full environment suite. However, it does come equiped with the a `jym.make(...)` command to import environments from existing suites and wrap them appropriately to the JymKit API standard. For example, using environments from Gymnax:
+JymKit is not aimed at delivering a full environment suite. However, it does come equipped with a `jym.make(...)` command to import environments from existing suites and wrap them appropriately to the JymKit API standard. For example, using environments from Gymnax:
 
 ```python
 import jymkit as jym
@@ -67,7 +67,7 @@ agent = agent.train(jax.random.PRNGKey(0), env)
 
 ### Environment API
 
-The JymKit API stays close to the *somewhat* established [Gymnax](https://github.com/RobertTLange/gymnax) API for the `reset()` and `step()` function, but allows for truncated episodes in a manner closer to [Gymnasium](https://gymnasium.farama.org/).
+The JymKit API stays close to the *somewhat* established [Gymnax](https://github.com/RobertTLange/gymnax) API for the `reset()` and `step()` functions, but allows for truncated episodes in a manner closer to [Gymnasium](https://gymnasium.farama.org/).
 
 ```python
 env = jym.make(...)
@@ -78,7 +78,7 @@ obs, env_state = env.reset(key) # <-- Mirroring Gymnax
 
 ## 🤖 Algorithms
 
-Algorithms in `jymkit.algorithms` are built following a near-single-file implementation philosophy in mind. In contrast to implementations in [CleanRL](https://github.com/vwxyzjn/cleanrl) or [PureJaxRL](https://github.com/luchris429/purejaxrl), JymKit algorithms are build in Equinox and follow a class based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3) API. 
+Algorithms in `jymkit.algorithms` are built following a near-single-file implementation philosophy in mind. In contrast to implementations in [CleanRL](https://github.com/vwxyzjn/cleanrl) or [PureJaxRL](https://github.com/luchris429/purejaxrl), JymKit algorithms are built in Equinox and follow a class-based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3) API. 
 
 Each algorithm supports both discrete- and continuous action/observation space -- adjusting based on the provided environment `observation_space` and `action_space`. Additionally, the implementations support multi-agent environments out of the box.
 
