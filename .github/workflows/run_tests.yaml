@@ -22,11 +22,11 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m pip install --upgrade pip pytest '.[algs]' gymnax
-          python -m pip install git+https://github.com/ponseko/econojax
+          python -m pip install --upgrade pip '.[algs]'
+          python -m pip install -r tests/requirements.txt
           python -m pytest
 
       - name: Check that docs can be built
         run: |
-          python -m pip install pytest mkdocs mkdocs-material mkdocstrings[python]
+          python -m pip install mkdocs-material
           mkdocs build
