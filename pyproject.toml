@@ -1,0 +1,61 @@
+[project]
+name = "jymkit"
+version = "0.0.7"
+description = "A lightweight utility library for reinforcement learning projects in JAX and Equinox."
+readme = "README.md"
+authors = [
+    { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "equinox>=0.12.1",
+]
+
+[project.optional-dependencies]
+algs = [
+    "distrax>=0.1.5",
+    "optax>=0.2.4",
+]
+gpu = [
+    "jax[cuda]>=0.5.2"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["src/jymkit"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jymkit"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
+
+[project.scripts]
+jymkit = "jymkit.cli.init:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "ruff>=0.11.0",
+    "pre-commit>=4.2.0",
+    "tqdm>=4.67.1",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+extend-select = ["I"]
+ignore = ["F722", "E731"] 
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+include = ["src", "tests"]
+exclude = ["src/jymkit/cli/*"]

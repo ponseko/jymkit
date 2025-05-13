@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+*_cache
+.python-version
+
+# Virtual environments
+.venv
+
+# Jupyter Notebook checkpoints
+**/.ipynb_checkpoints
+
+.dev/
+dev*.py
+dev*.ipynb
+*.eqx
+
+.vscode
+site/
