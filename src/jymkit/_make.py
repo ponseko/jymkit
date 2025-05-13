@@ -86,6 +86,7 @@ def make(
                 " Disable this behavior by passing wrapper=False",
             )
             env = GymnaxWrapper(env)
+            print("some minor change")
     else:
         matches = difflib.get_close_matches(env_name, ALL_ENVS, n=1, cutoff=0.6)
         envs_per_line = 3
