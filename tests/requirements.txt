@@ -1,4 +1,4 @@
 pytest
 gymnax
-"git+https://github.com/ponseko/econojax"
+econojax @ git+https://github.com/ponseko/econojax
 jax==0.5.3
