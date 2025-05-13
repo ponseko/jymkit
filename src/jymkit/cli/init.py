@@ -149,6 +149,10 @@ def main():
 
     # Copy over the required files.
     if build_environment_template:
+        import importlib.resources
+
+        print(list(importlib.resources.contents("jymkit")))
+        print(list(importlib.resources.contents("jymkit.cli")))
         with pkg_resources.path(
             "jymkit.cli.resources", "env_template.py"
         ) as template_path:
