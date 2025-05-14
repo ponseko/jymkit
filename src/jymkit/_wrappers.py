@@ -9,6 +9,7 @@ import numpy as np
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree, Real
 
 from ._environment import (
+    ORIGINAL_OBSERVATION_KEY,
     AgentObservation,
     Environment,
     TEnvState,
@@ -191,7 +192,7 @@ class LogWrapper(Wrapper):
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, LogEnvState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
-        done = jnp.logical_or(timestep.terminated, timestep.truncated).any()
+        done = jnp.logical_or(timestep.terminated, timestep.truncated)  # .any()
         new_episode_return = jax.tree.map(
             lambda _r, r: (_r + r), state.episode_returns, timestep.reward
         )
@@ -399,47 +400,6 @@ class NormalizeVecRewardWrapper(Wrapper):
         return TimeStep(obs, reward, terminated, truncated, info), state
 
 
-class GymnaxWrapper(Wrapper):
-    """
-    Wrapper for Gymnax environments to transform them into the Jymkit environment interface.
-
-    **Arguments:**
-
-    - `_env`: Gymnax environment.
-    """
-
-    _env: Any
-
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        params = self._env.default_params
-        obs, env_state = self._env.reset(key, params)
-        return obs, env_state
-
-    def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: int | float
-    ) -> Tuple[TimeStep, TEnvState]:
-        obs, env_state, reward, done, info = self._env.step(key, state, action)
-        terminated, truncated = done, False
-        timestep = TimeStep(
-            observation=obs,
-            reward=reward,
-            terminated=terminated,
-            truncated=truncated,
-            info=info,
-        )
-        return timestep, env_state
-
-    @property
-    def observation_space(self) -> Space:
-        params = self._env.default_params
-        return self._env.observation_space(params)
-
-    @property
-    def action_space(self) -> Space:
-        params = self._env.default_params
-        return self._env.action_space(params)
-
-
 class FlattenObservationWrapper(Wrapper):
     """Flatten the observations of the environment.
 
@@ -467,10 +427,20 @@ class FlattenObservationWrapper(Wrapper):
             timestep.observation, self._env._multi_agent
         )
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
-        if not isinstance(obs, jnp.ndarray):
-            obs = jnp.concatenate(obs)
+        # if not isinstance(obs, jnp.ndarray):
+        #     obs = jnp.concatenate(obs)
         obs = eqx.combine(obs, masks)
         timestep = timestep._replace(observation=obs)
+        try:
+            info = timestep.info
+            info[ORIGINAL_OBSERVATION_KEY] = jax.tree.map(
+                lambda x: jnp.reshape(x, -1), info[ORIGINAL_OBSERVATION_KEY]
+            )
+            timestep._replace(
+                info=info,
+            )
+        except Exception:
+            pass
         return timestep, env_state
 
     @property
@@ -482,7 +452,11 @@ class FlattenObservationWrapper(Wrapper):
                 return space
             _space = deepcopy(space)
             flat_space_shape = int(np.prod(np.array(space.shape)))
-            _space.shape = (flat_space_shape,)
+            try:
+                _space.shape = (flat_space_shape,)
+            except AttributeError:  # Gymnasium envs have no setter on shape
+                _space._shape = (flat_space_shape,)
+
             return _space
 
         return jax.tree.map(get_flat_shape, obs_space)
