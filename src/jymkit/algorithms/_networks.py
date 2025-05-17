@@ -143,7 +143,9 @@ class ActionLinear(eqx.Module):
             logits = self._apply_action_mask(logits, action_mask)
 
         if self.space_type == "Continuous":
-            return distrax.Normal(loc=logits[0], scale=jax.nn.softplus(logits[1]))
+            return distrax.Normal(
+                loc=logits[..., 0], scale=jax.nn.softplus(logits[..., 1])
+            )
 
         return distrax.Categorical(logits=logits)
 
