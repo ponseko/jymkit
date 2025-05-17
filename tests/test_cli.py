@@ -1,10 +1,11 @@
+import os
 import subprocess
 import sys
 
 import pytest
 
 
-# @pytest.mark.skip()
+@pytest.mark.skipif(bool(os.getenv("SKIP_CLI_TEST")))
 def test_init_cli_with_pipx(tmp_path, monkeypatch):
     """Test that jymkit works when invoked through pipx."""
     test_dir = tmp_path / "test_project"
