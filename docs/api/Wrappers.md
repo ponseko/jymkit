@@ -1,41 +1,33 @@
 ::: src.jymkit.LogWrapper 
     options: 
-        members: 
-            - 
+        members: false
 
 ::: src.jymkit.VecEnvWrapper 
     options: 
-        members: 
-            - 
+        members: false
 
 ::: src.jymkit.NormalizeVecObsWrapper 
     options: 
-        members: 
-            - 
+        members: false
 
 ::: src.jymkit.NormalizeVecRewardWrapper 
     options: 
-        members: 
-            - 
+        members: false
 
 ::: src.jymkit.FlattenObservationWrapper 
     options: 
-        members: 
-            - 
+        members: false
 
 ::: src.jymkit.GymnaxWrapper 
     options: 
-        members: 
-            - 
+        members: false
         
 ## Utility functions
 
 ::: src.jymkit.is_wrapped 
     options: 
-        members: 
-            - 
+        members: false
         
 ::: src.jymkit.remove_wrapper 
     options: 
-        members: 
-            - 
+        members: false
