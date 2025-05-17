@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - release-fix
 
 jobs:
   build:
@@ -16,9 +17,8 @@ jobs:
             test-script: |
                 cp -r ${{ github.workspace }}/tests ./tests
                 cp ${{ github.workspace }}/pyproject.toml ./pyproject.toml
-                python -m pip install --upgrade pip '.[algs]'
-                python -m pip install -r tests/requirements.txt
-                python -m pytest
+                uv sync --dev --no-install-project --inexact
+                uv run --no-sync pytest
             pypi-token: ${{ secrets.pypi_token }}
             github-user: ponseko
             github-token: ${{ github.token }}  # automatically created token
