@@ -12,12 +12,10 @@
 
 ::: src.jymkit.TimeStep
     options:
-        members:
-            - 
+        members: false
 
 ## Observation container (optional)
 
 ::: src.jymkit.AgentObservation
     options:
-        members:
-            - 
+        members: false

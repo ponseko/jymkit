@@ -67,7 +67,6 @@ class Box(Space):
     - `dtype`: The data type of the space. Default is jnp.float32.
     """
 
-    eqx.nn.Linear
     low: float | Array = eqx.field(converter=np.asarray, default=0.0)
     high: float | Array = eqx.field(converter=np.asarray, default=1.0)
     shape: tuple[int, ...] = ()
@@ -77,14 +76,9 @@ class Box(Space):
         """Sample random action uniformly from set of continuous choices."""
         low = self.low
         high = self.high
-        if np.issubdtype(self.dtype, jnp.integer):
-            high += 1
-            return jax.random.randint(
-                rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
-            )
         return jax.random.uniform(
             rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
-        )
+        ).squeeze()
 
 
 @dataclass

@@ -1,7 +1,6 @@
 ::: src.jymkit._wrappers.Space
     options: 
-        members: 
-            -
+        members: false
 
 ::: src.jymkit.Box 
     options: 

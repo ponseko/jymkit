@@ -113,7 +113,7 @@ class ActionLinear(eqx.Module):
             num_outputs: list = np.array(space.nvec).tolist()  # pyright: ignore[reportAttributeAccessIssue]
         elif hasattr(space, "n"):
             self.space_type = "Discrete"
-            num_outputs = [space.n]  # pyright: ignore[reportAttributeAccessIssue]
+            num_outputs = [int(space.n)]  # pyright: ignore[reportAttributeAccessIssue]
         else:  # Box (Continuous)
             self.space_type = "Continuous"
             assert hasattr(space, "low") and hasattr(space, "high")
@@ -133,19 +133,31 @@ class ActionLinear(eqx.Module):
                 stacked_layers = jax.tree.map(lambda *v: jnp.stack(v), *self.layers)
                 logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
             except ValueError:  # Else just map
-                logits = jax.tree.map(lambda layer: layer(x), self.layers[-1])
+                logits = jax.tree.map(
+                    lambda layer: layer(x),
+                    self.layers,
+                    is_leaf=lambda x: isinstance(x, eqx.nn.Linear),
+                )
 
         if action_mask is not None:
             logits = self._apply_action_mask(logits, action_mask)
 
         if self.space_type == "Continuous":
-            return distrax.Normal(loc=logits[0], scale=jax.nn.softplus(logits[1]))
+            return distrax.Normal(
+                loc=logits[..., 0], scale=jax.nn.softplus(logits[..., 1])
+            )
+
         return distrax.Categorical(logits=logits)
 
     def _apply_action_mask(self, logits, action_mask):
+        """Apply the action mask to the output of the network.
+
+        NOTE: This requires a (multi-)discrete action space.
+        NOTE: Currently, action mask is assumed to be a PyTree of the same structure as the action space.
+            Therefore, masking is not supported when the mask is dependent on another action.
         """
-        Apply the action mask to the output of the network.
-        """
+        if self.space_type == "Continuous":
+            raise ValueError("Action masks provided for a continuous action space.")
         BIG_NEGATIVE = -1e9
         masked_logits = jax.tree.map(
             lambda a, mask: ((jnp.ones_like(a) * BIG_NEGATIVE) * (1 - mask)) + a,
