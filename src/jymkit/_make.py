@@ -5,42 +5,44 @@ from typing import Optional
 import jymkit.envs
 from jymkit._environment import Environment
 
-from ._wrappers import GymnaxWrapper, Wrapper
+from ._wrappers import Wrapper
+from ._wrappers_ext import BraxWrapper, GymnaxWrapper, JumanjiWrapper
 
 JYMKIT_ENVS = [
     "CartPole",
     "Acrobot",
+    "Pendulum",
+    "MountainCar",
+    "ContinuousMountainCar",
 ]
 
-# Gymnax environments, requires gymnax package to be installed
-# Included for convenience, but not all environments are compatible with the latest version of Jax
+# External environments, requires the respective packages to be installed
+# NOTE: not all gymnax environments are compatible with the latest version of Jax
 GYMNAX_ENVS = [
-    "Pendulum-v1",
-    "MountainCar-v0",
-    "MountainCarContinuous-v0",
-    "Asterix-MinAtar",  # Gymnax no longer compatible with newer versions of Jax for this env
-    "Breakout-MinAtar",
-    "Freeway-MinAtar",  # Gymnax no longer compatible with newer versions of Jax for this env
-    "SpaceInvaders-MinAtar",
-    "DeepSea-bsuite",
-    # Untested envs:
-    "Catch-bsuite",
-    "MemoryChain-bsuite",
-    "UmbrellaChain-bsuite",
-    "DiscountingChain-bsuite",
-    "MNISTBandit-bsuite",
-    "SimpleBandit-bsuite",
-    "FourRooms-misc",
-    "MetaMaze-misc",
-    "PointRobot-misc",
-    "BernoulliBandit-misc",
-    "GaussianBandit-misc",
-    "Reacher-misc",
-    "Swimmer-misc",
-    "Pong-misc",
-]
+    "Asterix-MinAtar", "Breakout-MinAtar", "Freeway-MinAtar",
+    "SpaceInvaders-MinAtar", "DeepSea-bsuite", "Catch-bsuite", "MemoryChain-bsuite",
+    "UmbrellaChain-bsuite", "DiscountingChain-bsuite", "MNISTBandit-bsuite", "SimpleBandit-bsuite",
+    "FourRooms-misc", "MetaMaze-misc", "PointRobot-misc", "BernoulliBandit-misc",
+    "GaussianBandit-misc", "Reacher-misc", "Swimmer-misc", "Pong-misc",
+]  # fmt: skip
 
-ALL_ENVS = JYMKIT_ENVS + GYMNAX_ENVS
+JUMANJI_ENVS = [
+    # "Game2048-v1", "GraphColoring-v0", "Minesweeper-v0", "RubiksCube-v0",
+    # "RubiksCube-partly-scrambled-v0", "SlidingTilePuzzle-v0", "Sudoku-v0", "Sudoku-very-easy-v0",
+    # "BinPack-v1", "FlatPack-v0", "JobShop-v0", "Knapsack-v1",
+    # "Tetris-v0", "Cleaner-v0", "Connector-v2", "CVRP-v1",
+    # "MultiCVRP-v0", "Maze-v0", "RobotWarehouse-v0", "Snake-v1",
+    # "TSP-v1", "MMST-v0", "PacMan-v1", "Sokoban-v0",
+    # "LevelBasedForaging-v0", "SearchAndRescue-v0",
+]  # fmt: skip
+
+BRAX_ENVS = [
+    "ant", "halfcheetah", "hopper", "humanoid",
+    "humanoidstandup", "inverted_pendulum", "inverted_double_pendulum", "pusher", 
+    "reacher", "walker2d",
+]  # fmt: skip
+
+ALL_ENVS = JYMKIT_ENVS + GYMNAX_ENVS + JUMANJI_ENVS + BRAX_ENVS  # fmt: skip
 
 
 def make(
@@ -69,6 +71,12 @@ def make(
             env = jymkit.envs.CartPole(**env_kwargs)
         elif env_name == "Acrobot":
             env = jymkit.envs.Acrobot(**env_kwargs)
+        elif env_name == "Pendulum":
+            env = jymkit.envs.Pendulum(**env_kwargs)
+        elif env_name == "MountainCar":
+            env = jymkit.envs.MountainCar(**env_kwargs)
+        elif env_name == "ContinuousMountainCar":
+            env = jymkit.envs.ContinuousMountainCar(**env_kwargs)
 
     elif env_name in GYMNAX_ENVS:
         try:
@@ -86,7 +94,41 @@ def make(
                 " Disable this behavior by passing wrapper=False",
             )
             env = GymnaxWrapper(env)
-            print("some minor change")
+    elif env_name in JUMANJI_ENVS:
+        try:
+            import jumanji
+        except ImportError:
+            raise ImportError(
+                "Using an environment from Jumanji, but Jumanji is not installed."
+                "Please install it with `pip install jumanji`."
+            )
+        print(f"Using an environment from Jumanji via jumanji.make({env_name}).")
+        env = jumanji.make(env_name, **env_kwargs)  # type: ignore
+        if wrapper is None:
+            print(
+                "Wrapping Jumanji environment with JumanjiWrapper\n",
+                " Disable this behavior by passing wrapper=False",
+            )
+            env = JumanjiWrapper(env)
+
+    elif env_name in BRAX_ENVS:
+        try:
+            import brax.envs
+        except ImportError:
+            raise ImportError(
+                "Using an environment from Brax, but Brax is not installed."
+                "Please install it with `pip install brax`."
+            )
+        print(
+            f"Using an environment from Brax via brax.envs.get_environment({env_name})."
+        )
+        env = brax.envs.get_environment(env_name, **env_kwargs)
+        if wrapper is None:
+            print(
+                "Wrapping Brax environment with BraxWrapper\n",
+                " Disable this behavior by passing wrapper=False",
+            )
+            env = BraxWrapper(env)
     else:
         matches = difflib.get_close_matches(env_name, ALL_ENVS, n=1, cutoff=0.6)
         envs_per_line = 3
