@@ -16,8 +16,9 @@ jobs:
             test-script: |
                 cp -r ${{ github.workspace }}/tests ./tests
                 cp ${{ github.workspace }}/pyproject.toml ./pyproject.toml
-                uv sync --all-extras --no-install-project --inexact
-                uv run --no-sync pytest
+                python -m pip install --upgrade pip '.[algs]'
+                python -m pip install -r tests/requirements.txt
+                python -m pytest
             pypi-token: ${{ secrets.pypi_token }}
             github-user: ponseko
             github-token: ${{ github.token }}  # automatically created token
