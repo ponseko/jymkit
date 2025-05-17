@@ -25,7 +25,7 @@ class GymnaxWrapper(Wrapper):
     _env: Any
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
-        params = self._env.default_params
+        params = getattr(self._env, "default_params", None)
         obs, env_state = self._env.reset(key, params)
         return obs, env_state
 
@@ -95,32 +95,9 @@ class JumanjiWrapper(Wrapper):
 
         truncated = jnp.logical_and(timestep.discount != 0, timestep.step_type == 2)
         terminated = jnp.logical_and(timestep.step_type == 2, ~truncated)
-        # done = jnp.any(jnp.logical_or(terminated, truncated))
+
         info = timestep.extras
         info["DISCOUNT"] = timestep.discount
-        # info[ORIGINAL_OBSERVATION_KEY] = info.pop("next_obs")
-
-        # # Forcing auto-reset
-        # obs_reset, state_reset = self.reset(key)
-        # state = jax.tree.map(
-        #     lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
-        # )
-        # obs = jax.tree.map(lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step)
-
-        # # Insert the original observation in info to bootstrap correctly
-        # try:  # remove action mask if present
-        #     obs_step = jax.tree.map(
-        #         lambda o: o.observation,
-        #         obs_step,
-        #         is_leaf=lambda x: isinstance(x, AgentObservation),
-        #     )
-        # except Exception:
-        #     pass
-        # info[ORIGINAL_OBSERVATION_KEY] = obs_step
-
-        # import equinox as eqx
-
-        # eqx.debug.breakpoint_if(jnp.logical_or(terminated, truncated).any())
 
         timestep = TimeStep(
             observation=obs,
@@ -151,5 +128,46 @@ class JumanjiWrapper(Wrapper):
         space = self._env.action_spec
         space = jumanji_specs_to_gym_spaces(space)
         if isinstance(space, GymnasiumDict):
-            return space["grid"]
+            return {k: v for k, v in space.spaces.items()}
         return space
+
+
+class BraxWrapper(Wrapper):
+    """
+    Wrapper for Brax environments to transform them into the Jymkit environment interface.
+
+    **Arguments:**
+
+    - `_env`: Brax environment.
+    """
+
+    _env: Any
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        env_state = self._env.reset(key)
+        return env_state.obs, env_state
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: int | float
+    ) -> Tuple[TimeStep, TEnvState]:
+        env_state = self._env.step(state, action)
+        timestep = TimeStep(
+            observation=env_state.obs,
+            reward=env_state.reward,
+            terminated=env_state.done,
+            truncated=False,
+            info={},
+        )
+        return timestep, env_state
+
+    @property
+    def observation_space(self) -> Any:
+        from brax.envs.wrappers import gym as braxGym
+
+        return braxGym.GymWrapper(self._env).observation_space
+
+    @property
+    def action_space(self) -> Any:
+        from brax.envs.wrappers import gym as braxGym
+
+        return braxGym.GymWrapper(self._env).action_space
