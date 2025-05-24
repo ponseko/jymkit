@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
 from ._environment import (
+    ORIGINAL_OBSERVATION_KEY,
     AgentObservation,
     TEnvState,
     TimeStep,
@@ -68,7 +69,7 @@ class JumanjiWrapper(Wrapper):
     def __init__(self, env: Any):
         from jumanji.wrappers import AutoResetWrapper
 
-        self._env = AutoResetWrapper(env)
+        self._env = AutoResetWrapper(env, next_obs_in_extras=True)
 
     def _convert_jumanji_obs(self, obs: Any) -> TObservation:  # pyright: ignore[reportInvalidTypeVarUse]
         if isinstance(obs, tuple) and hasattr(obs, "_asdict"):  # NamedTuple
@@ -98,6 +99,8 @@ class JumanjiWrapper(Wrapper):
 
         info = timestep.extras
         info["DISCOUNT"] = timestep.discount
+        next_obs = info.pop("next_obs", None)
+        info[ORIGINAL_OBSERVATION_KEY] = self._convert_jumanji_obs(next_obs)
 
         timestep = TimeStep(
             observation=obs,
