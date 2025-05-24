@@ -16,6 +16,8 @@ from ._wrappers import (
     LogWrapper as LogWrapper,
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
+    ScaleRewardWrapper as ScaleRewardWrapper,
+    TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,

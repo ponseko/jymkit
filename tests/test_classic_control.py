@@ -28,6 +28,7 @@ def test_ppo_on_cartpole():
 def test_ppo_cartpole_with_wrappers():
     env = jym.make("CartPole")
     env = jym.FlattenObservationWrapper(env)
+    env = jym.ScaleRewardWrapper(env, scale=0.1)
     env = jym.LogWrapper(env)
     env = jym.VecEnvWrapper(env)
     env = jym.NormalizeVecRewardWrapper(env, gamma=0.99)
