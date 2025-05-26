@@ -169,9 +169,18 @@ class JumanjiWrapper(Wrapper):
         return space
 
 
+class BraxWrapperState(eqx.Module):
+    brax_env_state: Any  # The state of the Brax environment
+    timestep: int = 0
+
+
 class BraxWrapper(Wrapper):
     """
     Wrapper for Brax environments to transform them into the Jymkit environment interface.
+
+    Note: Brax environments would typically be wrapped with a VmapWrapper, EpisodeWrapper and AutoResetWrapper
+    VmapWrapper is not included here, as it is replaced by the Jymkit's `VecEnvWrapper`.
+    The effects of EpisodeWrapper (truncation) and AutoResetWrapper are merged into this wrapper.
 
     **Arguments:**
 
@@ -179,21 +188,43 @@ class BraxWrapper(Wrapper):
     """
 
     _env: Any
+    max_episode_steps: int = 1000  # Brax defaults to 1000
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, BraxWrapperState]:  # pyright: ignore[reportInvalidTypeVarUse]
         env_state = self._env.reset(key)
-        return env_state.obs, env_state
+        env_state = BraxWrapperState(brax_env_state=env_state, timestep=0)
+        return env_state.brax_env_state.obs, env_state
 
     def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: int | float
-    ) -> Tuple[TimeStep, TEnvState]:
-        env_state = self._env.step(state, action)
+        self, key: PRNGKeyArray, state: BraxWrapperState, action: int | float
+    ) -> Tuple[TimeStep, BraxWrapperState]:
+        brax_env_state = self._env.step(state.brax_env_state, action)
+        state_step = BraxWrapperState(
+            brax_env_state=brax_env_state,
+            timestep=state.timestep + 1,
+        )
+        truncated = state_step.timestep >= self.max_episode_steps
+        terminated = brax_env_state.done
+        info = brax_env_state.info
+
+        # Auto-reset
+        done = jnp.logical_or(terminated, truncated)
+        obs_reset, state_reset = self.reset(key)
+        env_state = jax.tree.map(
+            lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
+        )
+        obs = jax.tree.map(
+            lambda x, y: jax.lax.select(done, x, y), obs_reset, brax_env_state.obs
+        )
+        # Insert the original observation in info to bootstrap correctly
+        info[ORIGINAL_OBSERVATION_KEY] = brax_env_state.obs
+
         timestep = TimeStep(
-            observation=env_state.obs,
-            reward=env_state.reward,
-            terminated=env_state.done,
-            truncated=False,
-            info={},
+            observation=obs,
+            reward=brax_env_state.reward,
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
         )
         return timestep, env_state
 
