@@ -9,16 +9,16 @@ from ._wrappers import Wrapper
 from ._wrappers_ext import BraxWrapper, GymnaxWrapper, JumanjiWrapper
 
 JYMKIT_ENVS = [
-    "CartPole",
-    "Acrobot",
-    "Pendulum",
-    "MountainCar",
-    "ContinuousMountainCar",
+    "CartPole-v1",
+    "Acrobot-v1",
+    "Pendulum-v1",
+    "MountainCar-v0",
+    "ContinuousMountainCar-v0",
 ]
 
 # External environments, requires the respective packages to be installed
-# NOTE: not all gymnax environments are compatible with the latest version of Jax
 GYMNAX_ENVS = [
+    "gymnax:CartPole-v1", "gymnax:Acrobot-v1", "gymnax:Pendulum-v1", "gymnax:MountainCar-v0", "gymnax:ContinuousMountainCar-v0",
     "Asterix-MinAtar", "Breakout-MinAtar", "Freeway-MinAtar",
     "SpaceInvaders-MinAtar", "DeepSea-bsuite", "Catch-bsuite", "MemoryChain-bsuite",
     "UmbrellaChain-bsuite", "DiscountingChain-bsuite", "MNISTBandit-bsuite", "SimpleBandit-bsuite",
@@ -27,13 +27,13 @@ GYMNAX_ENVS = [
 ]  # fmt: skip
 
 JUMANJI_ENVS = [
-    # "Game2048-v1", "GraphColoring-v0", "Minesweeper-v0", "RubiksCube-v0",
-    # "RubiksCube-partly-scrambled-v0", "SlidingTilePuzzle-v0", "Sudoku-v0", "Sudoku-very-easy-v0",
-    # "BinPack-v1", "FlatPack-v0", "JobShop-v0", "Knapsack-v1",
-    # "Tetris-v0", "Cleaner-v0", "Connector-v2", "CVRP-v1",
-    # "MultiCVRP-v0", "Maze-v0", "RobotWarehouse-v0", "Snake-v1",
-    # "TSP-v1", "MMST-v0", "PacMan-v1", "Sokoban-v0",
-    # "LevelBasedForaging-v0", "SearchAndRescue-v0",
+    "Game2048-v1", "GraphColoring-v0", "Minesweeper-v0", "RubiksCube-v0",
+    "RubiksCube-partly-scrambled-v0", "SlidingTilePuzzle-v0", "Sudoku-v0", "Sudoku-very-easy-v0",
+    "BinPack-v1", "FlatPack-v0", "JobShop-v0", "Knapsack-v1",
+    "Tetris-v0", "Cleaner-v0", "Connector-v2", "CVRP-v1",
+    "MultiCVRP-v0", "Maze-v0", "RobotWarehouse-v0", "Snake-v1",
+    "TSP-v1", "MMST-v0", "PacMan-v1", "Sokoban-v0",
+    "LevelBasedForaging-v0", "SearchAndRescue-v0",
 ]  # fmt: skip
 
 BRAX_ENVS = [
@@ -67,15 +67,15 @@ def make(
             )
 
     elif env_name in JYMKIT_ENVS:
-        if env_name == "CartPole":
+        if env_name == "CartPole-v1":
             env = jymkit.envs.CartPole(**env_kwargs)
-        elif env_name == "Acrobot":
+        elif env_name == "Acrobot-v1":
             env = jymkit.envs.Acrobot(**env_kwargs)
-        elif env_name == "Pendulum":
+        elif env_name == "Pendulum-v1":
             env = jymkit.envs.Pendulum(**env_kwargs)
-        elif env_name == "MountainCar":
+        elif env_name == "MountainCar-v0":
             env = jymkit.envs.MountainCar(**env_kwargs)
-        elif env_name == "ContinuousMountainCar":
+        elif env_name == "ContinuousMountainCar-v0":
             env = jymkit.envs.ContinuousMountainCar(**env_kwargs)
 
     elif env_name in GYMNAX_ENVS:
@@ -87,6 +87,7 @@ def make(
                 "Please install it with `pip install gymnax`."
             )
         print(f"Using an environment from Gymnax via gymnax.make({env_name}).")
+        env_name = env_name.strip("gymnax:")
         env, _ = gymnax.make(env_name, **env_kwargs)
         if wrapper is None:
             print(
@@ -131,20 +132,33 @@ def make(
             env = BraxWrapper(env)
     else:
         matches = difflib.get_close_matches(env_name, ALL_ENVS, n=1, cutoff=0.6)
-        envs_per_line = 3
-        max_length = max(len(env) for env in ALL_ENVS)  # Longest env name
+
+        def format_env_group(envs, group_name):
+            if not envs:
+                return ""
+            envs_per_line = 4
+            max_length = max(len(env) for env in envs)
+            formatted_envs = "\n".join(
+                [
+                    " | ".join(
+                        env.ljust(max_length) for env in envs[i : i + envs_per_line]
+                    )
+                    for i in range(0, len(envs), envs_per_line)
+                ]
+            )
+            return f"{group_name}:\n{formatted_envs}\n"
+
         suggestion = (
             f" Did you mean {matches[0]}?"
             if matches
-            else " \nAvailable environments are:\n"
-            + "\n".join(
-                [
-                    " | ".join(
-                        env.ljust(max_length) for env in ALL_ENVS[i : i + envs_per_line]
-                    )
-                    for i in range(0, len(ALL_ENVS), envs_per_line)
-                ]
-            )
+            else " \nAvailable environments are:\n\n"
+            + format_env_group(JYMKIT_ENVS, "JymKit Envs")
+            + "\n"
+            + format_env_group(GYMNAX_ENVS, "Gymnax Envs")
+            + "\n"
+            + format_env_group(JUMANJI_ENVS, "Jumanji Envs")
+            + "\n"
+            + format_env_group(BRAX_ENVS, "Brax Envs")
         )
         raise ValueError(f"Environment {env_name} not found.{suggestion}")
 

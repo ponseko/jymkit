@@ -23,7 +23,9 @@ from ._wrappers import (
     remove_wrapper as remove_wrapper,
 )
 from ._wrappers_ext import (
+    BraxWrapper as BraxWrapper,
     GymnaxWrapper as GymnaxWrapper,
+    JumanjiWrapper as JumanjiWrapper,
 )
 
 make = _make.make
