@@ -145,28 +145,34 @@ class JumanjiWrapper(Wrapper):
         )
         return timestep, state
 
+    def __convert_gymnasium_space_to_dict(self, space: Any) -> Any:
+        """Recursively convert Gymnasium Dict spaces to regular dicts."""
+        from gymnasium.spaces import Dict as GymnasiumDict
+
+        if isinstance(space, GymnasiumDict):
+            # Recursively convert nested spaces and exclude action_mask
+            return {
+                k: self.__convert_gymnasium_space_to_dict(v)
+                for k, v in space.spaces.items()
+                if k != "action_mask"
+            }
+        return space
+
     @property
     def observation_space(self) -> Any:
-        from gymnasium.spaces import Dict as GymnasiumDict
         from jumanji.specs import jumanji_specs_to_gym_spaces
 
         space = self._env.observation_spec
         space = jumanji_specs_to_gym_spaces(space)
-        if isinstance(space, GymnasiumDict):
-            # exclude the action mask
-            return {k: v for k, v in space.spaces.items() if k != "action_mask"}
-        return space
+        return self.__convert_gymnasium_space_to_dict(space)
 
     @property
     def action_space(self) -> Any:
-        from gymnasium.spaces import Dict as GymnasiumDict
         from jumanji.specs import jumanji_specs_to_gym_spaces
 
         space = self._env.action_spec
         space = jumanji_specs_to_gym_spaces(space)
-        if isinstance(space, GymnasiumDict):
-            return {k: v for k, v in space.spaces.items()}
-        return space
+        return self.__convert_gymnasium_space_to_dict(space)
 
 
 class BraxWrapperState(eqx.Module):

@@ -26,6 +26,19 @@ def test_gymnax_breakout():
 
 @pytest.mark.parametrize(
     "env_name",
+    ["Snake-v1", "Game2048-v1", "Cleaner-v0", "Maze-v0"],
+)
+def test_jumanji_envs(env_name):
+    if importlib.util.find_spec("jumanji") is None:
+        pytest.skip("Jumanji is not installed.")
+    env = jymkit.make(env_name)
+    agent = jymkit.algorithms.PPO(num_envs=2, total_timesteps=1000, num_epochs=1)
+    env = jymkit.FlattenObservationWrapper(env)
+    agent = agent.train(jax.random.PRNGKey(1), env)
+
+
+@pytest.mark.parametrize(
+    "env_name",
     [
         "ant",
         "halfcheetah",
