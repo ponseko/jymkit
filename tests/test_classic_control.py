@@ -26,8 +26,9 @@ def test_ppo_on_cartpole():
 
 
 def test_ppo_cartpole_with_wrappers():
-    env = jym.make("CartPole")
+    env = jym.make("CartPole-v1")
     env = jym.FlattenObservationWrapper(env)
+    env = jym.ScaleRewardWrapper(env, scale=0.1)
     env = jym.LogWrapper(env)
     env = jym.VecEnvWrapper(env)
     env = jym.NormalizeVecRewardWrapper(env, gamma=0.99)
@@ -40,11 +41,11 @@ def test_ppo_cartpole_with_wrappers():
 @pytest.mark.parametrize(
     "env_name",
     [
-        "CartPole",
-        "MountainCar",
-        "Acrobot",
-        "Pendulum",
-        "ContinuousMountainCar",
+        "CartPole-v1",
+        "MountainCar-v0",
+        "Acrobot-v1",
+        "Pendulum-v1",
+        "ContinuousMountainCar-v0",
     ],
 )
 def test_classic_control_envs_step(env_name):
@@ -60,11 +61,11 @@ def test_classic_control_envs_step(env_name):
 @pytest.mark.parametrize(
     "env_name",
     [
-        "CartPole",
-        "MountainCar",
-        "Acrobot",
-        "Pendulum",
-        "ContinuousMountainCar",
+        "CartPole-v1",
+        "MountainCar-v0",
+        "Acrobot-v1",
+        "Pendulum-v1",
+        "ContinuousMountainCar-v0",
     ],
 )
 def test_class_control_envs_ppo_short(env_name):

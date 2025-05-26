@@ -1,3 +1,4 @@
+import logging
 from dataclasses import replace
 from functools import partial
 from typing import Callable, Literal, Optional, Tuple
@@ -18,6 +19,8 @@ from jymkit.algorithms.utils import (
     split_key_over_agents,
     transform_multi_agent,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PPOState(eqx.Module):
@@ -125,7 +128,7 @@ class PPO(RLAlgorithm):
 
         make_ppo_state = PPOState.make
         if self.multi_agent_env:
-            print(
+            logger.info(
                 "Multi-agent environment detected.",
                 f"Generating {env.agent_structure.num_leaves} agents.",
             )
@@ -442,8 +445,9 @@ class PPO(RLAlgorithm):
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
+        self.__check_env__(env)
         if not is_wrapped(env, VecEnvWrapper):
-            print("Wrapping environment in VecEnvWrapper")
+            logger.info("Wrapping environment in VecEnvWrapper")
             env = VecEnvWrapper(env)
 
         if not self.is_initialized:

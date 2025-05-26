@@ -1,6 +1,6 @@
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any, Tuple
+from typing import Any, Callable, Tuple
 
 import equinox as eqx
 import jax
@@ -460,3 +460,40 @@ class FlattenObservationWrapper(Wrapper):
             return _space
 
         return jax.tree.map(get_flat_shape, obs_space)
+
+
+class TransformRewardWrapper(Wrapper):
+    """
+    Transform the rewards of the environment using a given function.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    - `transform_fn`: Function to transform the rewards.
+    """
+
+    transform_fn: Callable
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[TimeStep, TEnvState]:
+        timestep, env_state = self._env.step(key, state, action)
+        transformed_reward = jax.tree.map(self.transform_fn, timestep.reward)
+        return timestep._replace(reward=transformed_reward), env_state
+
+
+class ScaleRewardWrapper(TransformRewardWrapper):
+    """
+    Scale the rewards of the environment by a given factor.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    - `scale`: Factor to scale the rewards by.
+    """
+
+    scale: float
+
+    def __init__(self, env: Environment, scale: float = 1.0):
+        super().__init__(env, transform_fn=lambda r: r * scale)
+        self.scale = scale

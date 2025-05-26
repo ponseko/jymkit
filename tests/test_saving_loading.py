@@ -10,7 +10,7 @@ import jymkit.algorithms
 
 def test_saving_loading(tmp_path):
     # Create a simple environment
-    env = jymkit.make("CartPole")
+    env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
     agent = jymkit.algorithms.PPO(
@@ -48,7 +48,7 @@ def test_saving_loading(tmp_path):
 
 def test_cloudpickle_saving(tmp_path):
     # Create a simple environment
-    env = jymkit.make("CartPole")
+    env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
     agent = jymkit.algorithms.PPO(
