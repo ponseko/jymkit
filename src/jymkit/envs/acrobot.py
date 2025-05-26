@@ -38,7 +38,7 @@ class Acrobot(Environment):
         default_factory=lambda: jnp.array([-1.0, 0.0, +1.0])
     )
 
-    max_steps_in_episode: int = 500
+    max_episode_steps: int = 500
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: int
@@ -123,7 +123,7 @@ class Acrobot(Environment):
         return target_height_reached
 
     def get_truncated(self, state: EnvState) -> bool:
-        return state.time >= self.max_steps_in_episode
+        return state.time >= self.max_episode_steps
 
     @property
     def observation_space(self) -> Box:
