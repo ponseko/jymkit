@@ -5,7 +5,7 @@ JymKit lets you
 
 1. 🕹️ Import your favourite environments from various libraries with a single API and automatically wrap them to a common standard.
 2. 🚀 Bootstrap new JAX RL projects with a single CLI command and get started instantly with a complete codebase.
-3. 🤖 JymKit comes equiped with standard **general** RL implementations based on a near-single-file philosophy. You can either import these as off-the-shelf algorithms or copy over the code and tweak them for your problem.
+3. 🤖 JymKit comes equiped with standard **general** RL implementations based on a near-single-file philosophy. You can either import these as off-the-shelf algorithms or copy over the code and tweak them for your problem. These algorithms follow the ideas of [PureJaxRL](https://github.com/luchris429/purejaxrl) for extremely fast end-to-end RL training in JAX.
 
 📖 More details over at the [Documentation](https://ponseko.github.io/jymkit/)
 
