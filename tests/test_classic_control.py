@@ -41,7 +41,7 @@ def test_ppo_cartpole_with_wrappers():
 @pytest.mark.parametrize(
     "env_name",
     [
-        "CartPolev-v1",
+        "CartPole-v1",
         "MountainCar-v0",
         "Acrobot-v1",
         "Pendulum-v1",
@@ -61,7 +61,7 @@ def test_classic_control_envs_step(env_name):
 @pytest.mark.parametrize(
     "env_name",
     [
-        "CartPolev-v1",
+        "CartPole-v1",
         "MountainCar-v0",
         "Acrobot-v1",
         "Pendulum-v1",
