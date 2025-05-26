@@ -1,5 +1,7 @@
 from typing import Any, Tuple
 
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
@@ -21,9 +23,13 @@ class GymnaxWrapper(Wrapper):
     **Arguments:**
 
     - `_env`: Gymnax environment.
+    - `handle_truncation`: If True, the wrapper will reimplement the autoreset behavior to include
+        truncated information and the terminal_observation in the info dictionary. If False, the wrapper will mirror
+        the Gymnax behavior by ignoring truncations. Default=True.
     """
 
     _env: Any
+    handle_truncation: bool = True
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         params = getattr(self._env, "default_params", None)
@@ -31,10 +37,38 @@ class GymnaxWrapper(Wrapper):
         return obs, env_state
 
     def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: int | float
-    ) -> Tuple[TimeStep, TEnvState]:
-        obs, env_state, reward, done, info = self._env.step(key, state, action)
-        terminated, truncated = done, False
+        self, key: PRNGKeyArray, state: Any, action: int | float
+    ) -> Tuple[TimeStep, Any]:
+        if not self.handle_truncation:
+            obs, env_state, reward, done, info = self._env.step(key, state, action)
+            terminated, truncated = done, False
+        else:
+            # We increase max_steps_in_episode by 1 so that the done flag from Gymnax
+            # only triggers when the episode terminates without truncation.
+            # Then we set truncate manually in this wrapper based on the original max_steps_in_episode.
+            _params = getattr(self._env, "default_params")  # is dataclass
+            original_max_steps = _params.max_steps_in_episode
+            altered_params = eqx.tree_at(
+                lambda x: x.max_steps_in_episode, _params, replace_fn=lambda x: x + 1
+            )
+            obs_step, state_step, reward, done, info = self._env.step_env(
+                key, state, action, altered_params
+            )
+            terminated = done  # did not truncate due to the +1 in max_steps_in_episode
+            truncated = state_step.time >= original_max_steps
+
+            # Auto-reset manually since we used gymnax_env.step_env(...) instead of gymnax_env.step(...)
+            done = jnp.logical_or(terminated, truncated)
+            obs_reset, state_reset = self.reset(key)
+            env_state = jax.tree.map(
+                lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
+            )
+            obs = jax.tree.map(
+                lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step
+            )
+            # Insert the original observation in info to bootstrap correctly
+            info[ORIGINAL_OBSERVATION_KEY] = obs_step
+
         timestep = TimeStep(
             observation=obs,
             reward=reward,
