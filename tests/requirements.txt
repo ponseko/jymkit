@@ -1,6 +1,7 @@
 pytest
 gymnax
 brax
+jumanji
 econojax @ git+https://github.com/ponseko/econojax
 jax==0.5.3
 rice_jax @ git+https://github.com/mila-iqia/climate-cooperation-competition@GAIA_jax#subdirectory=rice_jax
