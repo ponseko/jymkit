@@ -1,3 +1,4 @@
+from ._buffer import TransitionBuffer as TransitionBuffer
 from ._logging import (
     scan_callback as scan_callback,
 )
