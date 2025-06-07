@@ -96,9 +96,17 @@ class Wrapper(Environment):
         return self._env.reset_env(key)
 
     def step_env(
-        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[Real[Array, "..."]]
     ) -> Tuple[TimeStep, TEnvState]:
         return self._env.step_env(key, state, action)
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, Any]:  # pyright: ignore[reportInvalidTypeVarUse]
+        return self._env.reset(key)
+
+    def step(
+        self, key: PRNGKeyArray, state: Any, action: PyTree[Real[Array, "..."]]
+    ) -> Tuple[TimeStep, Any]:
+        return self._env.step(key, state, action)
 
     @property
     def action_space(self) -> Space | PyTree[Space]:
@@ -495,5 +503,6 @@ class ScaleRewardWrapper(TransformRewardWrapper):
     scale: float
 
     def __init__(self, env: Environment, scale: float = 1.0):
-        super().__init__(env, transform_fn=lambda r: r * scale)
+        self._env = env
         self.scale = scale
+        self.transform_fn = lambda r: r * scale
