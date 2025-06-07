@@ -3,20 +3,21 @@ from typing import Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, PyTree, PyTreeDef
+from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 
 class Transition(eqx.Module):
     observation: Array
     action: Array
-    reward: Float[Array, "..."]
-    terminated: Bool[Array, "..."]
-    log_prob: Array
-    info: dict
-    value: Array
-    next_value: Array
-    return_: Optional[Array] = None
-    advantage_: Optional[Array] = None
+    reward: Float[Array, " "]
+    terminated: Bool[Array, " "]
+    log_prob: Optional[Float[Array, "..."]] = None
+    info: Optional[dict] = None
+    value: Optional[Float[Array, " "]] = None
+    next_value: Optional[Float[Array, " "]] = None
+    next_observation: Optional[Array] = None
+    return_: Optional[Float[Array, " "]] = None
+    advantage_: Optional[Float[Array, "..."]] = None
 
     @property
     def structure(self) -> PyTreeDef:
@@ -67,6 +68,9 @@ class Transition(eqx.Module):
         fields = {}
         for f in field_names:
             attr = getattr(self, f)
+            if attr is None:
+                fields[f] = None
+                continue
             fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
 
         per_agent_transitions = []
@@ -77,7 +81,6 @@ class Transition(eqx.Module):
                     for field_name in field_names
                     if field_name != "info"
                     and (fields[field_name] is not None)
-                    # and field_name != "advantage_"
                     and field_name != "terminated"
                 },
                 terminated=fields["terminated"][0],
@@ -86,3 +89,59 @@ class Transition(eqx.Module):
             per_agent_transitions.append(agent_transition)
 
         return jax.tree.unflatten(self.structure, per_agent_transitions)
+
+    def make_minibatches(
+        self,
+        key: PRNGKeyArray,
+        n_minibatches: int,
+        n_epochs: int = 1,
+        n_batch_axis: int = 1,
+    ) -> "Transition":
+        """
+        Creates shuffled minibatches from the transition.
+        Returns a copy of the transition with each leaf reshaped to (num_minibatches, ...),
+
+        This function first flattens the transition over the leading n_batch_axis.
+        This is useful if your data hasn't been flattened yet and may be structured as
+        (rollout_length, num_envs, ...), where num_envs is the number of parallel environments.
+
+        If n_epochs > 1, it will create n_epochs copies of the minibatches. and stack these
+        such that there is a single leading axis to scan over for training.
+
+        **Arguments:**
+        - `key`: JAX PRNG key for randomization.
+        - `num_minibatches`: Number of minibatches to create.
+        - `n_epochs`: Number of copies the minibatches should be stacked.
+        - `n_batch_axis`: Number of leading batch axes to flatten over. Default is 1 (already flattened).
+        """
+
+        def create_minibatch(rng, _):
+            rng, key = jax.random.split(rng)
+
+            # Random permutation of the batch indices
+            batch_idx = jax.random.permutation(key, batch_size)
+
+            # take from the batch in a new order (the order of the randomized batch_idx)
+            shuffled_batch = jax.tree.map(
+                lambda x: jnp.take(x, batch_idx, axis=0), batch
+            )
+
+            # split in minibatches
+            minibatches = jax.tree.map(
+                lambda x: x.reshape((n_minibatches, -1) + x.shape[1:]), shuffled_batch
+            )
+            return rng, minibatches
+
+        # reshape (flatten over all batch axes)
+        batch = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[n_batch_axis:]), self)
+        batch_size = jax.tree.leaves(batch)[0].shape[0]
+
+        # Create n_epochs of minibatches
+        rng, minibatches = jax.lax.scan(create_minibatch, key, None, n_epochs)
+
+        # (n_epochs, n_minibatches, ...) --> (n_epochs * n_minibatches, ...)
+        minibatches = jax.tree.map(
+            lambda x: x.reshape((-1,) + x.shape[2:]), minibatches
+        )
+
+        return minibatches
