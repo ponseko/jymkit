@@ -1,6 +1,5 @@
 import logging
 from dataclasses import replace
-from functools import partial
 from typing import Callable, Literal, Optional, Tuple
 
 import equinox as eqx
@@ -160,16 +159,20 @@ class PPO(RLAlgorithm):
         if not self.is_initialized:
             self = self.init(key, env)
 
-        def _collect_rollout(rollout_state: tuple, env: Environment):
+        def _collect_rollout(train_state: PPOState, rollout_state, env: Environment):
             def env_step(rollout_state, _):
-                self, env_state, last_obs, rng = rollout_state
+                @transform_multi_agent(multi_agent=self.multi_agent_env)
+                def get_action_and_log_prob(current_state: PPOState, key, observation):
+                    action_dist = jax.vmap(current_state.actor)(observation)
+                    return action_dist.sample_and_log_prob(seed=key)
+
+                env_state, last_obs, rng = rollout_state
                 rng, sample_key, step_key = jax.random.split(rng, 3)
 
                 # select an action
-                sample_key = jax.random.split(sample_key, self.num_envs)
-                get_action_and_log_prob = partial(self.get_action, get_log_prob=True)
-                action, log_prob = jax.vmap(get_action_and_log_prob)(
-                    sample_key, last_obs
+                sample_key = split_key_over_agents(sample_key, env.agent_structure)
+                action, log_prob = get_action_and_log_prob(
+                    train_state, sample_key, last_obs
                 )
 
                 # take a step in the environment
@@ -208,7 +211,7 @@ class PPO(RLAlgorithm):
                     next_value=next_value,
                 )
 
-                rollout_state = (self, env_state, obsv, rng)
+                rollout_state = (env_state, obsv, rng)
                 return rollout_state, transition
 
             def compute_gae(gae, transition: Transition):
@@ -220,9 +223,8 @@ class PPO(RLAlgorithm):
                 next_value = transition.view_flat.next_value
                 done = transition.view_flat.terminated
 
-                if done.ndim < reward.ndim:
-                    # correct for multi-agent envs that do not return done flags per agent
-                    done = jnp.expand_dims(done, axis=-1)
+                # Correct for multi-agent envs that do not return done flags per agent
+                done = jnp.broadcast_to(done[..., None], reward.shape)
 
                 delta = reward + self.gamma * next_value * (1 - done) - value
                 gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
@@ -345,8 +347,10 @@ class PPO(RLAlgorithm):
             """
 
             # Do rollout of single trajactory
-            (self, env_state, last_obs, rng), trajectory_batch = _collect_rollout(
-                runner_state, env
+            train_state = runner_state[0]
+            rollout_state = runner_state[1:]
+            (env_state, last_obs, rng), trajectory_batch = _collect_rollout(
+                train_state, rollout_state, env
             )
 
             # Make train batch
@@ -355,22 +359,21 @@ class PPO(RLAlgorithm):
             )
 
             # Update
-            updated_state, _ = jax.lax.scan(
+            train_state, _ = jax.lax.scan(
                 _update_agent_state, self.state, train_data.view_transposed
             )
-            self = replace(self, state=updated_state)
 
             metric = trajectory_batch.info
-            runner_state = (self, env_state, last_obs, rng)
+            runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (self, env_state, obsv, key)
+        runner_state = (self.state, env_state, obsv, key)
         runner_state, metrics = jax.lax.scan(
             train_iteration, runner_state, jnp.arange(self.num_iterations)
         )
-        updated_self = runner_state[0]
-        return updated_self
+        updated_state = runner_state[0]
+        return replace(self, state=updated_state)
 
     def evaluate(
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10

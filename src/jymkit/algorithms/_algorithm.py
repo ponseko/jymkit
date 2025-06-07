@@ -44,9 +44,8 @@ class RLAlgorithm(eqx.Module):
                 "that may not be compatible with this algorithm. "
                 "If this is the case, training will crash during compilation."
             )
-        if vectorized:
-            if not is_wrapped(env, VecEnvWrapper):
-                logger.info("Wrapping environment in VecEnvWrapper")
-                env = VecEnvWrapper(env)
+        if vectorized and not is_wrapped(env, VecEnvWrapper):
+            logger.info("Wrapping environment in VecEnvWrapper")
+            env = VecEnvWrapper(env)
 
         return env

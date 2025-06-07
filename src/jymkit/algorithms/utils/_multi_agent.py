@@ -25,6 +25,8 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
     as many keys as there are leaves in the pytree.
     Useful when provided with a flat pytree of agents.
 
+    Similar to `optax.tree_utils.tree_split_key_like`, but operates on PyTreeDefs.
+
     *Arguments*:
         `key`: A PRNGKeyArray to be split.
         `agent_structure`: A pytree structure of agents.
