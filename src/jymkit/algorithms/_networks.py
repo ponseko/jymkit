@@ -100,12 +100,22 @@ class ActionLinear(eqx.Module):
     space_type: Literal["Discrete", "MultiDiscrete", "Continuous"] = eqx.field(
         static=True
     )
+    raw_outputs: bool = eqx.field(
+        static=True, default=False
+    )  # Output raw logits instead of distributions
 
-    def __init__(self, key: PRNGKeyArray, space: jym.Space, in_features: int):
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        space: jym.Space,
+        in_features: int,
+        raw_outputs: bool = False,
+    ):
         assert len(space.shape) <= 1, (
             f"Currently, only 0D or 1D spaces are supported. Got {space.shape}. ",
             "For higher dimensions, use a composite of spaces or a custom network.",
         )
+        self.raw_outputs = raw_outputs
 
         # Determine the type of space and get the number and dimension of outputs
         if hasattr(space, "nvec"):
@@ -142,11 +152,13 @@ class ActionLinear(eqx.Module):
         if action_mask is not None:
             logits = self._apply_action_mask(logits, action_mask)
 
+        if self.raw_outputs:
+            return logits
+
         if self.space_type == "Continuous":
             return distrax.Normal(
                 loc=logits[..., 0], scale=jax.nn.softplus(logits[..., 1])
             )
-
         return distrax.Categorical(logits=logits)
 
     def _apply_action_mask(self, logits, action_mask):
