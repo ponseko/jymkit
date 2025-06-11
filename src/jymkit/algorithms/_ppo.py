@@ -68,13 +68,6 @@ class PPO(RLAlgorithm):
     def batch_size(self):
         return self.minibatch_size * self.num_minibatches
 
-    def get_value(self, observation: PyTree[Array]):
-        @transform_multi_agent(multi_agent=self.multi_agent_env)
-        def _get_value(agent: PPOState, obs):
-            return agent.critic(obs)
-
-        return _get_value(self.state, observation)
-
     def get_action(self, key: PRNGKeyArray, observation, get_log_prob=False):
         @transform_multi_agent(multi_agent=self.multi_agent_env)
         def _get_action(agent: PPOState, key: PRNGKeyArray, obs):
@@ -159,11 +152,15 @@ class PPO(RLAlgorithm):
         if not self.is_initialized:
             self = self.init(key, env)
 
-        def _collect_rollout(train_state: PPOState, rollout_state, env: Environment):
+        def _collect_rollout(train_state: PPOState, rollout_state):
             def env_step(rollout_state, _):
                 @transform_multi_agent(multi_agent=self.multi_agent_env)
-                def get_action_and_log_prob(current_state: PPOState, key, observation):
-                    action_dist = jax.vmap(current_state.actor)(observation)
+                def get_value(agent: PPOState, observation):
+                    return jax.vmap(agent.critic)(observation)
+
+                @transform_multi_agent(multi_agent=self.multi_agent_env)
+                def get_action_and_log_prob(agent: PPOState, key, observation):
+                    action_dist = jax.vmap(agent.actor)(observation)
                     return action_dist.sample_and_log_prob(seed=key)
 
                 env_state, last_obs, rng = rollout_state
@@ -181,13 +178,11 @@ class PPO(RLAlgorithm):
                     step_key, env_state, action
                 )
 
-                value = jax.vmap(self.get_value)(last_obs)
+                value = get_value(train_state, last_obs)
                 try:  # Try to bootstrap correctly
-                    next_value = jax.vmap(self.get_value)(
-                        info[ORIGINAL_OBSERVATION_KEY]
-                    )
+                    next_value = get_value(train_state, info[ORIGINAL_OBSERVATION_KEY])
                 except KeyError:
-                    next_value = jax.vmap(self.get_value)(obsv)
+                    next_value = get_value(train_state, obsv)
                     done = jnp.logical_or(terminated, truncated)
                     next_value = jax.tree.map(
                         lambda nv, d: nv * (1 - d), next_value, done
@@ -223,8 +218,9 @@ class PPO(RLAlgorithm):
                 next_value = transition.view_flat.next_value
                 done = transition.view_flat.terminated
 
-                # Correct for multi-agent envs that do not return done flags per agent
-                done = jnp.broadcast_to(done[..., None], reward.shape)
+                if done.ndim < reward.ndim:
+                    # correct for multi-agent envs that do not return done flags per agent
+                    done = jnp.expand_dims(done, axis=-1)
 
                 delta = reward + self.gamma * next_value * (1 - done) - value
                 gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
@@ -350,7 +346,7 @@ class PPO(RLAlgorithm):
             train_state = runner_state[0]
             rollout_state = runner_state[1:]
             (env_state, last_obs, rng), trajectory_batch = _collect_rollout(
-                train_state, rollout_state, env
+                train_state, rollout_state
             )
 
             # Make train batch
@@ -360,7 +356,7 @@ class PPO(RLAlgorithm):
 
             # Update
             train_state, _ = jax.lax.scan(
-                _update_agent_state, self.state, train_data.view_transposed
+                _update_agent_state, train_state, train_data.view_transposed
             )
 
             metric = trajectory_batch.info
