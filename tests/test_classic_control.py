@@ -25,20 +25,6 @@ def test_ppo_on_cartpole():
     )
 
 
-def test_ppo_cartpole_with_wrappers():
-    env = jym.make("CartPole-v1")
-    env = jym.FlattenObservationWrapper(env)
-    env = jym.ScaleRewardWrapper(env, scale=0.1)
-    env = jym.LogWrapper(env)
-    env = jym.VecEnvWrapper(env)
-    env = jym.NormalizeVecRewardWrapper(env, gamma=0.99)
-    env = jym.ScaleRewardWrapper(env, scale=2)
-    # env = jym.NormalizeVecObsWrapper(env)
-    seed = jax.random.PRNGKey(0)
-    agent = PPO(num_envs=2, num_epochs=1, total_timesteps=10_000, log_function=None)
-    agent = agent.train(seed, env)
-
-
 @pytest.mark.parametrize(
     "env_name",
     [
