@@ -18,7 +18,6 @@ jobs:
                 cp ${{ github.workspace }}/pyproject.toml ./pyproject.toml
                 export JYMKIT_SKIP_CLI_TEST=1
                 uv sync --dev --no-install-project --inexact
-                uv pip install -r tests/requirements.txt
                 uv run --no-sync pytest
             pypi-token: ${{ secrets.pypi_token }}
             github-user: ponseko

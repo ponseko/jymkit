@@ -1,4 +1,7 @@
+import importlib.util
+
 import jax
+import pytest
 
 import jymkit as jym
 from jymkit.algorithms import PPO
@@ -39,6 +42,8 @@ def test_discretization_single_action():
 
 
 def test_discretization_multi_action():
+    if importlib.util.find_spec("jumanji") is None:
+        pytest.skip("Jumanji is not installed.")
     env = jym.make("hopper")
     env = jym.DiscreteActionWrapper(env, num_actions=10)
 
