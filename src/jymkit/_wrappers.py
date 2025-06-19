@@ -6,7 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree, Real
+from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 
 from ._environment import (
     ORIGINAL_OBSERVATION_KEY,
@@ -16,7 +16,7 @@ from ._environment import (
     TimeStep,
     TObservation,
 )
-from ._spaces import Space
+from ._spaces import Discrete, MultiDiscrete, Space
 
 
 def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
@@ -506,3 +506,60 @@ class ScaleRewardWrapper(TransformRewardWrapper):
         self._env = env
         self.scale = scale
         self.transform_fn = lambda r: r * scale
+
+
+class DiscreteActionWrapper(Wrapper):
+    """
+    Wrapper to convert continuous actions to discrete actions.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    - `num_actions`: Number of discrete actions to convert to.
+    """
+
+    num_actions: int
+
+    def step(
+        self,
+        key: PRNGKeyArray,
+        state: TEnvState,
+        action: int | Int[Array, " num_actions"],
+    ) -> Tuple[TimeStep, TEnvState]:
+        # Convert the (multi)discrete action back to a continuous action
+        original_action_space = self.original_action_space
+        assert hasattr(original_action_space, "low") and hasattr(
+            original_action_space, "high"
+        ), (
+            "Original action space must have 'low' and 'high' attributes. Is this a continuous action space?"
+        )
+        action = original_action_space.low + (action / (self.num_actions - 1)) * (  # type: ignore
+            original_action_space.high - original_action_space.low  # type: ignore
+        )
+        return self._env.step(key, state, action)
+
+    @property
+    def action_space(self) -> Discrete | MultiDiscrete:
+        def convert_to_discrete_or_multi_discrete(space):
+            assert hasattr(space, "shape")
+            if space.shape == () or space.shape == (1,):
+                return Discrete(self.num_actions)
+            elif len(space.shape) == 1:
+                return MultiDiscrete(nvec=np.array([self.num_actions] * space.shape[0]))
+            else:
+                raise ValueError(
+                    f"Action space of shape {space.shape} is not supported for DiscreteActionWrapper."
+                    "Please raise an issue on GitHub if you need this feature."
+                )
+
+        return jax.tree.map(
+            convert_to_discrete_or_multi_discrete, self._env.action_space
+        )
+
+    @property
+    def original_action_space(self) -> Space:
+        """
+        Return the original action space of the environment.
+        This is useful for algorithms that need to know the original action space.
+        """
+        return self._env.action_space

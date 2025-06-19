@@ -25,6 +25,8 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
     as many keys as there are leaves in the pytree.
     Useful when provided with a flat pytree of agents.
 
+    Similar to `optax.tree_utils.tree_split_key_like`, but operates on PyTreeDefs.
+
     *Arguments*:
         `key`: A PRNGKeyArray to be split.
         `agent_structure`: A pytree structure of agents.
@@ -36,9 +38,32 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
 
 def transform_multi_agent(
     func: Optional[Callable] = None,
-    shared_argnames: list[str] = [],
-    identity: bool = False,
+    multi_agent: bool = False,
+    shared_argnames: Optional[list[str]] = None,
 ) -> Callable:
+    """
+    Decorator to transform a function to work with multiple agents when `multi_agent` is True.
+    If `multi_agent` is False, this decorator returns the identity function.
+
+    **Arguments**:
+        `func`: The function to be transformed. If None, returns a decorator.
+        `multi_agent`: If True, the function will be transformed to work with multiple agents.
+        `shared_argnames`: A optional list of argument names that are shared across agents. If None, the first argument is assumed to be a per-agent argument.
+        All arguments with the same first-level PyTree structure are also considered per-agent arguments. The rest are considered shared arguments.
+
+    **Usage**:
+    ```python
+    @transform_multi_agent(multi_agent=is_multi_agent)
+    def my_function(...):
+        # Function logic here
+    ```
+    or
+    ```python
+    def my_function(...):
+        # Function logic here
+    my_function = transform_multi_agent(my_function, multi_agent=is_multi_agent)
+    ```
+    """
     assert callable(func) or func is None
 
     def _treemap_each_agent(agent_func: Callable, agent_args: dict):
@@ -67,7 +92,7 @@ def transform_multi_agent(
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            if identity:
+            if not multi_agent:
                 return func(*args, **kwargs)
 
             # Map positional args to their respective keyword arguments
@@ -78,10 +103,35 @@ def transform_multi_agent(
                 if i < len(kw_args):
                     kwargs[kw_args[i]] = arg
 
+            def maybe_infer_shared_argnames():
+                """
+                Infer shared argument names based on the first argument's structure.
+                If `shared_argnames` is provided, it will be used directly.
+                Otherwise, it will infer from the first argument's structure.
+                """
+                if shared_argnames is not None:
+                    return shared_argnames
+                first_arg = kwargs.get(kw_args[0])
+                agent_structure = jax.tree.structure(
+                    first_arg, is_leaf=lambda x: x is not first_arg
+                )
+                return [
+                    k
+                    for k in kwargs.keys()
+                    if agent_structure
+                    != jax.tree.structure(
+                        kwargs[k], is_leaf=lambda x: x is not kwargs[k]
+                    )
+                ]
+
             # Separate shared and per-agent args
-            shared_args = {k: v for k, v in kwargs.items() if k in shared_argnames}
+            shared_args = {
+                k: v for k, v in kwargs.items() if k in maybe_infer_shared_argnames()
+            }
             per_agent_args = {
-                k: v for k, v in kwargs.items() if k not in shared_argnames
+                k: v
+                for k, v in kwargs.items()
+                if k not in maybe_infer_shared_argnames()
             }
 
             # Prepare a function that takes only per-agent args
