@@ -4,7 +4,7 @@ try:
 
     from ._networks import (
         ActorNetwork as ActorNetwork,
-        CriticNetwork as CriticNetwork,
+        ValueNetwork as ValueNetwork,
     )
     from ._ppo import PPO as PPO
 

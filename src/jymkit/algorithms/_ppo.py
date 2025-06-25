@@ -11,7 +11,7 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
-from jymkit.algorithms import ActorNetwork, CriticNetwork, RLAlgorithm
+from jymkit.algorithms import ActorNetwork, RLAlgorithm, ValueNetwork
 from jymkit.algorithms.utils import (
     Transition,
     scan_callback,
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class PPOState(eqx.Module):
     actor: ActorNetwork
-    critic: CriticNetwork
+    critic: ValueNetwork
     optimizer_state: optax.OptState
 
 
@@ -68,12 +68,10 @@ class PPO(RLAlgorithm):
     def batch_size(self):
         return self.minibatch_size * self.num_minibatches
 
-    def get_action(self, key: PRNGKeyArray, observation, get_log_prob=False):
+    def get_action(self, key: PRNGKeyArray, observation):
         @transform_multi_agent(multi_agent=self.multi_agent_env)
         def _get_action(agent: PPOState, key: PRNGKeyArray, obs):
             action_dist = agent.actor(obs)
-            if get_log_prob:
-                return action_dist.sample_and_log_prob(seed=key)
             return action_dist.sample(seed=key)
 
         structure = jax.tree.structure(
@@ -104,7 +102,7 @@ class PPO(RLAlgorithm):
                 output_space=output_space,
                 use_bronet=use_bronet,
             )
-            critic = CriticNetwork(
+            critic = ValueNetwork(
                 key=critic_key,
                 obs_space=obs_space,
                 hidden_dims=critic_features,
@@ -123,9 +121,9 @@ class PPO(RLAlgorithm):
         # TODO: can define multiple optimizers by using map
         optimizer = optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adam(
+            optax.adabelief(
                 learning_rate=self.learning_rate,
-                eps=1e-5,
+                # eps=1e-5,
             ),
         )
 
@@ -159,7 +157,7 @@ class PPO(RLAlgorithm):
                     return jax.vmap(agent.critic)(observation)
 
                 @transform_multi_agent(multi_agent=self.multi_agent_env)
-                def get_action_and_log_prob(agent: PPOState, key, observation):
+                def get_action_and_log_prob(key, agent: PPOState, observation):
                     action_dist = jax.vmap(agent.actor)(observation)
                     return action_dist.sample_and_log_prob(seed=key)
 
@@ -262,7 +260,7 @@ class PPO(RLAlgorithm):
         ) -> Tuple[PPOState, None]:
             @eqx.filter_grad
             def __ppo_los_fn(
-                params: Tuple[ActorNetwork, CriticNetwork],
+                params: Tuple[ActorNetwork, ValueNetwork],
                 train_batch: Transition,
             ):
                 assert train_batch.advantage_ is not None

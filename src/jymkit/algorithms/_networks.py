@@ -180,12 +180,6 @@ class ActionLinear(eqx.Module):
 
 
 class ActorNetwork(eqx.Module):
-    """
-    A Basic class for RL agents that can be used to create actor and critic networks
-    with different architectures.
-    This agent will flatten all observations and treat it as a single vector.
-    """
-
     layers: list
 
     def __init__(
@@ -239,13 +233,7 @@ class ActorNetwork(eqx.Module):
         return action_dists
 
 
-class CriticNetwork(eqx.Module):
-    """
-    A Basic class for RL agents that can be used to create actor and critic networks
-    with different architectures.
-    This agent will flatten all observations and treat it as a single vector.
-    """
-
+class ValueNetwork(eqx.Module):
     layers: list
 
     def __init__(
