@@ -19,14 +19,18 @@ from ._environment import (
 from ._spaces import Discrete, MultiDiscrete, Space
 
 
-def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
+def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
     """
     Check if the environment is wrapped with a specific wrapper class.
     """
     current_env = wrapped_env
     while isinstance(current_env, Wrapper):
-        if isinstance(current_env, wrapper_class):
-            return True
+        if isinstance(wrapper_class, str):  # Handle string class names
+            if current_env.__class__.__name__ == wrapper_class:
+                return True
+        else:  # Handle class type inputs
+            if isinstance(current_env, wrapper_class):
+                return True
         current_env = current_env._env
     return False
 
