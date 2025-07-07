@@ -1,6 +1,7 @@
 import logging
 from abc import abstractmethod
 from dataclasses import replace
+from typing import Any, Callable, Literal, Optional
 
 import equinox as eqx
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
@@ -12,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 class RLAlgorithm(eqx.Module):
     state: eqx.AbstractVar[PyTree[eqx.Module]]
+
+    multi_agent: bool = eqx.field(static=True, default=False)
+    policy_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
+        static=True, default="simple"
+    )
+    log_interval: int | float = eqx.field(static=True, default=0.05)
 
     @property
     def is_initialized(self) -> bool:

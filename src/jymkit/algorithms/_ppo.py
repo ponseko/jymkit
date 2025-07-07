@@ -1,6 +1,6 @@
 import logging
 from dataclasses import replace
-from typing import Callable, Literal, Optional, Tuple
+from typing import Tuple
 
 import equinox as eqx
 import jax
@@ -31,7 +31,6 @@ class PPOState(eqx.Module):
 class PPO(RLAlgorithm):
     state: PyTree[PPOState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
-    multi_agent_env: bool = eqx.field(static=True, default=False)
 
     learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
     gamma: float = 0.99
@@ -49,12 +48,6 @@ class PPO(RLAlgorithm):
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
     actor_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
     critic_features: list = eqx.field(static=True, default_factory=lambda: [64, 64])
-    use_bronet: bool = eqx.field(static=True, default=False)
-
-    log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
-        static=True, default="simple"
-    )
-    log_interval: int | float = eqx.field(static=True, default=0.05)
 
     @property
     def minibatch_size(self):
@@ -69,7 +62,7 @@ class PPO(RLAlgorithm):
         return self.minibatch_size * self.num_minibatches
 
     def get_action(self, key: PRNGKeyArray, observation):
-        @transform_multi_agent(multi_agent=self.multi_agent_env)
+        @transform_multi_agent(multi_agent=self.multi_agent)
         def _get_action(agent: PPOState, key: PRNGKeyArray, obs):
             action_dist = agent.actor(obs)
             return action_dist.sample(seed=key)
@@ -81,17 +74,17 @@ class PPO(RLAlgorithm):
         return _get_action(self.state, key, observation)
 
     def init(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
-        hyperparams["multi_agent_env"] = getattr(env, "_multi_agent", False)
+        hyperparams["multi_agent"] = getattr(env, "_multi_agent", False)
         self = replace(self, **hyperparams)
 
-        @transform_multi_agent(multi_agent=self.multi_agent_env)
+        @transform_multi_agent(multi_agent=self.multi_agent)
         def _make_agent_state(
             key: PRNGKeyArray,
             obs_space: jym.Space,
             output_space: jym.Space,
             actor_features: list,
             critic_features: list,
-            use_bronet: bool,
+            # use_bronet: bool,
             optimizer: optax.GradientTransformation,
         ):
             actor_key, critic_key = jax.random.split(key)
@@ -100,13 +93,13 @@ class PPO(RLAlgorithm):
                 obs_space=obs_space,
                 hidden_dims=actor_features,
                 output_space=output_space,
-                use_bronet=use_bronet,
+                # use_bronet=use_bronet,
             )
             critic = ValueNetwork(
                 key=critic_key,
                 obs_space=obs_space,
                 hidden_dims=critic_features,
-                use_bronet=use_bronet,
+                # use_bronet=use_bronet,
             )
             optimizer_state = optimizer.init(
                 eqx.filter((actor, critic), eqx.is_inexact_array)
@@ -121,20 +114,17 @@ class PPO(RLAlgorithm):
         # TODO: can define multiple optimizers by using map
         optimizer = optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(
-                learning_rate=self.learning_rate,
-                # eps=1e-5,
-            ),
+            optax.adabelief(learning_rate=self.learning_rate),
         )
 
         keys_per_agent = split_key_over_agents(key, env.agent_structure)
         agent_states = _make_agent_state(
             output_space=env.action_space,
             key=keys_per_agent,
-            actor_features=self.actor_features,
-            critic_features=self.critic_features,
+            actor_features=self.policy_kwargs.get("actor_features", [64, 64]),
+            critic_features=self.policy_kwargs.get("critic_features", [64, 64]),
             obs_space=env.observation_space,
-            use_bronet=self.use_bronet,
+            # use_bronet=self.use_bronet,
             optimizer=optimizer,
         )
 
@@ -144,7 +134,7 @@ class PPO(RLAlgorithm):
         # Functions prepended with `_` are called within the `train_iteration` scan loop.
 
         env = self.__check_env__(env, vectorized=True)
-        hyperparams["multi_agent_env"] = getattr(env, "_multi_agent", False)
+        hyperparams["multi_agent"] = getattr(env, "_multi_agent", False)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
@@ -152,11 +142,11 @@ class PPO(RLAlgorithm):
 
         def _collect_rollout(train_state: PPOState, rollout_state):
             def env_step(rollout_state, _):
-                @transform_multi_agent(multi_agent=self.multi_agent_env)
+                @transform_multi_agent(multi_agent=self.multi_agent)
                 def get_value(agent: PPOState, observation):
                     return jax.vmap(agent.critic)(observation)
 
-                @transform_multi_agent(multi_agent=self.multi_agent_env)
+                @transform_multi_agent(multi_agent=self.multi_agent)
                 def get_action_and_log_prob(key, agent: PPOState, observation):
                     action_dist = jax.vmap(agent.actor)(observation)
                     return action_dist.sample_and_log_prob(seed=key)
@@ -167,7 +157,7 @@ class PPO(RLAlgorithm):
                 # select an action
                 sample_key = split_key_over_agents(sample_key, env.agent_structure)
                 action, log_prob = get_action_and_log_prob(
-                    train_state, sample_key, last_obs
+                    sample_key, train_state, last_obs
                 )
 
                 # take a step in the environment
@@ -240,7 +230,7 @@ class PPO(RLAlgorithm):
             )
 
             # Return to multi-agent structure
-            if self.multi_agent_env:
+            if self.multi_agent:
                 advantages = jnp.moveaxis(advantages, -1, 0)
                 returns = jnp.moveaxis(returns, -1, 0)
                 advantages = jax.tree.unflatten(trajectory_batch.structure, advantages)
@@ -254,7 +244,7 @@ class PPO(RLAlgorithm):
 
             return rollout_state, trajectory_batch
 
-        @transform_multi_agent(multi_agent=self.multi_agent_env)
+        @transform_multi_agent(multi_agent=self.multi_agent)
         def _update_agent_state(
             current_state: PPOState, minibatch: Transition
         ) -> Tuple[PPOState, None]:
