@@ -13,12 +13,7 @@ def test_ppo_on_cartpole():
     agent = PPO(num_envs=4, num_steps=128, total_timesteps=250_000, log_function=None)
     agent = agent.train(seed, env)
 
-    # Evaluate agent for 20 episodes
-    rewards = []
-    for i in range(20):
-        key = jax.random.PRNGKey(i)
-        reward = agent.evaluate(key, env)
-        rewards.append(reward)
+    rewards = agent.evaluate(seed, env, num_eval_episodes=50)
     avg_reward = np.mean(rewards)
     assert avg_reward > 200, (
         f"Average reward too low: {avg_reward}. Training may have failed."
