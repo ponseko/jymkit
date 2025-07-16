@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jymkit as jym
 
@@ -161,6 +161,9 @@ class DiscreteActionLinear(AgentOutputLinear):
 
 
 class ContinuousActionLinear(AgentOutputLinear):
+    low: Float[Array, " action_dim"]
+    high: Float[Array, " action_dim"]
+
     def __init__(self, key, in_features: int, space: Any):
         assert (
             hasattr(space, "low") and hasattr(space, "high") and hasattr(space, "shape")
@@ -168,6 +171,8 @@ class ContinuousActionLinear(AgentOutputLinear):
             "Continuous action space is assumed to be a `Box`-like and "
             "must have 'low' and 'high' and `shape` attributes."
         )
+        self.low = jnp.array(space.low, dtype=jnp.float32)
+        self.high = jnp.array(space.high, dtype=jnp.float32)
         num_outputs = np.ones(space.shape, dtype=int) * 2  # mean, std
 
         # Convert to PyTree (List) to create a PyTree of output heads
@@ -175,8 +180,15 @@ class ContinuousActionLinear(AgentOutputLinear):
         self.layers = self._create_pytree_of_output_heads(key, in_features, num_outputs)
 
     def __call__(self, x, action_mask=None):
+        LOG_STD_MIN = -20
+        LOG_STD_MAX = 2
+
         logits = super().__call__(x, action_mask)
-        return distrax.Normal(loc=logits[..., 0], scale=jax.nn.softplus(logits[..., 1]))
+        mean = logits[..., 0]
+        log_std = logits[..., 1]
+        log_std = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
+        std = jnp.exp(log_std)
+        return distrax.Normal(loc=mean, scale=std)
 
     def _apply_action_mask(self, logits, action_mask):
         warnings.warn(
@@ -226,7 +238,7 @@ class ContinuousQLinear(AgentOutputLinear):
         action = jnp.atleast_1d(action)
         x = jnp.concatenate([x, action], axis=-1)
         logits = super().__call__(x, action_mask)
-        return logits
+        return logits.squeeze()
 
     def _apply_action_mask(self, logits, action_mask):
         warnings.warn(
