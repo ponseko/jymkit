@@ -10,15 +10,11 @@ from jymkit.envs.cartpole import CartPole
 def test_ppo_on_cartpole():
     env = CartPole()
     seed = jax.random.PRNGKey(0)
-    agent = PPO(num_envs=4, num_steps=128, total_timesteps=250_000, log_function=None)
-    agent = agent.train(seed, env)
+    seed1, seed2 = jax.random.split(seed)
+    agent = PPO(total_timesteps=250_000, log_function=None)
+    agent = agent.train(seed1, env)
 
-    # Evaluate agent for 20 episodes
-    rewards = []
-    for i in range(20):
-        key = jax.random.PRNGKey(i)
-        reward = agent.evaluate(key, env)
-        rewards.append(reward)
+    rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
     avg_reward = np.mean(rewards)
     assert avg_reward > 200, (
         f"Average reward too low: {avg_reward}. Training may have failed."

@@ -30,12 +30,14 @@ def test_saving_loading(tmp_path):
     load_agent = load_agent.init(jax.random.PRNGKey(1), env)
     load_agent = load_agent.load_state(save_path)
 
-    # Check if weights match
+    # Check if weights match (via some arbitary layer)
     assert jnp.all(
-        agent.state.actor.layers[0].weight == load_agent.state.actor.layers[0].weight
+        agent.state.actor.ffn_layers[0].weight
+        == load_agent.state.actor.ffn_layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.layers[1].weight == load_agent.state.critic.layers[1].weight
+        agent.state.critic.ffn_layers[1].weight
+        == load_agent.state.critic.ffn_layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train
@@ -68,10 +70,12 @@ def test_cloudpickle_saving(tmp_path):
 
     # Check if weights match
     assert jnp.all(
-        agent.state.actor.layers[0].weight == load_agent.state.actor.layers[0].weight
+        agent.state.actor.ffn_layers[0].weight
+        == load_agent.state.actor.ffn_layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.layers[1].weight == load_agent.state.critic.layers[1].weight
+        agent.state.critic.ffn_layers[1].weight
+        == load_agent.state.critic.ffn_layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train
