@@ -63,7 +63,7 @@ class TransitionBuffer(eqx.Module):
         data_len = np.prod(jax.tree.leaves(transition)[0].shape[: self.num_batch_axes])
         insert_position = self.insert_position
 
-        assert data_len < self.max_size, (
+        assert data_len <= self.max_size, (
             "Transition length exceeds buffer size. "
             f"Transition length: {data_len}, Buffer size: {self.max_size}"
         )
@@ -100,5 +100,5 @@ class TransitionBuffer(eqx.Module):
             id_probs = jnp.where(valid_samples, id_probs, -jnp.inf)
             idx = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
 
-        batch = jax.tree.map(lambda x: jnp.take(x, idx, axis=0), self.data)
+        batch: Transition = jax.tree.map(lambda x: jnp.take(x, idx, axis=0), self.data)
         return batch
