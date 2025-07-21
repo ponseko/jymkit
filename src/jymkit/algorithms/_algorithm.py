@@ -1,12 +1,16 @@
+import copy
+import inspect
 import logging
+import types
 from abc import abstractmethod
 from dataclasses import replace
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 import equinox as eqx
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 from jymkit import Environment, JumanjiWrapper, VecEnvWrapper, is_wrapped
+from jymkit.algorithms.utils import transform_multi_agent
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +19,7 @@ class RLAlgorithm(eqx.Module):
     state: eqx.AbstractVar[PyTree[eqx.Module]]
 
     multi_agent: bool = eqx.field(static=True, default=False)
+    auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
     policy_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
@@ -44,6 +49,46 @@ class RLAlgorithm(eqx.Module):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         pass
+
+    def __make_multi_agent__(
+        self,
+        *,
+        upgrade_func_names: List[str] = [
+            "get_action",
+            "get_value",
+            "_update_agent_state",
+            "_make_agent_state",
+        ],
+    ):
+        cls = self.__class__
+        new_attrs: dict[str, object] = {}
+
+        for name in upgrade_func_names:
+            try:
+                attr_obj = inspect.getattr_static(cls, name)
+            except AttributeError as e:
+                raise AttributeError(
+                    f"{cls.__name__!s} has no attribute {name!r}"
+                ) from e
+
+            if isinstance(attr_obj, staticmethod):
+                orig_fn: Callable = attr_obj.__func__
+                new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))
+
+            elif callable(attr_obj.method):  # instance or class method
+                new_attrs[name] = transform_multi_agent(attr_obj.method)
+
+            else:
+                raise TypeError(f"Attribute {name!r} is not a (static/class)method")
+
+        NewCls = types.new_class(
+            f"{cls.__name__}__MultiAgent", (cls,), {}, lambda ns: ns.update(new_attrs)
+        )
+
+        new_instance = copy.copy(self)  # keeps parameters unchanged
+        new_instance = replace(new_instance, multi_agent=True)
+        object.__setattr__(new_instance, "__class__", NewCls)  # safe: NewCls ⊂ cls
+        return new_instance
 
     def __check_env__(self, env: Environment, vectorized: bool = False):
         if is_wrapped(env, JumanjiWrapper):

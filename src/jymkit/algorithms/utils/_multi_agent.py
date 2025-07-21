@@ -1,5 +1,6 @@
 import functools
-from typing import Callable, Optional
+import inspect
+from typing import Callable, List, Optional
 
 import equinox as eqx
 import jax
@@ -17,6 +18,15 @@ def _result_tuple_to_tuple_result(r):
         tupled = tuple([list(x) for x in zip(*one_level_leaves)])
         r = tuple(jax.tree.unflatten(structure, leaves) for leaves in tupled)
     return r
+
+
+def _is_prng_key(arg):
+    """Check if the argument is a JAX PRNGKeyArray."""
+    try:
+        jax.random.split(arg)
+        return True
+    except Exception:
+        return False
 
 
 def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
@@ -38,39 +48,25 @@ def split_key_over_agents(key: PRNGKeyArray, agent_structure: PyTreeDef):
 
 def transform_multi_agent(
     func: Optional[Callable] = None,
-    multi_agent: bool = False,
-    shared_argnames: Optional[list[str]] = None,
+    *,
+    shared_argnames: Optional[List[str]] = None,
 ) -> Callable:
     """
-    Decorator to transform a function to work with multiple agents when `multi_agent` is True.
-    If `multi_agent` is False, this decorator returns the identity function.
+    Transformation docorator to handle multi-agent settings.
+    Essentially, this function either applies a vmap over the agents (if the agent are homogeneous)
+    or applies a `jax.tree.map` over the first level of the PyTree structure of the arguments.
 
     **Arguments**:
         `func`: The function to be transformed. If None, returns a decorator.
-        `multi_agent`: If True, the function will be transformed to work with multiple agents.
-        `shared_argnames`: A optional list of argument names that are shared across agents. If None, the first argument is assumed to be a per-agent argument.
-        All arguments with the same first-level PyTree structure are also considered per-agent arguments. The rest are considered shared arguments.
+        `shared_argnames`: A optional list of argument names that are shared across agents. If None, the first (non-PRNGKey) argument is
+        assumed to be a per-agent argument. All arguments with the same first-level PyTree structure are also considered per-agent arguments.
+        The rest are considered shared arguments. PRNG keys that are provided as arguments are automatically split over agents.
 
-    **Usage**:
-    ```python
-    @transform_multi_agent(multi_agent=is_multi_agent)
-    def my_function(...):
-        # Function logic here
-    ```
-    or
-    ```python
-    def my_function(...):
-        # Function logic here
-    my_function = transform_multi_agent(my_function, multi_agent=is_multi_agent)
-    ```
     """
     assert callable(func) or func is None
 
     def _treemap_each_agent(agent_func: Callable, agent_args: dict):
         def map_one_level(f, tree, *rest):
-            # NOTE: Immidiately self-referential trees may pose a problem.
-            # see eqx.tree_flatten_one_level
-            # Likely not a problem here.
             return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
 
         return map_one_level(agent_func, *agent_args.values())
@@ -92,57 +88,61 @@ def transform_multi_agent(
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            if not multi_agent:
-                return func(*args, **kwargs)
+            sig = inspect.signature(func)
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            params = bound.arguments
 
-            # Map positional args to their respective keyword arguments
-            kw_args = list(func.__code__.co_varnames[: func.__code__.co_argcount])
-            for i, arg in enumerate(args):
-                if kw_args[i] in kwargs:
-                    raise ValueError(f"Duplicate argument: {kw_args[i]}")
-                if i < len(kw_args):
-                    kwargs[kw_args[i]] = arg
+            shared: set[str] = set(shared_argnames or ())
+            shared.update(k for k in ("self", "cls") if k in params)
 
-            def maybe_infer_shared_argnames():
-                """
-                Infer shared argument names based on the first argument's structure.
-                If `shared_argnames` is provided, it will be used directly.
-                Otherwise, it will infer from the first argument's structure.
-                """
-                if shared_argnames is not None:
-                    return shared_argnames
-                first_arg = kwargs.get(kw_args[0])
-                agent_structure = jax.tree.structure(
-                    first_arg, is_leaf=lambda x: x is not first_arg
-                )
-                return [
-                    k
-                    for k in kwargs.keys()
-                    if agent_structure
-                    != jax.tree.structure(
-                        kwargs[k], is_leaf=lambda x: x is not kwargs[k]
+            if (
+                shared_argnames is None
+            ):  # We infer the shared arguments from the function signature
+                ref_key = next(
+                    (
+                        k
+                        for k in params
+                        if k not in shared and not _is_prng_key(params[k])
+                    ),
+                    None,
+                )  # Skip 'self', 'cls', or single-prng keys if present
+                if ref_key is None:
+                    raise ValueError(
+                        "Trying to transform a function without any per-agent arguments. "
                     )
-                ]
+                ref_arg = params[ref_key]
+                ref_structure = jax.tree.structure(
+                    ref_arg, is_leaf=lambda x: x is not ref_arg
+                )
 
-            # Separate shared and per-agent args
-            shared_args = {
-                k: v for k, v in kwargs.items() if k in maybe_infer_shared_argnames()
-            }
-            per_agent_args = {
-                k: v
-                for k, v in kwargs.items()
-                if k not in maybe_infer_shared_argnames()
-            }
+                _shared = {
+                    k
+                    for k, v in params.items()
+                    if ref_structure
+                    != jax.tree.structure(v, is_leaf=lambda x: x is not v)
+                }
+                shared.update(_shared)
+
+                for param in params:  # Auto split JAX PRNG keys for each agent
+                    if param not in shared or not _is_prng_key(params[param]):
+                        continue
+                    # If the parameter is a PRNGKeyArray, we split it over agents
+                    params[param] = split_key_over_agents(params[param], ref_structure)
+                    shared.remove(param)
+
+            shared_params = {k: params[k] for k in shared}
+            per_agent_params = {k: params[k] for k in params if k not in shared}
 
             # Prepare a function that takes only per-agent args
             def agent_func(*agent_args):
-                per_agent_kwargs = dict(zip(per_agent_args.keys(), agent_args))
-                return func(**per_agent_kwargs, **shared_args)
+                per_agent_kwargs = dict(zip(per_agent_params.keys(), agent_args))
+                return func(**per_agent_kwargs, **shared_params)
 
             try:
-                result = _vmap_each_agent(agent_func, per_agent_args)
+                result = _vmap_each_agent(agent_func, per_agent_params)
             except Exception:
-                result = _treemap_each_agent(agent_func, per_agent_args)
+                result = _treemap_each_agent(agent_func, per_agent_params)
             return _result_tuple_to_tuple_result(result)
 
         return wrapper
