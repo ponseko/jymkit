@@ -11,6 +11,7 @@ class Transition(eqx.Module):
     action: Array
     reward: Float[Array, " "]
     terminated: Bool[Array, " "]
+    truncated: Bool[Array, " "]
     log_prob: Optional[Float[Array, "..."]] = None
     info: Optional[dict] = None
     value: Optional[Float[Array, " "]] = None
