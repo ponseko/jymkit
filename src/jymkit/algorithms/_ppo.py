@@ -14,10 +14,7 @@ import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 from jymkit.algorithms import ActorNetwork, RLAlgorithm, ValueNetwork
-from jymkit.algorithms.utils import (
-    Transition,
-    scan_callback,
-)
+from jymkit.algorithms.utils import Normalizer, Transition, scan_callback
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +23,7 @@ class PPOState(eqx.Module):
     actor: ActorNetwork
     critic: ValueNetwork
     optimizer_state: optax.OptState
+    normalizer: Normalizer
 
 
 class PPO(RLAlgorithm):
@@ -47,6 +45,9 @@ class PPO(RLAlgorithm):
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
+    normalize_obs: bool = eqx.field(static=True, default=True)
+    normalize_rewards: bool = eqx.field(static=True, default=True)
+
     @property
     def minibatch_size(self):
         return self.num_envs * self.num_steps // self.num_minibatches
@@ -62,28 +63,33 @@ class PPO(RLAlgorithm):
     @staticmethod
     def get_action(
         key: PRNGKeyArray, state: PPOState, observation, *, get_log_prob: bool = False
-    ):
+    ) -> Array | Tuple[Array, Array]:
+        observation = state.normalizer.normalize_obs(observation)
         action_dist: distrax.Distribution = state.actor(observation)
         if get_log_prob:
-            return action_dist.sample_and_log_prob(seed=key)
+            action, log_prob = action_dist.sample_and_log_prob(seed=key)
+            if log_prob.ndim == 2:  # MultiDimensional Action Space
+                log_prob = jnp.sum(log_prob, axis=-1)
+            return action, log_prob  # type: ignore
         return action_dist.sample(seed=key)
 
     @staticmethod
     def get_value(state: PPOState, observation):
+        observation = state.normalizer.normalize_obs(observation)
         return jax.vmap(state.critic)(observation)
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
-        # TODO: can define multiple optimizers by using map
-        self = replace(
-            self,
-            optimizer=optax.chain(
-                optax.clip_by_global_norm(self.max_grad_norm),
-                optax.adabelief(learning_rate=self.learning_rate),
-            ),
-        )
+        if self.optimizer is None:
+            self = replace(
+                self,
+                optimizer=optax.chain(
+                    optax.clip_by_global_norm(self.max_grad_norm),
+                    optax.adabelief(learning_rate=self.learning_rate),
+                ),
+            )
 
         agent_states = self._make_agent_state(
             key=key,
@@ -119,10 +125,15 @@ class PPO(RLAlgorithm):
                 rng, self.num_minibatches, self.num_epochs, n_batch_axis=2
             )
 
-            # Update
+            # Update normalization params with data before shuffling
+            updated_state = replace(
+                self.state, normalizer=self.state.normalizer.update(trajectory_batch)
+            )
+
+            # Update agent
             updated_state, _ = jax.lax.scan(
                 lambda state, data: self._update_agent_state(state, data),
-                self.state,
+                updated_state,  # <-- Use updated state with updated normalizer
                 train_data.view_transposed,
             )
             self = replace(self, state=updated_state)
@@ -144,36 +155,6 @@ class PPO(RLAlgorithm):
         )
         updated_self = runner_state[0]
         return updated_self
-
-    def _make_agent_state(
-        self,
-        key: PRNGKeyArray,
-        obs_space: jym.Space,
-        output_space: jym.Space,
-        actor_features: list,
-        critic_features: list,
-    ):
-        actor_key, critic_key = jax.random.split(key)
-        actor = ActorNetwork(
-            key=actor_key,
-            obs_space=obs_space,
-            hidden_dims=actor_features,
-            output_space=output_space,
-        )
-        critic = ValueNetwork(
-            key=critic_key,
-            obs_space=obs_space,
-            hidden_dims=critic_features,
-        )
-        optimizer_state = self.optimizer.init(
-            eqx.filter((actor, critic), eqx.is_inexact_array)
-        )
-
-        return PPOState(
-            actor=actor,
-            critic=critic,
-            optimizer_state=optimizer_state,
-        )
 
     def _collect_rollout(self, rollout_state, env: Environment):
         def env_step(rollout_state, _):
@@ -207,7 +188,8 @@ class PPO(RLAlgorithm):
                 action=action,
                 reward=reward,
                 terminated=terminated,
-                log_prob=log_prob,  # type: ignore
+                truncated=truncated,
+                log_prob=log_prob,
                 info=info,
                 value=value,
                 next_value=next_value,
@@ -224,6 +206,8 @@ class PPO(RLAlgorithm):
             reward = transition.view_flat.reward
             next_value = transition.view_flat.next_value
             done = transition.view_flat.terminated
+
+            reward = self.state.normalizer.normalize_reward(reward)
 
             if done.ndim < reward.ndim:
                 # correct for multi-agent envs that do not return done flags per agent
@@ -275,15 +259,12 @@ class PPO(RLAlgorithm):
             assert train_batch.log_prob is not None
 
             actor, critic = params
-            action_dist = jax.vmap(actor)(train_batch.observation)
+            norm_obs = current_state.normalizer.normalize_obs(train_batch.observation)
+            action_dist = jax.vmap(actor)(norm_obs)
             log_prob = action_dist.log_prob(train_batch.action)
             entropy = action_dist.entropy().mean()
-            value = jax.vmap(critic)(train_batch.observation)
-
+            value = jax.vmap(critic)(norm_obs)
             init_log_prob = train_batch.log_prob
-            if log_prob.ndim == 2:  # MultiDiscrete Action Space
-                log_prob = jnp.sum(log_prob, axis=-1)
-                init_log_prob = jnp.sum(init_log_prob, axis=-1)
 
             # actor loss
             ratio = jnp.exp(log_prob - init_log_prob)
@@ -327,12 +308,57 @@ class PPO(RLAlgorithm):
             grads, current_state.optimizer_state
         )
         new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+
         updated_state = PPOState(
             actor=new_actor,
             critic=new_critic,
             optimizer_state=optimizer_state,
+            normalizer=current_state.normalizer,  # already updated
         )
         return updated_state, None
+
+    def _make_agent_state(
+        self,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        output_space: jym.Space,
+        actor_features: list,
+        critic_features: list,
+    ):
+        actor_key, critic_key = jax.random.split(key)
+        actor = ActorNetwork(
+            key=actor_key,
+            obs_space=obs_space,
+            hidden_dims=actor_features,
+            output_space=output_space,
+        )
+        critic = ValueNetwork(
+            key=critic_key,
+            obs_space=obs_space,
+            hidden_dims=critic_features,
+        )
+        optimizer_state = self.optimizer.init(
+            eqx.filter((actor, critic), eqx.is_inexact_array)
+        )
+
+        dummy_obs = jax.tree.map(
+            lambda space: space.sample(jax.random.PRNGKey(0)),
+            obs_space,
+        )
+        normalization_state = Normalizer(
+            dummy_obs,
+            normalize_obs=self.normalize_obs,
+            normalize_rew=self.normalize_rewards,
+            gamma=self.gamma,
+            rew_shape=(self.num_steps, self.num_envs),
+        )
+
+        return PPOState(
+            actor=actor,
+            critic=critic,
+            optimizer_state=optimizer_state,
+            normalizer=normalization_state,
+        )
 
     def evaluate(
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
