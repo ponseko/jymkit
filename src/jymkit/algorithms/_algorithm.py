@@ -72,13 +72,18 @@ class RLAlgorithm(eqx.Module):
                 raise AttributeError(
                     f"{cls.__name__!s} has no attribute {name!r}"
                 ) from e
-
+            # breakpoint()
             if isinstance(attr_obj, staticmethod):
                 orig_fn: Callable = attr_obj.__func__
                 new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))
 
-            elif callable(attr_obj.method):  # instance or class method
-                new_attrs[name] = transform_multi_agent(attr_obj.method)
+            elif callable(attr_obj) or callable(
+                attr_obj.method
+            ):  # instance or class method
+                orig_fn: Callable = (
+                    attr_obj if callable(attr_obj) else attr_obj.method
+                )  # .method compatibility with older equinox versions
+                new_attrs[name] = transform_multi_agent(orig_fn)
 
             else:
                 raise TypeError(f"Attribute {name!r} is not a (static/class)method")
