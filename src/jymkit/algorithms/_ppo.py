@@ -45,7 +45,7 @@ class PPO(RLAlgorithm):
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
-    normalize_obs: bool = eqx.field(static=True, default=True)
+    normalize_obs: bool = eqx.field(static=True, default=False)
     normalize_rewards: bool = eqx.field(static=True, default=True)
 
     @property
@@ -68,9 +68,8 @@ class PPO(RLAlgorithm):
         action_dist: distrax.Distribution = state.actor(observation)
         if get_log_prob:
             action, log_prob = action_dist.sample_and_log_prob(seed=key)
-            if log_prob.ndim == 2:  # MultiDimensional Action Space
-                log_prob = jnp.sum(log_prob, axis=-1)
-            return action, log_prob  # type: ignore
+            log_prob = jnp.sum(log_prob)  # Sum over all dimensions (if any)
+            return action, log_prob
         return action_dist.sample(seed=key)
 
     @staticmethod
@@ -120,14 +119,15 @@ class PPO(RLAlgorithm):
                 rollout_state, env
             )
 
+            # Post-process the trajectory batch (GAE, returns, normalization)
+            trajectory_batch, updated_state = self._postprocess_rollout(
+                trajectory_batch.view_transposed, self.state
+            )
+            trajectory_batch = Transition.from_transposed(trajectory_batch)
+
             # Make train batch
             train_data = trajectory_batch.make_minibatches(
                 rng, self.num_minibatches, self.num_epochs, n_batch_axis=2
-            )
-
-            # Update normalization params with data before shuffling
-            updated_state = replace(
-                self.state, normalizer=self.state.normalizer.update(trajectory_batch)
             )
 
             # Update agent
@@ -198,53 +198,60 @@ class PPO(RLAlgorithm):
             rollout_state = (env_state, obsv, rng)
             return rollout_state, transition
 
-        def compute_gae(gae, transition: Transition):
-            assert transition.view_flat.value is not None
-            assert transition.view_flat.next_value is not None
-
-            value = transition.view_flat.value
-            reward = transition.view_flat.reward
-            next_value = transition.view_flat.next_value
-            done = transition.view_flat.terminated
-
-            reward = self.state.normalizer.normalize_reward(reward)
-
-            if done.ndim < reward.ndim:
-                # correct for multi-agent envs that do not return done flags per agent
-                done = jnp.expand_dims(done, axis=-1)
-
-            delta = reward + self.gamma * next_value * (1 - done) - value
-            gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-            return gae, (gae, gae + value)
-
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
             env_step, rollout_state, None, self.num_steps
         )
 
-        # Calculate GAE & returns
-        assert trajectory_batch.view_flat.value is not None
+        return rollout_state, trajectory_batch
+
+    def _postprocess_rollout(
+        self, trajectory_batch: Transition, current_state: PPOState
+    ) -> Tuple[Transition, PPOState]:
+        """
+        1) Computes GAE and Returns and adds them to the trajectory batch.
+        2) Returns updated normalization based on the new trajectory batch.
+        """
+
+        def compute_gae_scan(gae, batch: Transition):
+            """
+            Computes the Generalized Advantage Estimation (GAE) for the given batch of transitions.
+            """
+
+            assert batch.value is not None
+            assert batch.next_value is not None
+
+            reward = current_state.normalizer.normalize_reward(batch.reward)
+            done = batch.terminated
+            if done.ndim < reward.ndim:
+                # correct for multi-agent envs that do not return done flags per agent
+                done = jnp.expand_dims(done, axis=-1)
+
+            delta = reward + self.gamma * batch.next_value * (1 - done) - batch.value
+            gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
+            return gae, (gae, gae + batch.value)
+
+        assert trajectory_batch.value is not None
         _, (advantages, returns) = jax.lax.scan(
-            compute_gae,
-            jnp.zeros_like(trajectory_batch.view_flat.value[-1]),
+            compute_gae_scan,
+            optax.tree.zeros_like(trajectory_batch.value[-1]),
             trajectory_batch,
             reverse=True,
             unroll=16,
         )
 
-        if self.multi_agent:  # Return to multi-agent structure
-            advantages = jnp.moveaxis(advantages, -1, 0)
-            returns = jnp.moveaxis(returns, -1, 0)
-            advantages = jax.tree.unflatten(trajectory_batch.structure, advantages)
-            returns = jax.tree.unflatten(trajectory_batch.structure, returns)
-
         trajectory_batch = replace(
             trajectory_batch,
+            advantage=advantages,
             return_=returns,
-            advantage_=advantages,
         )
 
-        return rollout_state, trajectory_batch
+        # Update normalization params
+        updated_state = replace(
+            current_state, normalizer=current_state.normalizer.update(trajectory_batch)
+        )
+
+        return trajectory_batch, updated_state
 
     def _update_agent_state(
         self, current_state: PPOState, minibatch: Transition
@@ -254,7 +261,7 @@ class PPO(RLAlgorithm):
             params: Tuple[ActorNetwork, ValueNetwork],
             train_batch: Transition,
         ):
-            assert train_batch.advantage_ is not None
+            assert train_batch.advantage is not None
             assert train_batch.return_ is not None
             assert train_batch.log_prob is not None
 
@@ -262,14 +269,14 @@ class PPO(RLAlgorithm):
             norm_obs = current_state.normalizer.normalize_obs(train_batch.observation)
             action_dist = jax.vmap(actor)(norm_obs)
             log_prob = action_dist.log_prob(train_batch.action)
+            log_prob = jnp.sum(log_prob, axis=range(1, log_prob.ndim))
             entropy = action_dist.entropy().mean()
             value = jax.vmap(critic)(norm_obs)
             init_log_prob = train_batch.log_prob
 
-            # actor loss
             ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage_ - train_batch.advantage_.mean()) / (
-                train_batch.advantage_.std() + 1e-8
+            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
+                train_batch.advantage.std() + 1e-8
             )
             actor_loss1 = _advantages * ratio
 

@@ -7,6 +7,11 @@ from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 
 class Transition(eqx.Module):
+    """
+    Container for (possibly batches of) transitions
+    Comes with functionality of creating minibatches and some utilities for multi-agent reinforcement learning.
+    """
+
     observation: Array
     action: Array
     reward: Float[Array, " "]
@@ -18,7 +23,7 @@ class Transition(eqx.Module):
     next_value: Optional[Float[Array, " "]] = None
     next_observation: Optional[Array] = None
     return_: Optional[Float[Array, " "]] = None
-    advantage_: Optional[Float[Array, "..."]] = None
+    advantage: Optional[Float[Array, "..."]] = None
 
     @property
     def structure(self) -> PyTreeDef:
@@ -54,12 +59,14 @@ class Transition(eqx.Module):
     @property
     def view_transposed(self) -> PyTree["Transition"]:
         """
+        For single-agent settings, this will do nothing and return the original transition.
+
+        For multi-agent settings:
         The original transition is a Transition of PyTrees
             e.g. Transition(observation={a1: ..., a2: ...}, action={a1: ..., a2: ...}, ...)
         The transposed transition is a PyTree of Transitions
             e.g. {a1: Transition(observation=..., action=..., ...), a2: Transition(observation=..., action=..., ...), ...}
         This is useful for multi-agent environments where we want to have a single Transition object per agent.
-        In single-agent environments, this will be the same as the original transition.
         """
         if self.structure.num_leaves == 1:  # single agent
             return self
@@ -67,29 +74,59 @@ class Transition(eqx.Module):
         field_names = list(self.__dataclass_fields__.keys())
 
         fields = {}
+        per_agent_keys = []
         for f in field_names:
             attr = getattr(self, f)
-            if attr is None:
-                fields[f] = None
+            attr_structure = jax.tree.structure(attr, is_leaf=lambda x: x is not attr)
+            if attr_structure == self.structure:  # Compare with reference structure
+                fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
+                per_agent_keys.append(f)
                 continue
-            fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
+            fields[f] = attr
 
-        per_agent_transitions = []
-        for i in range(len(fields[field_names[0]])):
-            agent_transition = Transition(
+        per_agent_transitions = [
+            Transition(
                 **{
                     field_name: fields[field_name][i]
                     for field_name in field_names
-                    if field_name != "info"
-                    and (fields[field_name] is not None)
-                    and field_name != "terminated"
+                    if field_name in per_agent_keys
                 },
-                terminated=fields["terminated"][0],
-                info=fields["info"],
+                **{
+                    field_name: fields[field_name]
+                    for field_name in field_names
+                    if field_name not in per_agent_keys
+                },
             )
-            per_agent_transitions.append(agent_transition)
+            for i in range(len(fields[field_names[0]]))
+        ]
 
         return jax.tree.unflatten(self.structure, per_agent_transitions)
+
+    @classmethod
+    def from_transposed(cls, transposed: PyTree["Transition"]) -> "Transition":
+        if isinstance(transposed, Transition):  # no effect in single agent
+            return transposed
+
+        per_agent_leaves, original_structure = jax.tree.flatten(
+            transposed, is_leaf=lambda x: isinstance(x, Transition)
+        )
+
+        def _merge(*xs):
+            # if all ids are the same -- the item was copied to each agent (includes None's)
+            if all(id(x) == id(xs[0]) for x in xs):
+                return xs[0]
+            try:  # Else unflatten the leaves back to the original structure
+                return jax.tree.unflatten(original_structure, xs)
+            except Exception:  # fallback
+                return xs[0]
+
+        # tree_map over all agent-Transitions will rebuild a single Transition
+        return jax.tree.map(
+            _merge,
+            *per_agent_leaves,
+            is_leaf=lambda x: x is not per_agent_leaves
+            and not isinstance(x, Transition),
+        )
 
     def make_minibatches(
         self,

@@ -59,6 +59,7 @@ class RLAlgorithm(eqx.Module):
             "get_value",
             "_update_agent_state",
             "_make_agent_state",
+            "_postprocess_rollout",
         ],
     ):
         cls = self.__class__
