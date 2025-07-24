@@ -3,7 +3,7 @@ from typing import Any, Tuple
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 
 from ._environment import (
     ORIGINAL_OBSERVATION_KEY,
@@ -12,8 +12,34 @@ from ._environment import (
     TimeStep,
     TObservation,
 )
-from ._spaces import Space
+from ._spaces import Box, Discrete, MultiDiscrete, Space
 from ._wrappers import Wrapper
+
+
+def gymnasium_to_jymkit_space(space: Any) -> Space | PyTree[Space]:
+    def convert_single_space(space: Any) -> Space:
+        space_class_name = space.__class__.__name__
+        if space_class_name == "Discrete":
+            return Discrete(space.n)
+        elif space_class_name == "Box":
+            return Box(
+                low=space.low,
+                high=space.high,
+                shape=space.shape,
+                dtype=space.dtype,
+            )
+        elif space_class_name == "MultiDiscrete":
+            return MultiDiscrete(
+                nvec=space.nvec,
+                dtype=space.dtype,
+            )
+        else:
+            raise NotImplementedError(
+                f"Conversion for space type {space_class_name} is not implemented."
+            )
+
+    # Convert pytrees of spaces
+    return jax.tree.map(convert_single_space, space)
 
 
 class GymnaxWrapper(Wrapper):
@@ -164,6 +190,8 @@ class JumanjiWrapper(Wrapper):
 
         space = self._env.observation_spec
         space = jumanji_specs_to_gym_spaces(space)
+        space = self.__convert_gymnasium_space_to_dict(space)
+        return gymnasium_to_jymkit_space(space)
         return self.__convert_gymnasium_space_to_dict(space)
 
     @property
@@ -172,6 +200,8 @@ class JumanjiWrapper(Wrapper):
 
         space = self._env.action_spec
         space = jumanji_specs_to_gym_spaces(space)
+        space = self.__convert_gymnasium_space_to_dict(space)
+        return gymnasium_to_jymkit_space(space)
         return self.__convert_gymnasium_space_to_dict(space)
 
 
@@ -238,10 +268,12 @@ class BraxWrapper(Wrapper):
     def observation_space(self) -> Any:
         from brax.envs.wrappers import gym as braxGym
 
-        return braxGym.GymWrapper(self._env).observation_space
+        obs_space = braxGym.GymWrapper(self._env).observation_space
+        return gymnasium_to_jymkit_space(obs_space)
 
     @property
     def action_space(self) -> Any:
         from brax.envs.wrappers import gym as braxGym
 
-        return braxGym.GymWrapper(self._env).action_space
+        action_space = braxGym.GymWrapper(self._env).action_space
+        return gymnasium_to_jymkit_space(action_space)
