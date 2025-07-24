@@ -76,7 +76,13 @@ class Box(Space):
         """Sample random action uniformly from set of continuous choices."""
         low = self.low
         high = self.high
-        return jax.random.uniform(
+        if jnp.isdtype(self.dtype, "real floating"):
+            return jax.random.uniform(
+                rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
+            ).squeeze()
+        if jnp.isdtype(self.dtype, "bool"):
+            self.dtype = jnp.int8
+        return jax.random.randint(
             rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
         ).squeeze()
 

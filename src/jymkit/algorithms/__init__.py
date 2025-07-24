@@ -8,7 +8,7 @@ try:
         ValueNetwork as ValueNetwork,
     )
     from ._ppo import PPO as PPO
-    from ._sac import SAC as SAC
+    # from ._sac import SAC as SAC
 
 except ImportError:
     raise ImportError(

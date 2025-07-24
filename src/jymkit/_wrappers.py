@@ -469,6 +469,14 @@ class FlattenObservationWrapper(Wrapper):
             except AttributeError:  # Gymnasium envs have no setter on shape
                 _space._shape = (flat_space_shape,)
 
+            # Also flatten the .low and .high attributes if they exist
+            if hasattr(_space, "low") and hasattr(_space, "high"):
+                _space.low = jnp.reshape(_space.low, (-1,))
+                _space.high = jnp.reshape(_space.high, (-1,))
+
+            if hasattr(_space, "nvec"):
+                _space.nvec = jnp.reshape(_space.nvec, (-1,))
+
             return _space
 
         return jax.tree.map(get_flat_shape, obs_space)
