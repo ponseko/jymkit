@@ -1,4 +1,5 @@
 from ._buffer import TransitionBuffer as TransitionBuffer
+from ._distributions import DistraxContainer as DistraxContainer
 from ._logging import (
     scan_callback as scan_callback,
 )

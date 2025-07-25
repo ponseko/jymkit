@@ -11,6 +11,7 @@ import optax
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jymkit as jym
+from jymkit.algorithms.utils import DistraxContainer
 
 
 def _get_input_dim_of_flat_obs(obs_space: jym.Space | PyTree[jym.Space]) -> int:
@@ -344,7 +345,7 @@ class ActorNetwork(AbstractAgentNetwork):
             action_mask,
             is_leaf=lambda x: isinstance(x, AgentOutputLinear),
         )
-        return action_dists
+        return DistraxContainer(action_dists)
 
 
 class ValueNetwork(AbstractAgentNetwork):
