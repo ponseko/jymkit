@@ -19,14 +19,18 @@ from ._environment import (
 from ._spaces import Discrete, MultiDiscrete, Space
 
 
-def is_wrapped(wrapped_env: Environment, wrapper_class: type) -> bool:
+def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
     """
     Check if the environment is wrapped with a specific wrapper class.
     """
     current_env = wrapped_env
     while isinstance(current_env, Wrapper):
-        if isinstance(current_env, wrapper_class):
-            return True
+        if isinstance(wrapper_class, str):  # Handle string class names
+            if current_env.__class__.__name__ == wrapper_class:
+                return True
+        else:  # Handle class type inputs
+            if isinstance(current_env, wrapper_class):
+                return True
         current_env = current_env._env
     return False
 
@@ -464,6 +468,14 @@ class FlattenObservationWrapper(Wrapper):
                 _space.shape = (flat_space_shape,)
             except AttributeError:  # Gymnasium envs have no setter on shape
                 _space._shape = (flat_space_shape,)
+
+            # Also flatten the .low and .high attributes if they exist
+            if hasattr(_space, "low") and hasattr(_space, "high"):
+                _space.low = jnp.reshape(_space.low, (-1,))
+                _space.high = jnp.reshape(_space.high, (-1,))
+
+            if hasattr(_space, "nvec"):
+                _space.nvec = jnp.reshape(_space.nvec, (-1,))
 
             return _space
 

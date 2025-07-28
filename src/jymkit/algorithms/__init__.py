@@ -4,9 +4,11 @@ try:
 
     from ._networks import (
         ActorNetwork as ActorNetwork,
-        CriticNetwork as CriticNetwork,
+        QValueNetwork as QValueNetwork,
+        ValueNetwork as ValueNetwork,
     )
     from ._ppo import PPO as PPO
+    from ._sac import SAC as SAC
 
 except ImportError:
     raise ImportError(

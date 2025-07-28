@@ -1,5 +1,6 @@
 import os
 
+import _consts as TEST_CONSTS
 import cloudpickle
 import jax
 import jax.numpy as jnp
@@ -13,9 +14,7 @@ def test_saving_loading(tmp_path):
     env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
-    agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
     # Train the agent
     agent = agent.train(jax.random.PRNGKey(1), env)
@@ -24,18 +23,18 @@ def test_saving_loading(tmp_path):
     agent.save_state(save_path)
 
     # Load the agent
-    load_agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    load_agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     load_agent = load_agent.init(jax.random.PRNGKey(1), env)
     load_agent = load_agent.load_state(save_path)
 
-    # Check if weights match
+    # Check if weights match (via some arbitary layer)
     assert jnp.all(
-        agent.state.actor.layers[0].weight == load_agent.state.actor.layers[0].weight
+        agent.state.actor.ffn_layers[0].weight
+        == load_agent.state.actor.ffn_layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.layers[1].weight == load_agent.state.critic.layers[1].weight
+        agent.state.critic.ffn_layers[1].weight
+        == load_agent.state.critic.ffn_layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train
@@ -51,9 +50,7 @@ def test_cloudpickle_saving(tmp_path):
     env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
-    agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
     # Train the agent
     agent = agent.train(jax.random.PRNGKey(1), env)
@@ -68,10 +65,12 @@ def test_cloudpickle_saving(tmp_path):
 
     # Check if weights match
     assert jnp.all(
-        agent.state.actor.layers[0].weight == load_agent.state.actor.layers[0].weight
+        agent.state.actor.ffn_layers[0].weight
+        == load_agent.state.actor.ffn_layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.layers[1].weight == load_agent.state.critic.layers[1].weight
+        agent.state.critic.ffn_layers[1].weight
+        == load_agent.state.critic.ffn_layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train

@@ -6,7 +6,9 @@
             - reset
             - reset_env
             - observation_space
+            - sample_observation
             - action_space
+            - sample_action
 
 ## Timestep
 
