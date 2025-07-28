@@ -1,5 +1,6 @@
 import os
 
+import _consts as TEST_CONSTS
 import cloudpickle
 import jax
 import jax.numpy as jnp
@@ -13,9 +14,7 @@ def test_saving_loading(tmp_path):
     env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
-    agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
     # Train the agent
     agent = agent.train(jax.random.PRNGKey(1), env)
@@ -24,9 +23,7 @@ def test_saving_loading(tmp_path):
     agent.save_state(save_path)
 
     # Load the agent
-    load_agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    load_agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     load_agent = load_agent.init(jax.random.PRNGKey(1), env)
     load_agent = load_agent.load_state(save_path)
 
@@ -53,9 +50,7 @@ def test_cloudpickle_saving(tmp_path):
     env = jymkit.make("CartPole-v1")
 
     # Initialize the agent
-    agent = jymkit.algorithms.PPO(
-        num_envs=2, total_timesteps=1000, num_epochs=1, log_function=None
-    )
+    agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
     # Train the agent
     agent = agent.train(jax.random.PRNGKey(1), env)

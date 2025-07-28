@@ -1,5 +1,6 @@
 import importlib.util
 
+import _consts as TEST_CONSTS
 import jax
 import pytest
 
@@ -24,7 +25,7 @@ def test_ppo_cartpole_with_wrappers():
     env.step(jax.random.split(seed, 3), some_state, action)
 
     # test training
-    agent = PPO(num_envs=2, num_epochs=1, total_timesteps=10_000, log_function=None)
+    agent = PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     agent = agent.train(seed, env)
 
 
@@ -37,13 +38,13 @@ def test_discretization_single_action():
     _, some_state = env.reset(seed)
     env.step(seed, some_state, env.action_space.sample(seed))
 
-    agent = PPO(num_envs=2, num_epochs=1, total_timesteps=10_000, log_function=None)
+    agent = PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     agent = agent.train(seed, env)
 
 
 def test_discretization_multi_action():
-    if importlib.util.find_spec("jumanji") is None:
-        pytest.skip("Jumanji is not installed.")
+    if importlib.util.find_spec("brax") is None:
+        pytest.skip("Brax is not installed.")
     env = jym.make("hopper")
     env = jym.DiscreteActionWrapper(env, num_actions=10)
 
@@ -52,5 +53,5 @@ def test_discretization_multi_action():
     _, some_state = env.reset(seed)
     env.step(seed, some_state, env.action_space.sample(seed))
 
-    agent = PPO(num_envs=2, num_epochs=1, total_timesteps=10_000, log_function=None)
+    agent = PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     agent = agent.train(seed, env)

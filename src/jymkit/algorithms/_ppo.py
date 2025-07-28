@@ -3,7 +3,6 @@ from dataclasses import replace
 from functools import partial
 from typing import Tuple
 
-import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -65,11 +64,9 @@ class PPO(RLAlgorithm):
         key: PRNGKeyArray, state: PPOState, observation, *, get_log_prob: bool = False
     ) -> Array | Tuple[Array, Array]:
         observation = state.normalizer.normalize_obs(observation)
-        action_dist: distrax.Distribution = state.actor(observation)
+        action_dist = state.actor(observation)
         if get_log_prob:
-            action, log_prob = action_dist.sample_and_log_prob(seed=key)
-            log_prob = jnp.sum(log_prob)  # Sum over all dimensions (if any)
-            return action, log_prob
+            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
         return action_dist.sample(seed=key)
 
     @staticmethod
@@ -79,7 +76,15 @@ class PPO(RLAlgorithm):
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
-            self = self.__make_multi_agent__()
+            self = self.__make_multi_agent__(
+                upgrade_func_names=[
+                    "get_action",
+                    "get_value",
+                    "_update_agent_state",
+                    "_make_agent_state",
+                    "_postprocess_rollout",
+                ]
+            )
 
         if self.optimizer is None:
             self = replace(
@@ -162,10 +167,11 @@ class PPO(RLAlgorithm):
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
+            sample_key = jax.random.split(sample_key, self.num_envs)
             get_action_and_log_prob = partial(self.get_action, get_log_prob=True)
-            action, log_prob = jax.vmap(
-                get_action_and_log_prob, in_axes=(None, None, 0)
-            )(sample_key, self.state, last_obs)
+            action, log_prob = jax.vmap(get_action_and_log_prob, in_axes=(0, None, 0))(
+                sample_key, self.state, last_obs
+            )
 
             # take a step in the environment
             step_key = jax.random.split(step_key, self.num_envs)
@@ -265,14 +271,26 @@ class PPO(RLAlgorithm):
             assert train_batch.return_ is not None
             assert train_batch.log_prob is not None
 
+            def pytree_batch_sum(values):
+                batch_wise_sums = jax.tree_map(
+                    lambda x: jnp.sum(x, axis=tuple(range(1, x.ndim)))
+                    if x.ndim > 1
+                    else x,
+                    values,
+                )
+                return jax.tree.reduce(lambda a, b: a + b, batch_wise_sums)
+
             actor, critic = params
             norm_obs = current_state.normalizer.normalize_obs(train_batch.observation)
             action_dist = jax.vmap(actor)(norm_obs)
             log_prob = action_dist.log_prob(train_batch.action)
-            log_prob = jnp.sum(log_prob, axis=range(1, log_prob.ndim))
-            entropy = action_dist.entropy().mean()
+            entropy = action_dist.entropy()
             value = jax.vmap(critic)(norm_obs)
             init_log_prob = train_batch.log_prob
+
+            log_prob = pytree_batch_sum(log_prob)  # Assume independent actions
+            init_log_prob = pytree_batch_sum(init_log_prob)
+            entropy = pytree_batch_sum(entropy).mean()
 
             ratio = jnp.exp(log_prob - init_log_prob)
             _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (

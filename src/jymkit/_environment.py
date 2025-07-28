@@ -144,7 +144,10 @@ class Environment(eqx.Module, Generic[TEnvState]):
         Convenience method to sample a random action from the environment's action space.
         While one could use `self.action_space.sample(key)`, this method additionally works on composite action spaces.
         """
-        return jax.tree.map(lambda space: space.sample(key), self.action_space)
+        structure = jax.tree.structure(self.action_space)
+        keys = jax.random.split(key, structure.num_leaves)
+        keys = jax.tree.unflatten(structure, keys)
+        return jax.tree.map(lambda space, k: space.sample(k), self.action_space, keys)
 
     def sample_observation(self, key: PRNGKeyArray) -> TObservation:  # pyright: ignore[reportInvalidTypeVarUse]
         """
@@ -152,7 +155,12 @@ class Environment(eqx.Module, Generic[TEnvState]):
         While one could use `self.observation_space.sample(key)`, this method additionally works
         on composite observation spaces.
         """
-        return jax.tree.map(lambda space: space.sample(key), self.observation_space)
+        structure = jax.tree.structure(self.observation_space)
+        keys = jax.random.split(key, structure.num_leaves)
+        keys = jax.tree.unflatten(structure, keys)
+        return jax.tree.map(
+            lambda space, k: space.sample(k), self.observation_space, keys
+        )
 
     @property
     def _multi_agent(self) -> bool:
