@@ -51,28 +51,15 @@ class RLAlgorithm(eqx.Module):
     ) -> Float[Array, " num_eval_episodes"]:
         pass
 
-    def __make_multi_agent__(
-        self,
-        *,
-        upgrade_func_names: List[str] = [
-            "get_action",
-            "get_value",
-            "_update_agent_state",
-            "_make_agent_state",
-            "_postprocess_rollout",
-        ],
-    ):
+    def __make_multi_agent__(self, *, upgrade_func_names: List[str]):
         cls = self.__class__
         new_attrs: dict[str, object] = {}
 
         for name in upgrade_func_names:
             try:
                 attr_obj = inspect.getattr_static(cls, name)
-            except AttributeError as e:
-                raise AttributeError(
-                    f"{cls.__name__!s} has no attribute {name!r}"
-                ) from e
-            # breakpoint()
+            except AttributeError:
+                raise AttributeError(f"Method {name!r} not found in {cls.__name__}. ")
             if isinstance(attr_obj, staticmethod):
                 orig_fn: Callable = attr_obj.__func__
                 new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))

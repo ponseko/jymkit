@@ -66,7 +66,7 @@ class PPO(RLAlgorithm):
         observation = state.normalizer.normalize_obs(observation)
         action_dist = state.actor(observation)
         if get_log_prob:
-            return action_dist.sample_and_log_prob(seed=key)
+            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
         return action_dist.sample(seed=key)
 
     @staticmethod
@@ -76,7 +76,15 @@ class PPO(RLAlgorithm):
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
-            self = self.__make_multi_agent__()
+            self = self.__make_multi_agent__(
+                upgrade_func_names=[
+                    "get_action",
+                    "get_value",
+                    "_update_agent_state",
+                    "_make_agent_state",
+                    "_postprocess_rollout",
+                ]
+            )
 
         if self.optimizer is None:
             self = replace(
@@ -159,10 +167,11 @@ class PPO(RLAlgorithm):
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
+            sample_key = jax.random.split(sample_key, self.num_envs)
             get_action_and_log_prob = partial(self.get_action, get_log_prob=True)
-            action, log_prob = jax.vmap(
-                get_action_and_log_prob, in_axes=(None, None, 0)
-            )(sample_key, self.state, last_obs)
+            action, log_prob = jax.vmap(get_action_and_log_prob, in_axes=(0, None, 0))(
+                sample_key, self.state, last_obs
+            )
 
             # take a step in the environment
             step_key = jax.random.split(step_key, self.num_envs)
