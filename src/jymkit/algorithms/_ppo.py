@@ -272,7 +272,7 @@ class PPO(RLAlgorithm):
             assert train_batch.log_prob is not None
 
             def pytree_batch_sum(values):
-                batch_wise_sums = jax.tree_map(
+                batch_wise_sums = jax.tree.map(
                     lambda x: jnp.sum(x, axis=tuple(range(1, x.ndim)))
                     if x.ndim > 1
                     else x,
