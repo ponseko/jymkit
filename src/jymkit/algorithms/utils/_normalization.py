@@ -123,12 +123,13 @@ class RunningStatisticsState(eqx.Module):
         )
 
     def normalize(self, batch: Array) -> Array:
-        def _normalize(data: jnp.ndarray):
-            if self.center_mean:
-                return (data - self.mean) / (self.std + 1e-8)
-            return data / (self.std + 1e-8)
-
-        return jax.tree.map(_normalize, batch)
+        if self.center_mean:
+            batch = optax.tree.sub(batch, self.mean)
+        return jax.tree.map(
+            lambda data, std: data / (std + 1e-8),
+            batch,
+            self.std,
+        )
 
     @staticmethod
     def _validate_batch_shapes(
