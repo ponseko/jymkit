@@ -33,30 +33,6 @@ class Alpha(eqx.Module):
         return jnp.exp(self.ent_coef)
 
 
-def action_dist_to_sac_action_dist(action_dist):
-    def _transform_single_dist(action_dist):
-        if isinstance(action_dist, distrax.Categorical):
-            return action_dist  # No change
-
-        # If continuous, we add a Tanh scaled transformation
-        # Tanh bijector to squash to [-1,1]
-        tanh = distrax.Tanh()
-
-        # Scale tanh output to the action space
-        scale = (2.0 - -2.0) / 2.0
-        shift = (2.0 + -2.0) / 2.0
-        scale = distrax.ScalarAffine(shift=shift, scale=scale)
-
-        # 6) Transform the dist with the bijectors
-        return distrax.Transformed(action_dist, distrax.Chain([tanh, scale]))
-
-    return jax.tree.map(
-        _transform_single_dist,
-        action_dist,
-        is_leaf=lambda x: isinstance(x, distrax.Distribution),
-    )
-
-
 class SACState(eqx.Module):
     actor: ActorNetwork
     critic1: QValueNetwork
@@ -101,7 +77,6 @@ class SAC(RLAlgorithm):
     def get_action(key: PRNGKeyArray, state: SACState, observation) -> Array:
         observation = state.normalizer.normalize_obs(observation)
         action_dist = state.actor(observation)
-        action_dist = action_dist_to_sac_action_dist(action_dist)
         return action_dist.sample(seed=key)
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "SAC":
@@ -293,7 +268,6 @@ class SAC(RLAlgorithm):
         @eqx.filter_grad
         def __sac_actor_loss(params, batch: Transition):
             action_dist = jax.vmap(params)(batch.observation)
-            action_dist = action_dist_to_sac_action_dist(action_dist)
             action, log_prob = action_dist.sample_and_log_prob(seed=actor_loss_key)
             q_1 = jax.vmap(current_state.critic1)(batch.observation, action)
             q_2 = jax.vmap(current_state.critic2)(batch.observation, action)
@@ -339,7 +313,6 @@ class SAC(RLAlgorithm):
                 return -jnp.mean(params() * (log_probs + target_entropy))
 
             action_dist = jax.vmap(current_state.actor)(batch.observation)
-            action_dist = action_dist_to_sac_action_dist(action_dist)
             loss = jax.tree.map(
                 alpha_loss_per_action_dist,
                 action_dist,
@@ -351,7 +324,6 @@ class SAC(RLAlgorithm):
         rng, target_key, actor_loss_key = jax.random.split(key, 3)
 
         action_dist = jax.vmap(current_state.actor)(batch.next_observation)
-        action_dist = action_dist_to_sac_action_dist(action_dist)
         action, action_log_prob = action_dist.sample_and_log_prob(seed=target_key)
         q_1 = jax.vmap(current_state.critic1_target)(batch.next_observation, action)
         q_2 = jax.vmap(current_state.critic2_target)(batch.next_observation, action)
@@ -434,6 +406,7 @@ class SAC(RLAlgorithm):
             obs_space=obs_space,
             hidden_dims=actor_features,
             output_space=output_space,
+            continuous_output_dist="tanhNormal",
         )
         critic1 = QValueNetwork(
             key=critic1_key,

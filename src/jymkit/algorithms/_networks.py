@@ -159,8 +159,17 @@ class DiscreteActionLinear(AgentOutputLinear):
 class ContinuousActionLinear(AgentOutputLinear):
     low: Float[Array, " action_dim"]
     high: Float[Array, " action_dim"]
+    output_dist: Literal["normal", "tanhNormal"] = eqx.field(
+        static=True, default="normal"
+    )
 
-    def __init__(self, key, in_features: int, space: Any):
+    def __init__(
+        self,
+        key,
+        in_features: int,
+        space: Any,
+        output_dist: Literal["normal", "tanhNormal"] = "normal",
+    ):
         assert (
             hasattr(space, "low") and hasattr(space, "high") and hasattr(space, "shape")
         ), (
@@ -170,6 +179,7 @@ class ContinuousActionLinear(AgentOutputLinear):
         self.low = jnp.array(space.low, dtype=jnp.float32)
         self.high = jnp.array(space.high, dtype=jnp.float32)
         num_outputs = np.ones(space.shape, dtype=int) * 2  # mean, std
+        self.output_dist = output_dist
 
         # Convert to PyTree (List) to create a PyTree of output heads
         num_outputs = num_outputs.tolist()
@@ -184,7 +194,25 @@ class ContinuousActionLinear(AgentOutputLinear):
         log_std = logits[..., 1]
         log_std = jnp.clip(log_std, LOG_STD_MIN, LOG_STD_MAX)
         std = jnp.exp(log_std)
-        return distrax.Normal(loc=mean, scale=std)
+        dist = distrax.Normal(loc=mean, scale=std)
+        if self.output_dist == "normal":
+            return dist
+        if self.output_dist == "tanhNormal":
+            # Tanh bijector to squash to [-1,1]
+            tanh = distrax.Tanh()
+
+            # Scale tanh output to the action space
+            scale = (self.high - self.low) / 2.0
+            shift = (self.high + self.low) / 2.0
+            scale = distrax.ScalarAffine(shift=shift, scale=scale)
+
+            # Transform the dist with the bijectors
+            return distrax.Transformed(dist, distrax.Chain([tanh, scale]))
+
+        raise ValueError(
+            f"Unsupported output distribution {self.output_dist}. "
+            "Supported: ['normal', 'tanhNormal']"
+        )
 
     def _apply_action_mask(self, logits, action_mask):
         warnings.warn(
@@ -244,6 +272,7 @@ def create_agent_output_layers(
     space: jym.Space | Any,
     in_features: int,
     network_type: Literal["actor", "critic"],
+    continuous_output_dist: Literal["normal", "tanhNormal"] = "normal",
 ):
     def _check_valid_action_space(space: jym.Space):
         assert len(space.shape) <= 1, (
@@ -261,7 +290,7 @@ def create_agent_output_layers(
     if network_type == "actor":
         if hasattr(space, "n") or hasattr(space, "nvec"):
             return DiscreteActionLinear(key, in_features, space)
-        return ContinuousActionLinear(key, in_features, space)
+        return ContinuousActionLinear(key, in_features, space, continuous_output_dist)
 
     elif network_type == "critic":
         if hasattr(space, "n") or hasattr(space, "nvec"):
@@ -309,13 +338,14 @@ class ActorNetwork(AbstractAgentNetwork):
         obs_space: PyTree[jym.Space],
         hidden_dims: List[int],
         output_space: PyTree[jym.Space],
+        continuous_output_dist: Literal["normal", "tanhNormal"] = "normal",
     ):
         self.init_backbone(key, obs_space, hidden_dims)
 
         keys = optax.tree.split_key_like(key, output_space)
         self.output_layers = jax.tree.map(
             lambda o, k: create_agent_output_layers(
-                k, o, self.ffn_layers[-1].out_features, "actor"
+                k, o, self.ffn_layers[-1].out_features, "actor", continuous_output_dist
             ),
             output_space,
             keys,
