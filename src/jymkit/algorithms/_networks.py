@@ -1,3 +1,4 @@
+import logging
 import warnings
 from abc import abstractmethod
 from typing import Any, Callable, List, Literal
@@ -34,16 +35,13 @@ def _get_input_dim_of_flat_obs(obs_space: jym.Space | PyTree[jym.Space]) -> int:
     return input_dim
 
 
-def create_ffn_networks(
-    key: PRNGKeyArray, obs_space: jym.Space, hidden_dims: List[int]
-):
+def create_ffn_networks(key: PRNGKeyArray, input_dim: int, hidden_dims: List[int]):
     """
     Create a feedforward neural network with the given hidden dimensions and output space.
     """
     layers = []
     keys = jax.random.split(key, len(hidden_dims))
 
-    input_dim = _get_input_dim_of_flat_obs(obs_space)
     for i, hidden_dim in enumerate(hidden_dims):
         layers.append(
             eqx.nn.Linear(in_features=input_dim, out_features=hidden_dim, key=keys[i])
@@ -53,9 +51,7 @@ def create_ffn_networks(
     return layers
 
 
-def create_bronet_networks(
-    key: PRNGKeyArray, obs_space: jym.Space, hidden_dims: List[int]
-):
+def create_bronet_networks(key: PRNGKeyArray, input_dim: int, hidden_dims: List[int]):
     """
     Create a BroNet neural network with the given hidden dimensions and output space.
     https://arxiv.org/html/2405.16158v1
@@ -87,7 +83,6 @@ def create_bronet_networks(
 
     keys = jax.random.split(key, len(hidden_dims))
 
-    input_dim = _get_input_dim_of_flat_obs(obs_space)
     layers = [
         eqx.nn.Linear(in_features=input_dim, out_features=hidden_dims[0], key=keys[0]),
         eqx.nn.LayerNorm(hidden_dims[0]),
@@ -120,7 +115,7 @@ class AgentOutputLinear(eqx.Module):
 
     def _create_pytree_of_output_heads(self, key, in_features, num_outputs):
         """Create a PyTree of output heads based on the number of outputs."""
-        keys = optax.tree_utils.tree_split_key_like(key, num_outputs)
+        keys = optax.tree.split_key_like(key, num_outputs)
         return jax.tree.map(
             lambda o, k: eqx.nn.Linear(in_features, o, key=k), num_outputs, keys
         )
@@ -212,7 +207,7 @@ class DiscreteQLinear(AgentOutputLinear):
         num_outputs = num_outputs.tolist()
         self.layers = self._create_pytree_of_output_heads(key, in_features, num_outputs)
 
-    def __call__(self, x, action_mask, action):  # type: ignore[override]
+    def __call__(self, x, action_mask):
         logits = super().__call__(x, action_mask)
         return logits
 
@@ -227,17 +222,14 @@ class ContinuousQLinear(AgentOutputLinear):
         )
         num_outputs = np.ones(space.shape, dtype=int)
 
-        # Continuous Q networks receive action as input, so increase in_features:
-        in_features += num_outputs.size  # Add action dimension
+        # # Continuous Q networks receive action as input, so increase in_features:
+        # in_features += num_outputs.size  # Add action dimension
 
         # Convert to PyTree (List) to create a PyTree of output heads
         num_outputs = num_outputs.tolist()
         self.layers = self._create_pytree_of_output_heads(key, in_features, num_outputs)
 
-    def __call__(self, x, action_mask, action):  # type: ignore[override]
-        # concat action to the input
-        action = jnp.atleast_1d(action)
-        x = jnp.concatenate([x, action], axis=-1)
+    def __call__(self, x, action_mask=None):
         logits = super().__call__(x, action_mask)
         return logits.squeeze()
 
@@ -273,7 +265,7 @@ def create_agent_output_layers(
 
     elif network_type == "critic":
         if hasattr(space, "n") or hasattr(space, "nvec"):
-            return DiscreteQLinear(key, in_features, space)  # type: ignore[return]
+            return DiscreteQLinear(key, in_features, space)
         return ContinuousQLinear(key, in_features, space)
 
 
@@ -282,14 +274,20 @@ class AbstractAgentNetwork(eqx.Module):
     ffn_layers: list
     feature_extractor: Callable = eqx.nn.Identity()
 
-    def init_backbone(self, key: PRNGKeyArray, obs_space, hidden_dims: List[int]):
+    def init_backbone(
+        self, key: PRNGKeyArray, obs_space, hidden_dims: List[int], output_space=None
+    ):
         """
         Initialize the backbone of the network based on the observation space.
         """
         # TODO: Feature extractor
         # self.feature_extractor = Identity()
+        input_dim = _get_input_dim_of_flat_obs(obs_space)
+        if getattr(self, "append_action_to_input", False):
+            assert output_space is not None
+            input_dim += _get_input_dim_of_flat_obs(output_space)
 
-        self.ffn_layers = create_ffn_networks(key, obs_space, hidden_dims)
+        self.ffn_layers = create_ffn_networks(key, input_dim, hidden_dims)
         # Possibly use BroNet
 
     @staticmethod
@@ -314,7 +312,7 @@ class ActorNetwork(AbstractAgentNetwork):
     ):
         self.init_backbone(key, obs_space, hidden_dims)
 
-        keys = optax.tree_utils.tree_split_key_like(key, output_space)
+        keys = optax.tree.split_key_like(key, output_space)
         self.output_layers = jax.tree.map(
             lambda o, k: create_agent_output_layers(
                 k, o, self.ffn_layers[-1].out_features, "actor"
@@ -371,6 +369,8 @@ class ValueNetwork(AbstractAgentNetwork):
 
 
 class QValueNetwork(AbstractAgentNetwork):
+    append_action_to_input: bool = eqx.field(static=True, default=False)
+
     def __init__(
         self,
         key: PRNGKeyArray,
@@ -378,8 +378,19 @@ class QValueNetwork(AbstractAgentNetwork):
         output_space: PyTree[jym.Space],
         hidden_dims: List[int],
     ):
-        self.init_backbone(key, obs_space, hidden_dims)
-        keys = optax.tree_utils.tree_split_key_like(key, output_space)
+        contains_continuous = any(
+            [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
+        )
+        if contains_continuous:
+            self.append_action_to_input = True
+            if len(jax.tree.leaves(output_space)) > 1:
+                logging.warning(
+                    "Mixed continuous spaces currently built with  "
+                    "an input dimension that is likely larger than necessary."
+                )
+
+        self.init_backbone(key, obs_space, hidden_dims, output_space)
+        keys = optax.tree.split_key_like(key, output_space)
         self.output_layers = jax.tree.map(
             lambda o, k: create_agent_output_layers(
                 k, o, self.ffn_layers[-1].out_features, "critic"
@@ -398,23 +409,23 @@ class QValueNetwork(AbstractAgentNetwork):
                 self.output_layers,
                 is_leaf=lambda x: isinstance(x, AgentOutputLinear),
             )
-        if action is None:
-            action = jax.tree.map(
-                lambda _: None,
-                self.output_layers,
-                is_leaf=lambda x: isinstance(x, AgentOutputLinear),
-            )
 
         x = jax.tree.map(self.feature_extractor, x)
         x = self.concat_all_spaces(x)
+
+        if self.append_action_to_input:
+            assert action is not None, "Action not provided in continuous Q network."
+            flat_action = jax.tree.map(lambda a: jnp.reshape(a, -1), action)
+            flat_action = jnp.concatenate(jax.tree.leaves(flat_action))
+            x = jnp.concatenate([x, flat_action], axis=-1)
+
         for layer in self.ffn_layers:
             x = jax.nn.gelu(layer(x))
 
         q_values = jax.tree.map(
-            lambda action_layer, mask, a: action_layer(x, mask, a),
+            lambda action_layer, mask: action_layer(x, mask),
             self.output_layers,
             action_mask,
-            action,
             is_leaf=lambda x: isinstance(x, AgentOutputLinear),
         )
         return q_values

@@ -2,6 +2,7 @@ import logging
 from dataclasses import replace
 from typing import Tuple
 
+import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -32,6 +33,30 @@ class Alpha(eqx.Module):
         return jnp.exp(self.ent_coef)
 
 
+def action_dist_to_sac_action_dist(action_dist):
+    def _transform_single_dist(action_dist):
+        if isinstance(action_dist, distrax.Categorical):
+            return action_dist  # No change
+
+        # If continuous, we add a Tanh scaled transformation
+        # Tanh bijector to squash to [-1,1]
+        tanh = distrax.Tanh()
+
+        # Scale tanh output to the action space
+        scale = (2.0 - -2.0) / 2.0
+        shift = (2.0 + -2.0) / 2.0
+        scale = distrax.ScalarAffine(shift=shift, scale=scale)
+
+        # 6) Transform the dist with the bijectors
+        return distrax.Transformed(action_dist, distrax.Chain([tanh, scale]))
+
+    return jax.tree.map(
+        _transform_single_dist,
+        action_dist,
+        is_leaf=lambda x: isinstance(x, distrax.Distribution),
+    )
+
+
 class SACState(eqx.Module):
     actor: ActorNetwork
     critic1: QValueNetwork
@@ -50,19 +75,19 @@ class SAC(RLAlgorithm):
     learning_rate: float | optax.Schedule = eqx.field(static=True, default=3e-4)
     gamma: float = 0.99
     max_grad_norm: float = 0.5
-    update_every: int = eqx.field(static=True, default=int(10 * 6))
-    replay_buffer_size: int = 1000  # int(512 * 36)
-    batch_size: int = 128  # int(512 * 36)
-    init_alpha: float = 0.2  # is passed through an exponential function
+    update_every: int = eqx.field(static=True, default=128)
+    replay_buffer_size: int = 5000
+    batch_size: int = 128
+    init_alpha: float = 0.2
     learn_alpha: bool = eqx.field(static=True, default=True)
-    target_entropy_scale = 0.5
+    target_entropy_scale: float | optax.Schedule = eqx.field(static=True, default=0.5)
     tau: float = 0.95
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=6)
+    num_envs: int = eqx.field(static=True, default=8)
 
     normalize_obs: bool = eqx.field(static=True, default=True)
-    normalize_rew: bool = eqx.field(static=True, default=True)
+    normalize_rew: bool = eqx.field(static=True, default=False)
 
     @property
     def num_iterations(self):
@@ -76,6 +101,7 @@ class SAC(RLAlgorithm):
     def get_action(key: PRNGKeyArray, state: SACState, observation) -> Array:
         observation = state.normalizer.normalize_obs(observation)
         action_dist = state.actor(observation)
+        action_dist = action_dist_to_sac_action_dist(action_dist)
         return action_dist.sample(seed=key)
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "SAC":
@@ -102,8 +128,8 @@ class SAC(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            actor_features=self.policy_kwargs.get("actor_features", [64, 64]),
-            critic_features=self.policy_kwargs.get("critic_features", [64, 64]),
+            actor_features=self.policy_kwargs.get("actor_features", [128, 128]),
+            critic_features=self.policy_kwargs.get("critic_features", [128, 128]),
         )
 
         return replace(self, state=agent_states)
@@ -144,7 +170,7 @@ class SAC(RLAlgorithm):
                 train_data.view_transposed,
             )
 
-            metric = trajectory_batch.info
+            metric = trajectory_batch.info or {}
             self = replace(self, state=updated_state)
             runner_state = (self, buffer, env_state, last_obs, rng)
             return runner_state, metric
@@ -158,13 +184,15 @@ class SAC(RLAlgorithm):
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
         # Set up the buffer
-        _, dummy_trajectory = self._collect_rollout((env_state, obsv, key), env)
+        _, dummy_trajectory = self._collect_rollout(
+            (env_state, obsv, key), env, length=self.batch_size // self.num_envs
+        )
         buffer = TransitionBuffer(
             max_size=self.replay_buffer_size,
             sample_batch_size=self.batch_size,
             data_sample=dummy_trajectory,
         )
-        buffer = buffer.insert(dummy_trajectory)  # Add initial data to the buffer
+        buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
         runner_state = (self, buffer, env_state, obsv, key)
         runner_state, metrics = jax.lax.scan(
@@ -173,7 +201,7 @@ class SAC(RLAlgorithm):
         updated_self = runner_state[0]
         return updated_self
 
-    def _collect_rollout(self, rollout_state, env: Environment):
+    def _collect_rollout(self, rollout_state, env: Environment, length=None):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
@@ -190,11 +218,6 @@ class SAC(RLAlgorithm):
                 step_key, env_state, action
             )
 
-            # TODO: variable gamma from env
-            # gamma = self.gamma
-            # if "discount" in info:
-            #     gamma = info["discount"]
-
             # Build a single transition. Jax.lax.scan will build the batch
             # returning num_steps transitions.
             transition = Transition(
@@ -210,9 +233,12 @@ class SAC(RLAlgorithm):
             rollout_state = (env_state, obsv, rng)
             return rollout_state, transition
 
+        if length is None:
+            length = self.num_steps
+
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
-            env_step, rollout_state, None, self.num_steps
+            env_step, rollout_state, None, length
         )
 
         return rollout_state, trajectory_batch
@@ -233,8 +259,8 @@ class SAC(RLAlgorithm):
     def _update_agent_state(
         self, key: PRNGKeyArray, current_state: SACState, batch: Transition
     ) -> SACState:
-        def _compute_soft_target(action_dist, q_1, q_2):
-            def soft_target(action_probs, q_1, q_2):
+        def _compute_soft_target(action_dist, action_log_probs, q_1, q_2):
+            def discrete_soft_target(action_probs, q_1, q_2):
                 action_log_prob = jnp.log(action_probs + 1e-8)
                 target = (
                     action_probs
@@ -242,16 +268,24 @@ class SAC(RLAlgorithm):
                 ).sum(axis=-1)
                 return target
 
-            return jax.tree.map(soft_target, action_dist.probs, q_1, q_2)
+            def continuous_soft_target(action_log_probs, q_1, q_2):
+                return jnp.minimum(q_1, q_2) - current_state.alpha() * action_log_probs
+
+            if isinstance(action_dist, distrax.Categorical):
+                return discrete_soft_target(action_dist.probs, q_1, q_2)
+            return continuous_soft_target(action_log_probs, q_1, q_2)
 
         @eqx.filter_grad
         def __sac_qnet_loss(params, batch: Transition):
-            q_out = jax.vmap(params)(batch.observation, batch.action)
-
             def get_q_from_actions(q, actions):
                 """Get the Q value from the actions that were taken."""
+                if q.squeeze().shape == actions.squeeze().shape:
+                    # Q is already given for the taken action (Continuous case)
+                    return q
+                # Discrete case: we need to index the Q values with the actions
                 return jnp.take_along_axis(q, actions[..., None], axis=-1).squeeze()
 
+            q_out = jax.vmap(params)(batch.observation, batch.action)
             q_out = jax.tree.map(get_q_from_actions, q_out, batch.action)
             q_loss = jax.tree.map(lambda q, t: jnp.mean((q - t) ** 2), q_out, q_target)
             return jnp.array(jax.tree.leaves(q_loss)).mean()
@@ -259,32 +293,81 @@ class SAC(RLAlgorithm):
         @eqx.filter_grad
         def __sac_actor_loss(params, batch: Transition):
             action_dist = jax.vmap(params)(batch.observation)
-            q_1 = jax.vmap(current_state.critic1)(batch.observation)
-            q_2 = jax.vmap(current_state.critic2)(batch.observation)
-            target = _compute_soft_target(action_dist, q_1, q_2)
+            action_dist = action_dist_to_sac_action_dist(action_dist)
+            action, log_prob = action_dist.sample_and_log_prob(seed=actor_loss_key)
+            q_1 = jax.vmap(current_state.critic1)(batch.observation, action)
+            q_2 = jax.vmap(current_state.critic2)(batch.observation, action)
+            try:
+                action_dist = action_dist.distribution
+            except AttributeError:
+                pass
+            target = jax.tree.map(
+                _compute_soft_target,
+                action_dist,
+                log_prob,
+                q_1,
+                q_2,
+                is_leaf=lambda x: isinstance(x, distrax.Distribution),
+            )
             # might still be lingering dimensions: flatten everything
             target = jax.tree.map(lambda x: jnp.reshape(x, (-1,)), target)
             return -jnp.mean(jnp.concatenate(jax.tree.leaves(target)))
 
         @eqx.filter_grad
         def __sac_alpha_loss(params: Alpha):
-            def alpha_loss_per_action_dist(action_probs):
-                action_dim = jnp.prod(jnp.array(action_probs.shape[1:]))
-                target_entropy = -(self.target_entropy_scale) * jnp.log(1 / action_dim)
-                action_log_probs = jnp.log(action_probs + 1e-8)
-                return -jnp.mean(params() * (action_log_probs + target_entropy))
+            def alpha_loss_per_action_dist(action_dist):
+                if isinstance(action_dist, distrax.Categorical):
+                    log_probs = jnp.log(action_dist.probs + 1e-8)
+                    action_dim = jnp.prod(jnp.array(log_probs.shape[1:]))
+                    action_dim = jnp.log(1 / action_dim)
+                else:  # Continuous action space
+                    _, log_probs = action_dist.sample_and_log_prob(seed=actor_loss_key)
+                    action_dim = jnp.prod(jnp.array(batch.action.shape[1:]))
+
+                if isinstance(self.target_entropy_scale, float):
+                    target_entropy = -(self.target_entropy_scale) * action_dim
+                else:  # Is an optax.Schedule
+                    target_entropy = (
+                        -(
+                            self.target_entropy_scale(  # TODO: brittle
+                                current_state.optimizer_state[1][0].count  # type: ignore
+                            )
+                        )
+                        * action_dim
+                    )
+
+                return -jnp.mean(params() * (log_probs + target_entropy))
 
             action_dist = jax.vmap(current_state.actor)(batch.observation)
-            loss = jax.tree.map(alpha_loss_per_action_dist, action_dist.probs)
+            action_dist = action_dist_to_sac_action_dist(action_dist)
+            loss = jax.tree.map(
+                alpha_loss_per_action_dist,
+                action_dist,
+                is_leaf=lambda x: isinstance(x, distrax.Distribution),
+            )
             loss = jnp.mean(jnp.array(jax.tree.leaves(loss)))
             return loss
 
         rng, target_key, actor_loss_key = jax.random.split(key, 3)
 
         action_dist = jax.vmap(current_state.actor)(batch.next_observation)
-        q_1 = jax.vmap(current_state.critic1_target)(batch.next_observation)
-        q_2 = jax.vmap(current_state.critic2_target)(batch.next_observation)
-        target = _compute_soft_target(action_dist, q_1, q_2)
+        action_dist = action_dist_to_sac_action_dist(action_dist)
+        action, action_log_prob = action_dist.sample_and_log_prob(seed=target_key)
+        q_1 = jax.vmap(current_state.critic1_target)(batch.next_observation, action)
+        q_2 = jax.vmap(current_state.critic2_target)(batch.next_observation, action)
+        # Split continuous and discrete actions
+        try:
+            action_dist = action_dist.distribution
+        except AttributeError:
+            pass
+        target = jax.tree.map(
+            _compute_soft_target,
+            action_dist,
+            action_log_prob,
+            q_1,
+            q_2,
+            is_leaf=lambda x: isinstance(x, distrax.Distribution),
+        )
         reward = current_state.normalizer.normalize_reward(batch.reward)
 
         def broadcast_to_match(x, target_ndim):
