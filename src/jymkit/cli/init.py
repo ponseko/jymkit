@@ -45,6 +45,10 @@ def update_project_dependencies(toml_path):
 
         # Modify the dependencies line
         for i, line in enumerate(lines):
+            # Find the line with "requires-python =" and set to minimum Jymkit version
+            if line.strip().startswith("requires-python ="):
+                lines[i] = 'requires-python = ">=3.11"\n'
+
             if line.strip().startswith("dependencies ="):
                 # Extract the existing dependencies list
                 if "[]" in line:
@@ -55,7 +59,13 @@ def update_project_dependencies(toml_path):
                 # Add jymkit with the required version
                 dependencies.append(f"jymkit[algs]>={jymkit.__version__}")
                 lines[i] = f"dependencies = {dependencies}\n"
-                break
+
+            # Check for the line 'build-backend = "uv_build"'
+            if line.strip().startswith("build-backend ="):
+                if "uv_build" in line:
+                    # Add a line below line 'module-root = ""' to ensure no src dir is expected
+                    lines.insert(i + 1, 'module-root = ""\n')
+                    break  # Break after, as this will kill the ordering
 
         # Write the updated lines back to the file
         with toml_path.open("w") as file:
