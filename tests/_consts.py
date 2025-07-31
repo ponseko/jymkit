@@ -1,7 +1,9 @@
+import optax
+
 from jymkit.algorithms import PPO, SAC
 
 DISCRETE_ALGS = [PPO, SAC]
-CONTINUOUS_ALGS = [PPO]
+CONTINUOUS_ALGS = [PPO, SAC]
 
 PPO_MIN_CONFIG = {
     "num_envs": 2,
@@ -11,6 +13,24 @@ PPO_MIN_CONFIG = {
     "log_function": None,
 }
 
+SAC_CONTINUOUS_CONFIG = {
+    "total_timesteps": 1_000_000,
+    "num_envs": 8,
+    "learning_rate": 0.001,
+    "update_every": 8,
+    "batch_size": 256,
+    "target_entropy_scale": optax.linear_schedule(
+        init_value=1.5, end_value=0.2, transition_steps=1_000_000 // 8
+    ),
+    "replay_buffer_size": 500_000,
+    "normalize_rew": False,
+    "normalize_obs": False,
+    "policy_kwargs": {
+        "actor_features": [128, 128],
+        "critic_features": [128, 128],
+    },
+    "log_function": None,
+}
 
 CLASSIC_CONTROL_ENVS = [
     "CartPole-v1",

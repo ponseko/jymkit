@@ -1,12 +1,12 @@
 [project]
 name = "jymkit"
-version = "0.0.11"
+version = "0.0.12"
 description = "A lightweight utility library for reinforcement learning projects in JAX and Equinox."
 readme = "README.md"
 authors = [
     { name = "Koen Ponse", email = "k.ponse@liacs.leidenuniv.nl" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "equinox>=0.12.1",
     "jax>=0.5.2,<0.7.0"
