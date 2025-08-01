@@ -64,7 +64,7 @@ def update_project_dependencies(toml_path):
             if line.strip().startswith("build-backend ="):
                 if "uv_build" in line:
                     # Add a line below line 'module-root = ""' to ensure no src dir is expected
-                    lines.insert(i + 1, 'module-root = ""\n')
+                    lines.insert(i + 1, "\n[tool.uv.build-backend]\nmodule-root = ''\n")
                     break  # Break after, as this will kill the ordering
 
         # Write the updated lines back to the file
@@ -97,6 +97,8 @@ def main():
     args = parser.parse_args()
     projectname = args.projectname
 
+    print(f"\n{BOLD}🚀 JymKit {jymkit.__version__}")
+
     # print(
     #     f"\n{BOLD}🚀 Setting up your new jymkit project: {projectname if projectname else ''}{RESET}\n"
     # )
@@ -109,7 +111,7 @@ def main():
     #     print(f"\n{BOLD}🚀 Setting up: {projectname}{RESET}\n")
 
     build_environment_template = args.yes or yes_no_prompt(
-        "Would you like to include a environment template?"
+        "Would you like to include a environment template?", default="y"
     )
     include_algorithm_source = args.yes or yes_no_prompt(
         "Instead of importing, would you like to copy the algorithm source code into your project?",
