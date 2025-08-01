@@ -123,27 +123,21 @@ class PPO(RLAlgorithm):
             (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
                 rollout_state, env
             )
+            metric = trajectory_batch.info or {}
 
             # Post-process the trajectory batch (GAE, returns, normalization)
             trajectory_batch, updated_state = self._postprocess_rollout(
                 trajectory_batch.view_transposed, self.state
             )
-            trajectory_batch = Transition.from_transposed(trajectory_batch)
-
-            # Make train batch
-            train_data = trajectory_batch.make_minibatches(
-                rng, self.num_minibatches, self.num_epochs, n_batch_axis=2
-            )
 
             # Update agent
-            updated_state, _ = jax.lax.scan(
-                lambda state, data: self._update_agent_state(state, data),
+            updated_state = self._update_agent_state(
+                rng,
                 updated_state,  # <-- Use updated state with updated normalizer
-                train_data.view_transposed,
+                trajectory_batch,
             )
             self = replace(self, state=updated_state)
 
-            metric = trajectory_batch.info
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
@@ -260,8 +254,8 @@ class PPO(RLAlgorithm):
         return trajectory_batch, updated_state
 
     def _update_agent_state(
-        self, current_state: PPOState, minibatch: Transition
-    ) -> Tuple[PPOState, None]:
+        self, key, current_state: PPOState, train_data: Transition
+    ) -> PPOState:
         @eqx.filter_grad
         def __ppo_los_fn(
             params: Tuple[ActorNetwork, ValueNetwork],
@@ -327,20 +321,36 @@ class PPO(RLAlgorithm):
             total_loss = actor_loss + self.vf_coef * value_loss - ent_coef * entropy
             return total_loss  # , (actor_loss, value_loss, entropy)
 
-        actor, critic = current_state.actor, current_state.critic
-        grads = __ppo_los_fn((actor, critic), minibatch)
-        updates, optimizer_state = self.optimizer.update(
-            grads, current_state.optimizer_state
-        )
-        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+        def scan_minibatch_update(current_state, minibatch):
+            actor, critic = current_state.actor, current_state.critic
+            grads = __ppo_los_fn((actor, critic), minibatch)
+            updates, optimizer_state = self.optimizer.update(
+                grads, current_state.optimizer_state
+            )
+            new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
 
-        updated_state = PPOState(
-            actor=new_actor,
-            critic=new_critic,
-            optimizer_state=optimizer_state,
-            normalizer=current_state.normalizer,  # already updated
+            updated_state = PPOState(
+                actor=new_actor,
+                critic=new_critic,
+                optimizer_state=optimizer_state,
+                normalizer=current_state.normalizer,  # already updated
+            )
+            return updated_state, None
+
+        def scan_epoch_update(current_state, key):
+            minibatches = train_data.make_minibatches(
+                key, self.num_minibatches, n_batch_axis=2
+            )
+            updated_state, _ = jax.lax.scan(
+                scan_minibatch_update, current_state, minibatches
+            )
+            return updated_state, None
+
+        update_keys = jax.random.split(key, self.num_epochs)
+        updated_state, _ = jax.lax.scan(
+            scan_epoch_update, current_state, update_keys, unroll=16
         )
-        return updated_state, None
+        return updated_state
 
     def _make_agent_state(
         self,
