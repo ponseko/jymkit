@@ -1,7 +1,7 @@
 from importlib.metadata import version
 
 __version__ = version("jymkit")
-from jymkit import _make
+from jymkit import _make, tree as tree
 
 from ._environment import Environment as Environment, TimeStep as TimeStep
 from ._spaces import (
