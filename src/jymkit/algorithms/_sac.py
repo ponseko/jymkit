@@ -48,7 +48,8 @@ class SAC(RLAlgorithm):
     state: PyTree[SACState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
-    learning_rate: float | optax.Schedule = eqx.field(static=True, default=3e-4)
+    learning_rate: float = 3e-4
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
     gamma: float = 0.99
     max_grad_norm: float = 0.5
     update_every: int = eqx.field(static=True, default=128)
@@ -56,7 +57,8 @@ class SAC(RLAlgorithm):
     batch_size: int = 128
     init_alpha: float = 0.2
     learn_alpha: bool = eqx.field(static=True, default=True)
-    target_entropy_scale: float | optax.Schedule = eqx.field(static=True, default=0.5)
+    target_entropy_scale: float = 0.5
+    anneal_entropy_scale: bool | float = eqx.field(static=True, default=False)
     tau: float = 0.95
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
@@ -66,12 +68,42 @@ class SAC(RLAlgorithm):
     normalize_rew: bool = eqx.field(static=True, default=False)
 
     @property
+    def _learning_rate_schedule(self):
+        if self.anneal_learning_rate:
+            end_value = (
+                0.0 if self.anneal_learning_rate is True else self.anneal_learning_rate
+            )
+            return optax.linear_schedule(
+                init_value=self.learning_rate,
+                end_value=end_value,
+                transition_steps=self.num_training_updates,
+            )
+        return optax.constant_schedule(self.learning_rate)
+
+    @property
+    def _target_entropy_scale_schedule(self):
+        if self.anneal_entropy_scale:
+            end_value = (
+                0.0 if self.anneal_entropy_scale is True else self.anneal_entropy_scale
+            )
+            return optax.linear_schedule(
+                init_value=self.target_entropy_scale,
+                end_value=end_value,
+                transition_steps=self.num_training_updates,
+            )
+        return optax.constant_schedule(self.target_entropy_scale)
+
+    @property
     def num_iterations(self):
         return int(self.total_timesteps // self.update_every)
 
     @property
     def num_steps(self):  # rollout length
         return int(self.update_every // self.num_envs)
+
+    @property
+    def num_training_updates(self):
+        return self.num_iterations  # * num_epochs
 
     @staticmethod
     def get_action(key: PRNGKeyArray, state: SACState, observation) -> Array:
@@ -81,21 +113,14 @@ class SAC(RLAlgorithm):
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "SAC":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
-            self = self.__make_multi_agent__(
-                upgrade_func_names=[
-                    "get_action",
-                    "_update_agent_state",
-                    "_make_agent_state",
-                    "_postprocess_rollout",
-                ]
-            )
+            self = self.__make_multi_agent__()
 
         if self.optimizer is None:
             self = replace(
                 self,
                 optimizer=optax.chain(
                     optax.clip_by_global_norm(self.max_grad_norm),
-                    optax.adabelief(learning_rate=self.learning_rate),
+                    optax.adabelief(learning_rate=self._learning_rate_schedule),
                 ),
             )
 
@@ -263,7 +288,7 @@ class SAC(RLAlgorithm):
             q_out = jax.vmap(params)(batch.observation, batch.action)
             q_out = jax.tree.map(get_q_from_actions, q_out, batch.action)
             q_loss = jax.tree.map(lambda q, t: jnp.mean((q - t) ** 2), q_out, q_target)
-            return jnp.array(jax.tree.leaves(q_loss)).mean()
+            return jym.tree.mean(q_loss)
 
         @eqx.filter_grad
         def __sac_actor_loss(params, batch: Transition):
@@ -285,7 +310,7 @@ class SAC(RLAlgorithm):
             )
             # might still be lingering dimensions: flatten everything
             target = jax.tree.map(lambda x: jnp.reshape(x, (-1,)), target)
-            return -jnp.mean(jnp.concatenate(jax.tree.leaves(target)))
+            return -jym.tree.mean(target)
 
         @eqx.filter_grad
         def __sac_alpha_loss(params: Alpha):
@@ -298,18 +323,11 @@ class SAC(RLAlgorithm):
                     _, log_probs = action_dist.sample_and_log_prob(seed=actor_loss_key)
                     action_dim = jnp.prod(jnp.array(batch.action.shape[1:]))
 
-                if isinstance(self.target_entropy_scale, float):
-                    target_entropy = -(self.target_entropy_scale) * action_dim
-                else:  # Is an optax.Schedule
-                    target_entropy = (
-                        -(
-                            self.target_entropy_scale(  # TODO: brittle
-                                current_state.optimizer_state[1][0].count  # type: ignore
-                            )
-                        )
-                        * action_dim
-                    )
-
+                update_count = jym.tree.get_first(
+                    current_state.optimizer_state, "count"
+                )
+                target_entropy_scale = self._target_entropy_scale_schedule(update_count)
+                target_entropy = -(target_entropy_scale * action_dim)
                 return -jnp.mean(params() * (log_probs + target_entropy))
 
             action_dist = jax.vmap(current_state.actor)(batch.observation)
@@ -318,7 +336,7 @@ class SAC(RLAlgorithm):
                 action_dist,
                 is_leaf=lambda x: isinstance(x, distrax.Distribution),
             )
-            loss = jnp.mean(jnp.array(jax.tree.leaves(loss)))
+            loss = jym.tree.mean(loss)
             return loss
 
         rng, target_key, actor_loss_key = jax.random.split(key, 3)
@@ -472,7 +490,7 @@ class SAC(RLAlgorithm):
                     step_key, env_state, action
                 )
                 done = jnp.logical_or(terminated, truncated)
-                episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
+                episode_reward += jym.tree.mean(reward)
                 return (rng, obs, env_state, done, episode_reward)
 
             key, reset_key = jax.random.split(key)

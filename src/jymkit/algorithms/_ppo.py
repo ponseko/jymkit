@@ -29,13 +29,15 @@ class PPO(RLAlgorithm):
     state: PPOState = eqx.field(default=None)
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
-    learning_rate: float | optax.Schedule = eqx.field(static=True, default=2.5e-4)
+    learning_rate: float = 2.5e-4
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     max_grad_norm: float = 0.5
     clip_coef: float = 0.2
-    clip_coef_vf: float = 10.0  # Depends on the reward scaling !
-    ent_coef: float | optax.Schedule = eqx.field(static=True, default=0.01)
+    clip_coef_vf: float = 10.0
+    ent_coef: float = 0.01
+    anneal_ent_coef: bool | float = eqx.field(static=True, default=False)
     vf_coef: float = 0.25
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
@@ -45,7 +47,31 @@ class PPO(RLAlgorithm):
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
     normalize_obs: bool = eqx.field(static=True, default=False)
-    normalize_rewards: bool = eqx.field(static=True, default=True)
+    normalize_rewards: bool = eqx.field(static=True, default=False)
+
+    @property
+    def _learning_rate_schedule(self):
+        if self.anneal_learning_rate:
+            end_value = (
+                0.0 if self.anneal_learning_rate is True else self.anneal_learning_rate
+            )
+            return optax.linear_schedule(
+                init_value=self.learning_rate,
+                end_value=end_value,
+                transition_steps=self.num_training_updates,
+            )
+        return optax.constant_schedule(self.learning_rate)
+
+    @property
+    def _ent_coef_schedule(self):
+        if self.anneal_ent_coef:
+            end_value = 0.0 if self.anneal_ent_coef is True else self.anneal_ent_coef
+            return optax.linear_schedule(
+                init_value=self.ent_coef,
+                end_value=end_value,
+                transition_steps=self.num_training_updates,
+            )
+        return optax.constant_schedule(self.ent_coef)
 
     @property
     def minibatch_size(self):
@@ -58,6 +84,10 @@ class PPO(RLAlgorithm):
     @property
     def batch_size(self):
         return self.minibatch_size * self.num_minibatches
+
+    @property
+    def num_training_updates(self):
+        return self.num_iterations * self.num_epochs
 
     @staticmethod
     def get_action(
@@ -72,26 +102,18 @@ class PPO(RLAlgorithm):
     @staticmethod
     def get_value(state: PPOState, observation):
         observation = state.normalizer.normalize_obs(observation)
-        return jax.vmap(state.critic)(observation)
+        return state.critic(observation)
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
-            self = self.__make_multi_agent__(
-                upgrade_func_names=[
-                    "get_action",
-                    "get_value",
-                    "_update_agent_state",
-                    "_make_agent_state",
-                    "_postprocess_rollout",
-                ]
-            )
+            self = self.__make_multi_agent__()
 
         if self.optimizer is None:
             self = replace(
                 self,
                 optimizer=optax.chain(
                     optax.clip_by_global_norm(self.max_grad_norm),
-                    optax.adabelief(learning_rate=self.learning_rate),
+                    optax.adabelief(learning_rate=self._learning_rate_schedule),
                 ),
             )
 
@@ -172,9 +194,10 @@ class PPO(RLAlgorithm):
             (obsv, reward, terminated, truncated, info), env_state = env.step(
                 step_key, env_state, action
             )
-
-            value = self.get_value(self.state, last_obs)
-            next_value = self.get_value(self.state, info[ORIGINAL_OBSERVATION_KEY])
+            value = jax.vmap(self.get_value, in_axes=(None, 0))(self.state, last_obs)
+            next_value = jax.vmap(self.get_value, in_axes=(None, 0))(
+                self.state, info[ORIGINAL_OBSERVATION_KEY]
+            )
 
             # TODO: variable gamma from env
             # gamma = self.gamma
@@ -282,9 +305,9 @@ class PPO(RLAlgorithm):
             value = jax.vmap(critic)(norm_obs)
             init_log_prob = train_batch.log_prob
 
-            log_prob = pytree_batch_sum(log_prob)  # Assume independent actions
+            log_prob = pytree_batch_sum(log_prob)
             init_log_prob = pytree_batch_sum(init_log_prob)
-            entropy = pytree_batch_sum(entropy).mean()
+            entropy = pytree_batch_sum(entropy)
 
             ratio = jnp.exp(log_prob - init_log_prob)
             _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
@@ -310,15 +333,13 @@ class PPO(RLAlgorithm):
             value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
             value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
 
-            ent_coef = self.ent_coef
-            if not isinstance(ent_coef, float):
-                # ent_coef is a schedule # TODO
-                ent_coef = ent_coef(  # pyright: ignore
-                    current_state.optimizer_state[1][1].count  # type: ignore
-                )
+            update_count = jym.tree.get_first(current_state.optimizer_state, "count")
+            ent_coef = self._ent_coef_schedule(update_count)
 
             # Total loss
-            total_loss = actor_loss + self.vf_coef * value_loss - ent_coef * entropy
+            total_loss = (
+                actor_loss + self.vf_coef * value_loss - ent_coef * entropy.mean()
+            )
             return total_loss  # , (actor_loss, value_loss, entropy)
 
         def scan_minibatch_update(current_state, minibatch):
@@ -416,7 +437,7 @@ class PPO(RLAlgorithm):
                     step_key, env_state, action
                 )
                 done = jnp.logical_or(terminated, truncated)
-                episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
+                episode_reward += jym.tree.mean(reward)
                 return (rng, obs, env_state, done, episode_reward)
 
             key, reset_key = jax.random.split(key)

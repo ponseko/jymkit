@@ -15,6 +15,14 @@ from jymkit.algorithms.utils import transform_multi_agent
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PER_AGENT_FUNCTIONS = [
+    "get_action",
+    "get_value",
+    "_update_agent_state",
+    "_make_agent_state",
+    "_postprocess_rollout",
+]
+
 
 class RLAlgorithm(eqx.Module):
     state: eqx.AbstractVar[PyTree[eqx.Module]]
@@ -51,7 +59,9 @@ class RLAlgorithm(eqx.Module):
     ) -> Float[Array, " num_eval_episodes"]:
         pass
 
-    def __make_multi_agent__(self, *, upgrade_func_names: List[str]):
+    def __make_multi_agent__(
+        self, *, upgrade_func_names: List[str] = DEFAULT_PER_AGENT_FUNCTIONS
+    ):
         cls = self.__class__
         new_attrs: dict[str, object] = {}
 
@@ -59,7 +69,14 @@ class RLAlgorithm(eqx.Module):
             try:
                 attr_obj = inspect.getattr_static(cls, name)
             except AttributeError:
+                if (
+                    name in DEFAULT_PER_AGENT_FUNCTIONS
+                    and upgrade_func_names == DEFAULT_PER_AGENT_FUNCTIONS
+                ):  # If algorithm is just using defaults, then we skip missing methods
+                    # If upgrade_func_names is set, then we expect methods to be present.
+                    continue
                 raise AttributeError(f"Method {name!r} not found in {cls.__name__}. ")
+
             if isinstance(attr_obj, staticmethod):
                 orig_fn: Callable = attr_obj.__func__
                 new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))
