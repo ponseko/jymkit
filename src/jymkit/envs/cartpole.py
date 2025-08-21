@@ -18,7 +18,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
-class CartPole(Environment):
+class CartPole(Environment[EnvState]):
     """
     CartPole environment from OpenAI Gym.
     """

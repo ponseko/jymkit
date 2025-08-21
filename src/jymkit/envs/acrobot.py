@@ -18,7 +18,7 @@ class EnvState(eqx.Module):
     time: int
 
 
-class Acrobot(Environment):
+class Acrobot(Environment[EnvState]):
     """
     Acrobot environment from OpenAI Gym.
     """

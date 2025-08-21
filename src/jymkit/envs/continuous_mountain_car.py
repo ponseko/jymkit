@@ -16,7 +16,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
-class ContinuousMountainCar(Environment):
+class ContinuousMountainCar(Environment[EnvState]):
     """
     Continuous Mountaincar environment from OpenAI Gym.
     """

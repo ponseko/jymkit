@@ -19,7 +19,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
-class Pendulum(Environment):
+class Pendulum(Environment[EnvState]):
     """
     Pendulum environment from OpenAI Gym.
     """
