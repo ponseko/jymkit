@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
 import equinox as eqx
 import jax
@@ -65,44 +65,47 @@ class GymnaxWrapper(Wrapper):
     def step(
         self, key: PRNGKeyArray, state: Any, action: int | float
     ) -> Tuple[TimeStep, Any]:
-        if not self.handle_truncation:
-            obs, env_state, reward, done, info = self._env.step(key, state, action)
+        _params = getattr(self._env, "default_params")  # is dataclass
+        original_max_steps = getattr(_params, "max_steps_in_episode", None)
+
+        if not self.handle_truncation or original_max_steps is None:
+            obs, state_step, reward, done, info = self._env.step_env(
+                key, state, action, _params
+            )
             terminated, truncated = done, False
-        else:
-            # We increase max_steps_in_episode by 1 so that the done flag from Gymnax
-            # only triggers when the episode terminates without truncation.
-            # Then we set truncate manually in this wrapper based on the original max_steps_in_episode.
-            _params = getattr(self._env, "default_params")  # is dataclass
-            original_max_steps = _params.max_steps_in_episode
-            altered_params = eqx.tree_at(
-                lambda x: x.max_steps_in_episode, _params, replace_fn=lambda x: x + 1
-            )
-            obs_step, state_step, reward, done, info = self._env.step_env(
-                key, state, action, altered_params
-            )
-            terminated = done  # did not truncate due to the +1 in max_steps_in_episode
-            truncated = state_step.time >= original_max_steps
 
-            # Auto-reset manually since we used gymnax_env.step_env(...) instead of gymnax_env.step(...)
-            done = jnp.logical_or(terminated, truncated)
-            obs_reset, state_reset = self.reset(key)
-            env_state = jax.tree.map(
-                lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
+            timestep_step = TimeStep(
+                observation=obs,
+                reward=reward,
+                terminated=terminated,
+                truncated=truncated,
+                info=info,
             )
-            obs = jax.tree.map(
-                lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step
-            )
-            # Insert the original observation in info to bootstrap correctly
-            info[ORIGINAL_OBSERVATION_KEY] = obs_step
+            timestep, state = self.auto_reset(key, timestep_step, state_step)
+            return timestep, state
 
-        timestep = TimeStep(
-            observation=obs,
+        # Handle truncation:
+        # We increase max_steps_in_episode by 1 so that the done flag from Gymnax
+        # only triggers when the episode terminates without truncation.
+        # Then we set truncate manually in this wrapper based on the original max_steps_in_episode.
+        altered_params = eqx.tree_at(
+            lambda x: x.max_steps_in_episode, _params, replace_fn=lambda x: x + 1
+        )
+        obs_step, state_step, reward, done, info = self._env.step_env(
+            key, state, action, altered_params
+        )
+        terminated = done  # did not truncate due to the +1 in max_steps_in_episode
+        truncated = state_step.time >= original_max_steps
+
+        timestep_step = TimeStep(
+            observation=obs_step,
             reward=reward,
             terminated=terminated,
             truncated=truncated,
             info=info,
         )
-        return timestep, env_state
+        timestep, state = self.auto_reset(key, timestep_step, state_step)
+        return timestep, state
 
     @property
     def observation_space(self) -> Space:
@@ -243,26 +246,15 @@ class BraxWrapper(Wrapper):
         terminated = brax_env_state.done
         info = brax_env_state.info
 
-        # Auto-reset
-        done = jnp.logical_or(terminated, truncated)
-        obs_reset, state_reset = self.reset(key)
-        env_state = jax.tree.map(
-            lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
-        )
-        obs = jax.tree.map(
-            lambda x, y: jax.lax.select(done, x, y), obs_reset, brax_env_state.obs
-        )
-        # Insert the original observation in info to bootstrap correctly
-        info[ORIGINAL_OBSERVATION_KEY] = brax_env_state.obs
-
-        timestep = TimeStep(
-            observation=obs,
+        timestep_step = TimeStep(
+            observation=brax_env_state.obs,
             reward=brax_env_state.reward,
             terminated=terminated,
             truncated=truncated,
             info=info,
         )
-        return timestep, env_state
+        timestep, state = self.auto_reset(key, timestep_step, state_step)
+        return timestep, state
 
     @property
     def observation_space(self) -> Any:
@@ -277,3 +269,181 @@ class BraxWrapper(Wrapper):
 
         action_space = braxGym.GymWrapper(self._env).action_space
         return gymnasium_to_jymkit_space(action_space)
+
+
+class PgxWrapper(Wrapper):
+    """
+    Wrapper for Pgx environments to transform them into the Jymkit environment interface.
+
+    **Arguments:**
+
+    - `_env`: Pgx environment.
+    - `self_play`: Use a single model for all players in multi-agent environments.
+    """
+
+    _env: Any
+    self_play: bool = eqx.field(static=True, default=False)
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        state = self._env.init(key)
+        observation = state.observation
+        action_mask = state.legal_action_mask
+        obs = AgentObservation(observation, action_mask)
+        if self._multi_agent:
+            obs = (obs,) * self._env.num_players
+        return obs, state  # pyright: ignore
+
+    def step(
+        self, key: PRNGKeyArray, state: Any, action: Tuple[int | float] | int | float
+    ) -> Tuple[TimeStep, Any]:
+        current_player_index = state.current_player
+        active_player_action = jnp.array(action)
+        try:  # If trainer returns actions for each player: only excecute the active player action
+            if len(active_player_action) == self._env.num_players:
+                active_player_action = jnp.array(action)[current_player_index]
+        except Exception:
+            pass
+
+        pgx_state = self._env.step(state, active_player_action, key)
+
+        observation = pgx_state.observation
+        action_mask = pgx_state.legal_action_mask
+        reward = pgx_state.rewards.squeeze()
+        obs = AgentObservation(observation, action_mask)
+        if self._multi_agent:
+            obs = (obs,) * self._env.num_players
+            reward = tuple(reward)
+        timestep_step = TimeStep(
+            observation=obs,
+            reward=reward,
+            terminated=pgx_state.terminated,
+            truncated=pgx_state.truncated,
+            info={"current_player": pgx_state.current_player},
+        )
+        timestep, state = self.auto_reset(key, timestep_step, pgx_state)
+        return timestep, state
+
+    @property
+    def observation_space(self) -> Box | List[Box]:
+        num_players = self._env.num_players
+        shape = self._env.observation_shape
+        obs_space = Box(
+            low=jnp.full(shape, -10),
+            high=jnp.full(shape, 10),
+            shape=shape,
+            dtype=jnp.int32,
+        )
+        if self._multi_agent:
+            return (obs_space,) * num_players
+        return obs_space
+
+    @property
+    def action_space(self) -> Discrete | List[Discrete]:
+        num_players = self._env.num_players
+        num_actions = self._env.num_actions
+        action_space = Discrete(num_actions)
+        if self._multi_agent:
+            return (action_space,) * num_players
+        return action_space
+
+    @property
+    def _multi_agent(self) -> bool:
+        if self.self_play:
+            return False
+        return self._env.num_players > 1
+
+
+class NavixWrapper(Wrapper):
+    """
+    Wrapper for Navix environments to transform them into the Jymkit environment interface.
+
+    **Arguments:**
+
+    - `_env`: Navix environment.
+    """
+
+    _env: Any
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        timestep_navix = self._env.reset(key)
+        return timestep_navix.observation, timestep_navix
+
+    def step(self, key: PRNGKeyArray, state: Any, action: int) -> Tuple[TimeStep, Any]:
+        timestep_navix = self._env._step(state, action)
+        obs = timestep_navix.observation
+        reward = timestep_navix.reward
+        terminated = timestep_navix.step_type == 2
+        truncated = timestep_navix.step_type == 1
+        info = timestep_navix.info
+        timestep_step = TimeStep(
+            observation=obs,
+            reward=reward,
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
+        )
+        timestep, state = self.auto_reset(key, timestep_step, timestep_navix)
+        return timestep, state
+
+    @property
+    def observation_space(self) -> Box:
+        return Box(
+            low=self._env.observation_space.minimum,
+            high=self._env.observation_space.maximum,
+            shape=self._env.observation_space.shape,
+            dtype=self._env.observation_space.dtype,
+        )
+
+    @property
+    def action_space(self) -> Discrete:
+        num_actions = self._env.action_space.maximum
+        # Add the "done" no-op action which is outside of the Navix action space (?)
+        num_actions += 1
+        return Discrete(num_actions)
+
+
+class xMinigridWrapper(Wrapper):
+    """
+    Wrapper for xMinigrid environments to transform them into the Jymkit environment interface.
+
+    **Arguments:**
+
+    - `_env`: xMinigrid environment.
+    - `_params`: xMinigrid environment parameters.
+    """
+
+    _env: Any
+    _params: Any
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        timestep_xminigrid = self._env.reset(self._params, key)
+        return timestep_xminigrid.observation, timestep_xminigrid
+
+    def step(self, key: PRNGKeyArray, state: Any, action: int) -> Tuple[TimeStep, Any]:
+        timestep_x = self._env.step(self._params, state, action)  # key is in state
+        truncated = jnp.logical_and(timestep_x.discount != 0, timestep_x.step_type == 2)
+        terminated = jnp.logical_and(timestep_x.step_type == 2, ~truncated)
+
+        timestep_step = TimeStep(
+            observation=timestep_x.observation,
+            reward=timestep_x.reward,
+            terminated=terminated,
+            truncated=truncated,
+            info={},
+        )
+        timestep, state = self.auto_reset(key, timestep_step, timestep_x)
+        return timestep, state
+
+    @property
+    def observation_space(self) -> Box:
+        obs_shape = self._env.observation_shape(self._params)
+        return Box(
+            low=jnp.full(obs_shape, -10),
+            high=jnp.full(obs_shape, 10),
+            shape=obs_shape,
+            dtype=jnp.int32,
+        )
+
+    @property
+    def action_space(self) -> Discrete:
+        return Discrete(self._env.num_actions(self._params))
