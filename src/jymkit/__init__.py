@@ -20,6 +20,7 @@ from ._wrappers import (
     ScaleRewardWrapper as ScaleRewardWrapper,
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
+    Wrapper as Wrapper,
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,
 )
