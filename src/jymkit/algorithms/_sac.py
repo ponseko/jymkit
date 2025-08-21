@@ -111,7 +111,7 @@ class SAC(RLAlgorithm):
         action_dist = state.actor(observation)
         return action_dist.sample(seed=key)
 
-    def init(self, key: PRNGKeyArray, env: Environment) -> "SAC":
+    def init_state(self, key: PRNGKeyArray, env: Environment) -> "SAC":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
@@ -179,7 +179,7 @@ class SAC(RLAlgorithm):
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init(key, env)
+            self = self.init_state(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
@@ -473,7 +473,7 @@ class SAC(RLAlgorithm):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init()."
+            "Agent state is not initialized. Create one via e.g. train() or init_state()."
         )
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
