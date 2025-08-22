@@ -72,6 +72,10 @@ class Box(Space):
     shape: tuple[int, ...] = ()
     dtype: type = jnp.float32
 
+    def __post_init__(self):
+        if not isinstance(self.shape, tuple):
+            self.shape = (self.shape,)
+
     def sample(self, rng: PRNGKeyArray) -> Array:
         """Sample random action uniformly from set of continuous choices."""
         low = self.low

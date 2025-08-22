@@ -122,7 +122,9 @@ class Wrapper(Environment):
 
     @property
     def _multi_agent(self) -> bool:
-        return getattr(self._env, "_multi_agent", False)
+        return getattr(
+            self._env, "multi_agent", getattr(self._env, "_multi_agent", False)
+        )
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -208,7 +210,11 @@ class LogWrapper(Wrapper):
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, LogEnvState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
-        done = jnp.logical_or(timestep.terminated, timestep.truncated)  # .any()
+
+        terminated, truncated = timestep.terminated, timestep.truncated
+        assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+        done = jax.tree.map(jnp.logical_or, terminated, truncated)
+        done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
         new_episode_return = jax.tree.map(
             lambda _r, r: (_r + r), state.episode_returns, timestep.reward
         )

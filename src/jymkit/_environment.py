@@ -141,7 +141,10 @@ class Environment(eqx.Module, Generic[TEnvState]):
         """
 
         obs_step, reward, terminated, truncated, info = timestep_step
-        done = jnp.any(jnp.logical_or(terminated, truncated))
+
+        assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+        done = jax.tree.map(jnp.logical_or, terminated, truncated)
+        done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
         obs_reset, state_reset = self.reset(key)
 
         # Replace state and obs based on done
