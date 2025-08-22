@@ -7,6 +7,7 @@ import numpy as np
 from jaxtyping import Array, PRNGKeyArray
 
 from jymkit._environment import Environment, TimeStep
+from jymkit._registry import registry
 from jymkit._spaces import Box
 
 DEFAULT_X = jnp.pi
@@ -19,6 +20,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
+@registry.register("Pendulum-v1")
 class Pendulum(Environment[EnvState]):
     """
     Pendulum environment from OpenAI Gym.

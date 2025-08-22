@@ -7,6 +7,7 @@ import numpy as np
 from jaxtyping import Array, Bool, Float, PRNGKeyArray
 
 from jymkit._environment import Environment, TimeStep
+from jymkit._registry import registry
 from jymkit._spaces import Box
 
 
@@ -16,6 +17,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
+@registry.register("ContinuousMountainCar-v0")
 class ContinuousMountainCar(Environment[EnvState]):
     """
     Continuous Mountaincar environment from OpenAI Gym.
