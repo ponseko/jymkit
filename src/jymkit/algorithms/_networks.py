@@ -218,6 +218,7 @@ class ContinuousActionLinear(AgentOutputLinear):
         warnings.warn(
             "Action mask provided for a unsupported continuous action space. Ignoring ..."
         )
+        return logits
 
 
 class DiscreteQLinear(AgentOutputLinear):

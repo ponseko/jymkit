@@ -33,7 +33,7 @@ def test_continuous_is_learning(alg):
     if alg == SAC:
         agent = alg(**TEST_CONSTS.SAC_CONTINUOUS_CONFIG)
     else:
-        agent = alg(total_timesteps=250_000, log_function=None)
+        agent = alg(total_timesteps=500_000, log_function=None)
     agent = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)

@@ -1,7 +1,7 @@
 from importlib.metadata import version
 
 __version__ = version("jymkit")
-from jymkit import _make, tree as tree
+from jymkit import _registry, envs as envs, tree as tree
 
 from ._environment import Environment as Environment, TimeStep as TimeStep
 from ._spaces import (
@@ -20,6 +20,7 @@ from ._wrappers import (
     ScaleRewardWrapper as ScaleRewardWrapper,
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
+    Wrapper as Wrapper,
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,
 )
@@ -29,4 +30,5 @@ from ._wrappers_ext import (
     JumanjiWrapper as JumanjiWrapper,
 )
 
-make = _make.make
+registry = _registry.registry
+make = _registry.make
