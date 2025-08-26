@@ -13,8 +13,11 @@ SKIP_ENVS = {
 
 def run_env_3_steps(env_id):
     """Creates an environment, resets it, and performs 3 steps with sampled actions."""
+    try:
+        env = jym.make(env_id)
+    except ImportError as e:
+        pytest.skip(f"Skipping {env_id} due to ImportError: {e}")
 
-    env = jym.make(env_id)
     key = jax.random.PRNGKey(42)
     obs, state = env.reset(key)
 
