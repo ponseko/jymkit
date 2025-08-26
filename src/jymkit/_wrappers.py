@@ -122,9 +122,7 @@ class Wrapper(Environment):
 
     @property
     def _multi_agent(self) -> bool:
-        return getattr(
-            self._env, "multi_agent", getattr(self._env, "_multi_agent", False)
-        )
+        return getattr(self, "multi_agent", getattr(self._env, "_multi_agent", False))
 
     def __getattr__(self, name):
         return getattr(self._env, name)

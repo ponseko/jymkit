@@ -106,7 +106,7 @@ class Discrete(Space):
     dtype: type
     shape: tuple[int, ...] = ()
 
-    def __init__(self, n: int, dtype: type = jnp.int16):
+    def __init__(self, n: int, dtype: type = jnp.int_):
         self.n = n
         self.dtype = dtype
 
@@ -133,7 +133,7 @@ class MultiDiscrete(Space):
     shape: tuple[int, ...]
 
     def __init__(
-        self, nvec: Int[Array | np.ndarray, " num_actions"], dtype: type = jnp.int16
+        self, nvec: Int[Array | np.ndarray, " num_actions"], dtype: type = jnp.int_
     ):
         self.nvec = nvec
         self.dtype = dtype
