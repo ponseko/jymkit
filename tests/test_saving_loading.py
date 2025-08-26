@@ -24,7 +24,7 @@ def test_saving_loading(tmp_path):
 
     # Load the agent
     load_agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
-    load_agent = load_agent.init(jax.random.PRNGKey(1), env)
+    load_agent = load_agent.init_state(jax.random.PRNGKey(1), env)
     load_agent = load_agent.load_state(save_path)
 
     # Check if weights match (via some arbitary layer)

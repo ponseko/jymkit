@@ -1,5 +1,3 @@
-import optax
-
 from jymkit.algorithms import PPO, SAC
 
 DISCRETE_ALGS = [PPO, SAC]
@@ -19,9 +17,8 @@ SAC_CONTINUOUS_CONFIG = {
     "learning_rate": 0.001,
     "update_every": 8,
     "batch_size": 256,
-    "target_entropy_scale": optax.linear_schedule(
-        init_value=1.5, end_value=0.2, transition_steps=1_000_000 // 8
-    ),
+    "target_entropy_scale": 1.5,
+    "anneal_entropy_scale": 0.2,
     "replay_buffer_size": 500_000,
     "normalize_rew": False,
     "normalize_obs": False,
@@ -37,7 +34,7 @@ CLASSIC_CONTROL_ENVS = [
     "MountainCar-v0",
     "Acrobot-v1",
     "Pendulum-v1",
-    "ContinuousMountainCar-v0",
+    "MountainCarContinuous-v0",
 ]
 
 GYMNAX_TEST_ENVS = [

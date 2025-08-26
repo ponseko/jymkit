@@ -120,6 +120,10 @@ class Wrapper(Environment):
     def observation_space(self) -> Space | PyTree[Space]:
         return self._env.observation_space
 
+    @property
+    def _multi_agent(self) -> bool:
+        return getattr(self, "multi_agent", getattr(self._env, "_multi_agent", False))
+
     def __getattr__(self, name):
         return getattr(self._env, name)
 
@@ -204,7 +208,11 @@ class LogWrapper(Wrapper):
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, LogEnvState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
-        done = jnp.logical_or(timestep.terminated, timestep.truncated)  # .any()
+
+        terminated, truncated = timestep.terminated, timestep.truncated
+        assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+        done = jax.tree.map(jnp.logical_or, terminated, truncated)
+        done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
         new_episode_return = jax.tree.map(
             lambda _r, r: (_r + r), state.episode_returns, timestep.reward
         )
@@ -575,3 +583,25 @@ class DiscreteActionWrapper(Wrapper):
         This is useful for algorithms that need to know the original action space.
         """
         return self._env.action_space
+
+
+class MetaParamsWrapper(Wrapper):
+    def reset(self, key, params: dict):  # pyright: ignore[reportIncompatibleMethodOverride]
+        env = self._env
+        for k in params:
+            if not hasattr(self._env, k):
+                raise ValueError(
+                    f"Trying to map over {k}, but environment {k} not found in {self._env}."
+                )
+            env = eqx.tree_at(lambda env: getattr(env, k), self._env, params[k])
+        return env.reset(key)
+
+    def step(self, key, state, action, params: dict):  # pyright: ignore[reportIncompatibleMethodOverride]
+        env = self._env
+        for k in params:
+            if not hasattr(self._env, k):
+                raise ValueError(
+                    f"Trying to map over {k}, but environment {k} not found in {self._env}."
+                )
+            env = eqx.tree_at(lambda env: getattr(env, k), self._env, params[k])
+        return env.step(key, state, action)

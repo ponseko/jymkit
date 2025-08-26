@@ -7,6 +7,7 @@ import numpy as np
 from jaxtyping import Array, PRNGKeyArray
 
 from jymkit._environment import Environment, TimeStep
+from jymkit._registry import registry
 from jymkit._spaces import Box, Discrete
 
 
@@ -18,6 +19,7 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
+@registry.register("CartPole-v1")
 class CartPole(Environment[EnvState]):
     """
     CartPole environment from OpenAI Gym.

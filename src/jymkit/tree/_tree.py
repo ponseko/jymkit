@@ -4,19 +4,17 @@ from typing import Any, Callable, Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import optax
 from jaxtyping import Array, PyTree, PyTreeDef
 
 """ 
 Convenience pytree functions used in the various RL algorithms which 
-aren't found in used higher-level libraries (e.g. equinox, jax, optax, ...).
+aren't found in used higher-level libraries (equinox / jax).
 """
 
 
 def _tree_size(tree):
     r"""
     Ported from: https://github.com/google-deepmind/optax/pull/1321/files/cadb2bca89e2af6af0e70cf0007080d5f68794a4
-    not yet released in optax, will be removed from jymkit at a later date.
     """
     return sum([jnp.size(leaf) for leaf in jax.tree.leaves(tree)])
 
@@ -31,21 +29,32 @@ def _tree_sum(tree: Any, axis: Optional[int | tuple[int, ...]] = None) -> Array:
     return jax.tree.reduce(operator.add, sums, initializer=0)
 
 
+def _is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
+    """`is_leaf` operator for pytree operations useful when the desired operation
+    should apply on the first-level children of a pytree.
+
+    **Example**:
+    ```python
+    >>> jax.tree.map(f, tree, *rest, is_leaf=_is_child_of(tree))
+    ```
+    """
+    return lambda x: x is not root
+
+
 def tree_mean(tree):
     """Computes the global mean of the leaves of a pytree."""
-    sum = optax.tree.sum(tree)
+    sum = _tree_sum(tree)
     size = _tree_size(tree)
     return sum / size
 
 
 def tree_map_one_level(fn: Callable, tree, *rest):
     """Simple `jax.tree.map` operation over the first level of a pytree."""
-    return jax.tree.map(fn, tree, *rest, is_leaf=is_child_of(tree))
+    return jax.tree.map(fn, tree, *rest, is_leaf=_is_child_of(tree))
 
 
 def tree_get_first(tree: PyTree, key: str) -> Any:
-    """
-    Get the first value from a pytree with the given key.
+    """Get the first value from a pytree with the given key.
     Like `optax.tree.get()` but returns the first value found in case
     of multiple matches instead of raising an error.
 
@@ -59,28 +68,20 @@ def tree_get_first(tree: PyTree, key: str) -> Any:
     **Raises**:
         KeyError: If the key is not found in the pytree.
     """
+    try:
+        import optax
+    except ImportError:
+        raise ImportError(
+            "optax is (for now) required for `jymkit.tree.get_first()`. Please install optax with `pip install optax`."
+        )
     found_values_with_path = optax.tree.get_all_with_path(tree, key)
     if not found_values_with_path:
         raise KeyError(f"Key '{key}' not found in tree: {tree}.")
     return found_values_with_path[0][1]
 
 
-def is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
-    """
-    `is_leaf` operator for pytree operations useful when the desired operation
-    should apply on the first-level children of a pytree.
-
-    **Example**:
-    ```python
-    >>> jax.tree.map(f, tree, *rest, is_leaf=is_child_of(tree))
-    ```
-    """
-    return lambda x: x is not root
-
-
 def tree_stack(pytrees: PyTree, *, axis=0) -> PyTree:
-    """
-    Stack corresponding leaves of pytrees along the specified axis.
+    """Stack corresponding leaves of pytrees along the specified axis.
 
     Interprets the root node's immediate children as a batch of N pytrees that all
     share the same structure. For each leaf, stacks the N leaves along `axis` using
@@ -113,8 +114,7 @@ def tree_stack(pytrees: PyTree, *, axis=0) -> PyTree:
 
 
 def tree_unstack(tree, *, axis=0, structure: Optional[PyTreeDef] = None):  # type: ignore # TODO: return when completed: https://github.com/jax-ml/jax/issues/29037
-    """
-    Inverse of `stack`: split a pytree whose leaves were stacked along `axis`
+    """Inverse of `stack`: split a pytree whose leaves were stacked along `axis`
     into N separate pytrees.
 
     If `structure` is provided (e.g., from `eqx.tree_flatten_one_level`),

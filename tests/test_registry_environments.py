@@ -1,0 +1,71 @@
+import jax
+import pytest
+
+import jymkit as jym
+from jymkit._environment import ORIGINAL_OBSERVATION_KEY
+
+# Skip certain environments that might have special requirements or known issues
+SKIP_ENVS = {
+    "SimpleBandit-bsuite": "Known issue with this environment  (https://github.com/RobertTLange/gymnax/pull/106)",
+    # "some_problematic_env": "Known issue with this environment"
+}
+
+
+def run_env_3_steps(env_id):
+    """Creates an environment, resets it, and performs 3 steps with sampled actions."""
+    try:
+        env = jym.make(env_id)
+    except ImportError as e:
+        pytest.skip(f"Skipping {env_id} due to ImportError: {e}")
+
+    key = jax.random.PRNGKey(42)
+    obs, state = env.reset(key)
+
+    # Do 3 steps (with sampled actions)
+    for i in range(3):
+        key = jax.random.PRNGKey(i)
+        # env.action_space may give back a pytree of spaces, which cannot be sampled without a jax.map
+        # env.sample_action always applies the jax.map and should therefore always work
+        action = env.sample_action(jax.random.PRNGKey(1))
+        timestep, state = env.step(key, state, action)
+
+    assert ORIGINAL_OBSERVATION_KEY in timestep.info  # type: ignore
+
+
+@pytest.mark.parametrize("env_id", jym.registry.registered_envs[::8])
+def test_subset_registered_environments(env_id):
+    if env_id in SKIP_ENVS:
+        pytest.skip(f"Skipping {env_id}: {SKIP_ENVS[env_id]}")
+    run_env_3_steps(env_id)
+
+
+@pytest.mark.skip(reason="Slow test; we run subset of environments instead")
+def test_all_registered_environments():
+    """Test that all registered environments can be loaded, reset, and stepped."""
+
+    all_env_ids = jym.registry.registered_envs
+
+    # Track results
+    successful_envs = []
+    failed_envs = []
+
+    print(f"\nTesting {len(all_env_ids)} registered environments...")
+
+    for env_id in all_env_ids:
+        if env_id in SKIP_ENVS:
+            print(f"⏭️  Skipping {env_id}: {SKIP_ENVS[env_id]}")
+            continue
+
+        try:
+            print(f"🧪 Testing {env_id}...")
+            run_env_3_steps(env_id)
+            successful_envs.append(env_id)
+
+        except Exception as e:
+            failed_envs.append((env_id, str(e)))
+            print(f"   ❌ {env_id} failed: {e}")
+
+    # Assert that all non-skipped environments passed
+    assert len(failed_envs) == 0, (
+        f"Some environments failed ({len(failed_envs)}): {failed_envs}"
+    )
