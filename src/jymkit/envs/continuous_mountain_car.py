@@ -17,8 +17,8 @@ class EnvState(eqx.Module):
     time: int = 0
 
 
-@registry.register("ContinuousMountainCar-v0")
-class ContinuousMountainCar(Environment[EnvState]):
+@registry.register("MountainCarContinuous-v0")
+class MountainCarContinuous(Environment[EnvState]):
     """
     Continuous Mountaincar environment from OpenAI Gym.
     """
