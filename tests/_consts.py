@@ -34,7 +34,7 @@ CLASSIC_CONTROL_ENVS = [
     "MountainCar-v0",
     "Acrobot-v1",
     "Pendulum-v1",
-    "ContinuousMountainCar-v0",
+    "MountainCarContinuous-v0",
 ]
 
 GYMNAX_TEST_ENVS = [
