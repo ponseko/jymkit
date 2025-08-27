@@ -13,6 +13,7 @@ from ._spaces import (
 from ._types import AgentObservation as AgentObservation
 from ._wrappers import (
     DiscreteActionWrapper as DiscreteActionWrapper,
+    FlattenActionSpaceWrapper as FlattenActionSpaceWrapper,
     FlattenObservationWrapper as FlattenObservationWrapper,
     LogWrapper as LogWrapper,
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,

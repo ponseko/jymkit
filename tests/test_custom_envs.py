@@ -329,11 +329,6 @@ def test_custom_envs_w_algs(alg_cls, env_cls):
         )
 
     # Evaluate agent for 5 episodes (since it's a toy env)
-    rewards = []
-    for i in range(5):
-        key = jax.random.PRNGKey(i)
-        reward = agent.evaluate(key, env)
-        rewards.append(reward)
-    avg_reward = sum(rewards) / len(rewards)
-    print(avg_reward)
+    key = jax.random.PRNGKey(42)
+    agent.evaluate(key, env, num_eval_episodes=5)
     # No strict threshold, just check it runs and returns a float

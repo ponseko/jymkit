@@ -165,7 +165,7 @@ class DQN(RLAlgorithm):
             runner_state = (self, buffer, env_state, last_obs, rng)
             return runner_state, metric
 
-        env = self.__check_env__(env, vectorized=True)
+        env = self.__check_env__(env, vectorized=True, flatten_action_space=True)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
@@ -271,7 +271,7 @@ class DQN(RLAlgorithm):
         reward = current_state.normalizer.normalize_reward(batch.reward)
         target = reward + ~batch.terminated * self.gamma * jnp.max(
             q_target_output,
-            axis=-1,  # TODO: does not work for multiple outputs currently
+            axis=-1,  # assumes discrete actions (flatten multidiscrete spaces first)
         )
 
         grads = __dqn_loss(current_state.critic, batch)
@@ -341,6 +341,8 @@ class DQN(RLAlgorithm):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
             env = remove_wrapper(env, VecEnvWrapper)
+
+        env = self.__check_env__(env, vectorized=False, flatten_action_space=True)
 
         def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
             def step_env(carry):

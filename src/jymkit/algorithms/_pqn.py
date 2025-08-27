@@ -93,7 +93,8 @@ class PQN(RLAlgorithm):
     def get_action(
         key: PRNGKeyArray, state: PQNState, observation: PyTree, epsilon: float
     ):
-        q_values = PQN.get_value(state, observation)  # Normalization in `get_value`
+        observation = state.normalizer.normalize_obs(observation)
+        q_values = state.critic(observation)
         action_dist = distrax.EpsilonGreedy(q_values, epsilon=epsilon)
         return action_dist.sample(seed=key)
 
@@ -154,14 +155,14 @@ class PQN(RLAlgorithm):
             updated_state = self._update_agent_state(
                 rng,
                 updated_state,  # <-- Use updated_state w/ updated normalizer
-                trajectory_batch,
+                trajectory_batch.view_transposed,
             )
             self = replace(self, state=updated_state)
 
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
-        env = self.__check_env__(env, vectorized=True)
+        env = self.__check_env__(env, vectorized=True, flatten_action_space=True)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
@@ -182,7 +183,7 @@ class PQN(RLAlgorithm):
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            update_count = jym.tree.get_first(self.state.optimizer_state, "count")
+            update_count = jym.tree.get_first(self.state, "count")
             current_epsilon = self._epsilon_schedule(update_count)
             get_action = partial(self.get_action, epsilon=current_epsilon)
             action = jax.vmap(get_action, in_axes=(0, None, 0))(
@@ -252,7 +253,7 @@ class PQN(RLAlgorithm):
             reward = current_state.normalizer.normalize_reward(minibatch.reward)
             target = reward + ~minibatch.terminated * self.gamma * jnp.max(
                 q_target_output,
-                axis=-1,  # TODO: does not work for multiple outputs currently
+                axis=-1,  # assumes discrete actions (flatten multidiscrete spaces first)
             )
 
             grads = __dqn_loss(current_state.critic, minibatch)
@@ -326,6 +327,8 @@ class PQN(RLAlgorithm):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
             env = remove_wrapper(env, VecEnvWrapper)
+
+        env = self.__check_env__(env, vectorized=False, flatten_action_space=True)
 
         def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
             def step_env(carry):
