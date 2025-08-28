@@ -119,7 +119,7 @@ class DQN(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            critic_features=self.policy_kwargs.get("critic_features", [128, 128]),
+            **self.policy_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -296,16 +296,11 @@ class DQN(RLAlgorithm):
         return updated_state
 
     def _make_agent_state(
-        self,
-        key: PRNGKeyArray,
-        obs_space: jym.Space,
-        output_space: jym.Space,
-        critic_features: list,
+        self, key: PRNGKeyArray, obs_space: jym.Space, output_space: jym.Space
     ):
         critic = QValueNetwork(
             key=key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
             output_space=output_space,
         )
         critic_target = jax.tree.map(lambda x: x, critic)

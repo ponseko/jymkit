@@ -1,3 +1,5 @@
+from typing import Callable
+
 import distrax
 import equinox as eqx
 import jax
@@ -90,3 +92,16 @@ class DistraxContainer(eqx.Module):
             value,
             is_leaf=lambda x: isinstance(x, distrax.Distribution),
         )
+
+
+def TanhNormalFactory(low, high) -> Callable[..., distrax.Distribution]:
+    tanh = distrax.Tanh()
+    scale = (high - low) / 2.0
+    shift = (high + low) / 2.0
+    scale = distrax.ScalarAffine(shift=shift, scale=scale)
+
+    def TanhNormal(loc, scale):
+        dist = distrax.Normal(loc=loc, scale=scale)
+        return distrax.Transformed(dist, distrax.Chain([tanh, scale]))
+
+    return TanhNormal

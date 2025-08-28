@@ -121,8 +121,7 @@ class PPO(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            actor_features=self.policy_kwargs.get("actor_features", [64, 64]),
-            critic_features=self.policy_kwargs.get("critic_features", [64, 64]),
+            **self.policy_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -374,24 +373,17 @@ class PPO(RLAlgorithm):
         return updated_state
 
     def _make_agent_state(
-        self,
-        key: PRNGKeyArray,
-        obs_space: jym.Space,
-        output_space: jym.Space,
-        actor_features: list,
-        critic_features: list,
+        self, key: PRNGKeyArray, obs_space: jym.Space, output_space: jym.Space
     ):
         actor_key, critic_key = jax.random.split(key)
         actor = ActorNetwork(
             key=actor_key,
             obs_space=obs_space,
-            hidden_dims=actor_features,
             output_space=output_space,
         )
         critic = ValueNetwork(
             key=critic_key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
         )
         optimizer_state = self.optimizer.init(
             eqx.filter((actor, critic), eqx.is_inexact_array)

@@ -4,6 +4,10 @@ import pytest
 import jymkit as jym
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 
+TEST_ENVS = (  # All included envs + arbitrary subset of external envs
+    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::8]
+)
+
 # Skip certain environments that might have special requirements or known issues
 SKIP_ENVS = {
     "SimpleBandit-bsuite": "Known issue with this environment  (https://github.com/RobertTLange/gymnax/pull/106)",
@@ -32,7 +36,7 @@ def run_env_3_steps(env_id):
     assert ORIGINAL_OBSERVATION_KEY in timestep.info  # type: ignore
 
 
-@pytest.mark.parametrize("env_id", jym.registry.registered_envs[::8])
+@pytest.mark.parametrize("env_id", TEST_ENVS)
 def test_subset_registered_environments(env_id):
     if env_id in SKIP_ENVS:
         pytest.skip(f"Skipping {env_id}: {SKIP_ENVS[env_id]}")

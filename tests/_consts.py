@@ -1,6 +1,6 @@
-from jymkit.algorithms import PPO, SAC
+from jymkit.algorithms import DQN, PPO, PQN, SAC  # noqa: F401
 
-DISCRETE_ALGS = [PPO, SAC]
+DISCRETE_ALGS = [PPO, SAC, PQN, DQN]
 CONTINUOUS_ALGS = [PPO, SAC]
 
 PPO_MIN_CONFIG = {

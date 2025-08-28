@@ -1,0 +1,165 @@
+from typing import Callable, List, Sequence
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+from jaxtyping import PRNGKeyArray
+
+from jymkit import Space
+
+Identity = eqx.nn.Identity
+
+
+class MLP(eqx.Module):
+    """Simple MLP architecture."""
+
+    layers: List[eqx.nn.Linear]
+    activation: Callable = eqx.field(static=True)
+    in_size: int = eqx.field(static=True)
+    out_size: int = eqx.field(static=True)
+    width_size: int = eqx.field(static=True)
+    depth: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        in_size: int,
+        out_size: int = 128,
+        width_size: int = 128,
+        depth: int = 2,
+        activation: Callable = jax.nn.gelu,
+        **kwargs,
+    ):
+        keys = jax.random.split(key, depth + 1)
+        self.in_size = in_size
+        self.out_size = out_size
+        self.width_size = width_size
+        self.depth = depth
+        self.activation = activation
+
+        assert depth > 0, "Depth must be at least 1"
+
+        self.layers = []
+        for i in range(depth - 1):
+            self.layers.append(
+                eqx.nn.Linear(in_features=in_size, out_features=width_size, key=keys[i])
+            )
+            in_size = width_size
+
+        if depth == 1:
+            width_size = in_size
+
+        self.layers.append(
+            eqx.nn.Linear(in_features=width_size, out_features=out_size, key=keys[-1])
+        )
+
+    def __call__(self, x):
+        for layer in self.layers[:-1]:
+            x = self.activation(layer(x))
+        x = self.layers[-1](x)
+        return x
+
+
+class CNN(eqx.Module):
+    """Standard CNN architecture similar to the DQN Nature paper.
+
+    Operates on 2D inputs.
+    """
+
+    layers: List[eqx.nn.Conv2d]
+    in_channels: int = eqx.field(static=True)
+    out_features: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        obs_space: Space,
+        hidden_sizes: Sequence[int],
+        kernel_sizes: Sequence[int],
+        strides: Sequence[int],
+        padding: Sequence[int],
+    ):
+        assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
+
+        in_channels = obs_space.shape[0]
+        self.in_channels = in_channels
+
+        self.layers = []
+        keys = jax.random.split(key, len(hidden_sizes))
+
+        for i, hidden_size in enumerate(hidden_sizes):
+            self.layers.append(
+                eqx.nn.Conv2d(
+                    in_channels,
+                    hidden_size,
+                    kernel_size=kernel_sizes[i],
+                    stride=strides[i],
+                    padding=padding[i],
+                    key=keys[i],
+                )
+            )
+            in_channels = hidden_size
+
+        out_shape = jax.eval_shape(
+            lambda x: self(x), jnp.zeros(obs_space.shape, dtype=jnp.float32)
+        )
+        assert len(out_shape.shape) == 1
+        self.out_features = out_shape.shape[0]
+
+    def __call__(self, x):
+        for layer in self.layers:
+            x = jax.nn.relu(layer(x))
+        x = jnp.reshape(x, -1)
+        return x
+
+
+class BroNet(eqx.Module):
+    """
+    Create a BroNet neural network with the given hidden dimensions and output space.
+    https://arxiv.org/html/2405.16158v1
+
+    Operates on 1D inputs.
+    """
+
+    layers: List[eqx.Module]
+    in_size: int = eqx.field(static=True)
+    width_size: int = eqx.field(static=True)
+    depth: int = eqx.field(static=True)
+    out_features: int = eqx.field(static=True)
+
+    def __init__(self, key: PRNGKeyArray, in_size: int, depth: int, width_size: int):
+        class BroNetBlock(eqx.Module):
+            layers: list
+            in_features: int = eqx.field(static=True)
+            out_features: int = eqx.field(static=True)
+
+            def __init__(self, key: PRNGKeyArray, shape: int):
+                key1, key2 = jax.random.split(key)
+                self.layers = [
+                    eqx.nn.Linear(in_features=shape, out_features=shape, key=key1),
+                    eqx.nn.LayerNorm(shape),
+                    eqx.nn.Linear(in_features=shape, out_features=shape, key=key2),
+                    eqx.nn.LayerNorm(shape),
+                ]
+                self.in_features = shape
+                self.out_features = shape
+
+            def __call__(self, x):
+                _x = self.layers[0](x)
+                _x = self.layers[1](_x)
+                _x = jax.nn.relu(_x)
+                _x = self.layers[2](_x)
+                _x = self.layers[3](_x)
+                return x + _x
+
+        keys = jax.random.split(key, depth + 1)
+        self.in_size = in_size
+        self.width_size = width_size
+        self.depth = depth
+        self.out_size = width_size
+        self.layers = [
+            eqx.nn.Linear(in_features=in_size, out_features=width_size, key=keys[0]),
+            eqx.nn.LayerNorm(width_size),
+        ]
+        for i in range(1, depth + 1):
+            self.layers.append(BroNetBlock(keys[i], width_size))
