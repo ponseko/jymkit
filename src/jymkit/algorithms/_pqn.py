@@ -123,7 +123,7 @@ class PQN(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            **self.critic_kwargs,
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)

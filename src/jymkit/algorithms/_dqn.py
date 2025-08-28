@@ -198,7 +198,7 @@ class DQN(RLAlgorithm):
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            update_count = jym.tree.get_first(self.state.optimizer_state, "count")
+            update_count = jym.tree.get_first(self.state, "count")
             current_epsilon = self._epsilon_schedule(update_count)
             get_action = partial(self.get_action, epsilon=current_epsilon)
             action = jax.vmap(get_action, in_axes=(0, None, 0))(

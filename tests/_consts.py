@@ -22,9 +22,11 @@ SAC_CONTINUOUS_CONFIG = {
     "replay_buffer_size": 500_000,
     "normalize_rew": False,
     "normalize_obs": False,
-    "policy_kwargs": {
-        "actor_features": [128, 128],
-        "critic_features": [128, 128],
+    "actor_kwargs": {
+        "hidden_sizes": [128, 128],
+    },
+    "critic_kwargs": {
+        "hidden_sizes": [128, 128],
     },
     "log_function": None,
 }

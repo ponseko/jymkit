@@ -44,7 +44,7 @@ class ExampleEnv(jym.Environment):
         )
         return timestep, state
 
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Tuple[int, int], EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> Tuple[Array, EnvState]:
         """
         Reset the environment to its initial state.
         """
@@ -52,11 +52,11 @@ class ExampleEnv(jym.Environment):
         observation = self.get_observation(state)
         return observation, state
 
-    def get_observation(self, state: EnvState) -> Tuple[int, int]:
+    def get_observation(self, state: EnvState) -> Array:
         """
         Get the observation from the environment state.
         """
-        return state.location
+        return jnp.array(state.location)
 
     def get_reward(self) -> float:
         """

@@ -110,9 +110,12 @@ class CNN(eqx.Module):
 
         out_shape = jax.eval_shape(
             lambda x: self(x), jnp.zeros(obs_space.shape, dtype=jnp.float32)
+        ).shape
+        assert len(out_shape) == 1 and out_shape[0] > 0, (
+            f"Invalid CNN output (after flattening): {out_shape}. "
+            "Perhaps the observation space shape is too small for the CNN architecture."
         )
-        assert len(out_shape.shape) == 1
-        self.out_features = out_shape.shape[0]
+        self.out_features = out_shape[0]
 
     def __call__(self, x):
         if self.channels_axis == -1:

@@ -11,8 +11,8 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 import jymkit.tree
+from jymkit.algorithms.utils import TanhNormalFactory
 
-from ..utils._distributions import TanhNormalFactory
 from ._architectures import CNN, Identity
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class MultiInputNetwork(eqx.Module):
         architecture_1d: Literal["identity"] = "identity",
         architecture_2d: Literal["cnn"] = "cnn",
         cnn_hidden_sizes: Tuple[int, ...] = (32, 64, 64),
-        cnn_kernel_sizes: Tuple[int, ...] = (3, 3, 3),
+        cnn_kernel_sizes: Tuple[int, ...] = (3, 3, 2),
         cnn_strides: Tuple[int, ...] = (1, 1, 1),
         cnn_padding: Tuple[int, ...] = (0, 0, 0),
         **kwargs,
@@ -156,8 +156,8 @@ class MultiOutputNetwork(eqx.Module):
         continuous_output_dist: Literal["normal", "tanhnormal"] | None = "normal",
         **kwargs,
     ):
-        def _create_output_network(key: PRNGKeyArray, action_space: jym.Space):
-            is_discrete = hasattr(action_space, "n") or hasattr(action_space, "nvec")
+        def _create_output_network(key: PRNGKeyArray, output_space: jym.Space):
+            is_discrete = hasattr(output_space, "n") or hasattr(output_space, "nvec")
             if is_discrete:
                 return DiscreteOutputNetwork(
                     key, in_features, output_space, distribution=discrete_output_dist
@@ -166,7 +166,10 @@ class MultiOutputNetwork(eqx.Module):
             is_continu = hasattr(output_space, "low") and hasattr(output_space, "high")
             if is_continu:
                 return ContinuousOutputNetwork(
-                    key, in_features, output_space, distribution=continuous_output_dist
+                    key,
+                    in_features,
+                    output_space,  # type: ignore
+                    distribution=continuous_output_dist,
                 )
 
             else:
@@ -185,14 +188,12 @@ class MultiOutputNetwork(eqx.Module):
         if action_mask is None:  # Dummy action mask if not provided
             action_mask = jax.tree.map(
                 lambda _: None,
-                self.output_layers,
+                self.networks,
                 is_leaf=lambda x: isinstance(x, eqx.Module),
             )
-
         return jax.tree.map(
-            lambda layer, x, m: layer(x, m),
+            lambda layer, mask: layer(x, mask),
             self.networks,
-            x,
             action_mask,
             is_leaf=lambda x: isinstance(x, eqx.Module),
         )

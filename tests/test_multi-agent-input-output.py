@@ -136,7 +136,7 @@ class HeterogeneousMultiAgentSimpleEnv(Environment):
 
     def get_observation(self, state: HeterogeneousMultiAgentEnvState):
         # Agent 0 observes its own state
-        obs0 = state.agent0_state
+        obs0 = jnp.atleast_1d(state.agent0_state)
         # Agent 1 observes both states
         obs1 = jnp.array([state.agent0_state, state.agent1_state])
         return {"agent0": obs0, "agent1": obs1}
