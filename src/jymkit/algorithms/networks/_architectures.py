@@ -27,7 +27,7 @@ class MLP(eqx.Module):
         key: PRNGKeyArray,
         in_features: int,
         hidden_sizes: Sequence[int] = (128, 128),
-        activation: Callable = jax.nn.gelu,
+        activation: Callable = jax.nn.relu,
         **kwargs,
     ):
         depth = len(hidden_sizes) + 1
