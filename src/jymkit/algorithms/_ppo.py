@@ -380,10 +380,12 @@ class PPO(RLAlgorithm):
             key=actor_key,
             obs_space=obs_space,
             output_space=output_space,
+            **self.actor_kwargs,
         )
         critic = ValueNetwork(
             key=critic_key,
             obs_space=obs_space,
+            **self.critic_kwargs,
         )
         optimizer_state = self.optimizer.init(
             eqx.filter((actor, critic), eqx.is_inexact_array)

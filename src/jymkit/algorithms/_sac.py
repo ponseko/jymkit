@@ -422,11 +422,13 @@ class SAC(RLAlgorithm):
             key=critic1_key,
             obs_space=obs_space,
             output_space=output_space,
+            **self.critic_kwargs,
         )
         critic2 = QValueNetwork(
             key=critic2_key,
             obs_space=obs_space,
             output_space=output_space,
+            **self.critic_kwargs,
         )
         critic1_target = jax.tree.map(lambda x: x, critic1)
         critic2_target = jax.tree.map(lambda x: x, critic2)

@@ -15,17 +15,6 @@ from ._input_output import MultiInputNetwork, MultiOutputNetwork
 logger = logging.getLogger(__name__)
 
 
-# class NetworkKwargs(TypedDict, total=False):
-#     discrete_output_dist: Literal["categorical"] | None
-#     continuous_output_dist: Literal["normal", "tanhnormal"] | None
-#     architecture_1d: Literal["identity"]
-#     architecture_2d: Literal["cnn"]
-#     cnn_hidden_sizes: Tuple[int, ...]
-#     cnn_kernel_sizes: Tuple[int, ...]
-#     cnn_strides: Tuple[int, ...]
-#     cnn_padding: Tuple[int, ...]
-
-
 class ActorNetwork(eqx.Module):
     input_layers: MultiInputNetwork
     mlp: MLP
@@ -44,12 +33,10 @@ class ActorNetwork(eqx.Module):
         )
 
         assert self.input_layers.out_features
-        self.mlp = MLP(
-            key=key_mlp, in_size=self.input_layers.out_features, **network_kwargs
-        )
+        self.mlp = MLP(key_mlp, self.input_layers.out_features, **network_kwargs)
 
         self.output_layers = MultiOutputNetwork(
-            key_out, self.mlp.out_size, output_space, **network_kwargs
+            key_out, self.mlp.out_features, output_space, **network_kwargs
         )
 
     def __call__(self, x):
@@ -81,11 +68,9 @@ class ValueNetwork(eqx.Module):
         )
 
         assert self.input_layers.out_features
-        self.mlp = MLP(
-            key=key_mlp, in_size=self.input_layers.out_features, **network_kwargs
-        )
+        self.mlp = MLP(key_mlp, self.input_layers.out_features, **network_kwargs)
 
-        self.output_layers = eqx.nn.Linear(self.mlp.out_size, 1, key=key_out)
+        self.output_layers = eqx.nn.Linear(self.mlp.out_features, 1, key=key_out)
 
     def __call__(self, x):
         if isinstance(x, jym.AgentObservation):
@@ -126,13 +111,11 @@ class QValueNetwork(eqx.Module):
         )
 
         assert self.input_layers.out_features
-        self.mlp = MLP(
-            key=key_mlp, in_size=self.input_layers.out_features, **network_kwargs
-        )
+        self.mlp = MLP(key_mlp, self.input_layers.out_features, **network_kwargs)
 
         self.output_layers = MultiOutputNetwork(
             key_out,
-            self.mlp.out_size,
+            self.mlp.out_features,
             output_space,
             discrete_output_dist=None,
             continuous_output_dist=None,

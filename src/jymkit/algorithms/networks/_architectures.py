@@ -15,43 +15,33 @@ class MLP(eqx.Module):
 
     layers: List[eqx.nn.Linear]
     activation: Callable = eqx.field(static=True)
-    in_size: int = eqx.field(static=True)
-    out_size: int = eqx.field(static=True)
-    width_size: int = eqx.field(static=True)
-    depth: int = eqx.field(static=True)
+    in_features: int = eqx.field(static=True)
+    out_features: int = eqx.field(static=True)
+    hidden_sizes: Sequence[int] = eqx.field(static=True)
 
     def __init__(
         self,
         key: PRNGKeyArray,
-        in_size: int,
-        out_size: int = 128,
-        width_size: int = 128,
-        depth: int = 2,
+        in_features: int,
+        hidden_sizes: Sequence[int],
         activation: Callable = jax.nn.gelu,
         **kwargs,
     ):
+        depth = len(hidden_sizes) + 1
         keys = jax.random.split(key, depth + 1)
-        self.in_size = in_size
-        self.out_size = out_size
-        self.width_size = width_size
-        self.depth = depth
+        self.in_features = in_features
+        self.hidden_sizes = hidden_sizes
+        self.out_features = hidden_sizes[-1]
         self.activation = activation
 
-        assert depth > 0, "Depth must be at least 1"
-
         self.layers = []
-        for i in range(depth - 1):
+        for i, hidden_dim in enumerate(hidden_sizes):
             self.layers.append(
-                eqx.nn.Linear(in_features=in_size, out_features=width_size, key=keys[i])
+                eqx.nn.Linear(
+                    in_features=in_features, out_features=hidden_dim, key=keys[i]
+                )
             )
-            in_size = width_size
-
-        if depth == 1:
-            width_size = in_size
-
-        self.layers.append(
-            eqx.nn.Linear(in_features=width_size, out_features=out_size, key=keys[-1])
-        )
+            in_features = hidden_dim
 
     def __call__(self, x):
         for layer in self.layers[:-1]:
@@ -78,6 +68,7 @@ class CNN(eqx.Module):
         kernel_sizes: Sequence[int],
         strides: Sequence[int],
         padding: Sequence[int],
+        **kwargs,
     ):
         assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
 
@@ -122,12 +113,14 @@ class BroNet(eqx.Module):
     """
 
     layers: List[eqx.Module]
-    in_size: int = eqx.field(static=True)
+    in_features: int = eqx.field(static=True)
     width_size: int = eqx.field(static=True)
     depth: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
 
-    def __init__(self, key: PRNGKeyArray, in_size: int, depth: int, width_size: int):
+    def __init__(
+        self, key: PRNGKeyArray, in_features: int, depth: int, width_size: int, **kwargs
+    ):
         class BroNetBlock(eqx.Module):
             layers: list
             in_features: int = eqx.field(static=True)
@@ -153,12 +146,14 @@ class BroNet(eqx.Module):
                 return x + _x
 
         keys = jax.random.split(key, depth + 1)
-        self.in_size = in_size
+        self.in_features = in_features
         self.width_size = width_size
         self.depth = depth
         self.out_size = width_size
         self.layers = [
-            eqx.nn.Linear(in_features=in_size, out_features=width_size, key=keys[0]),
+            eqx.nn.Linear(
+                in_features=in_features, out_features=width_size, key=keys[0]
+            ),
             eqx.nn.LayerNorm(width_size),
         ]
         for i in range(1, depth + 1):

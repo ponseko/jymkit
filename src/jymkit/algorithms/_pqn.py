@@ -289,7 +289,12 @@ class PQN(RLAlgorithm):
     def _make_agent_state(
         self, key: PRNGKeyArray, obs_space: jym.Space, output_space: jym.Space
     ):
-        critic = QValueNetwork(key=key, obs_space=obs_space, output_space=output_space)
+        critic = QValueNetwork(
+            key=key,
+            obs_space=obs_space,
+            output_space=output_space,
+            **self.critic_kwargs,
+        )
         optimizer_state = self.optimizer.init(eqx.filter(critic, eqx.is_inexact_array))
 
         dummy_obs = jax.tree.map(

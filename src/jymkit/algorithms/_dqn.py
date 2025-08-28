@@ -302,6 +302,7 @@ class DQN(RLAlgorithm):
             key=key,
             obs_space=obs_space,
             output_space=output_space,
+            **self.critic_kwargs,
         )
         critic_target = jax.tree.map(lambda x: x, critic)
 
