@@ -10,7 +10,7 @@ from typing import Any, Callable, List, Literal, Optional
 import equinox as eqx
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
-from jymkit import Environment, VecEnvWrapper, is_wrapped
+from jymkit import Environment, FlattenActionSpaceWrapper, VecEnvWrapper, is_wrapped
 from jymkit.algorithms.utils import transform_multi_agent
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,12 @@ class RLAlgorithm(eqx.Module):
         object.__setattr__(new_instance, "__class__", NewCls)  # safe: NewCls ⊂ cls
         return new_instance
 
-    def __check_env__(self, env: Environment, vectorized: bool = False):
+    def __check_env__(
+        self,
+        env: Environment,
+        vectorized: bool = False,
+        flatten_action_space: bool = False,
+    ) -> Environment:
         """
         Some validation checks on the current environment and its compatibility with the current
         algorithm setup.
@@ -114,6 +119,11 @@ class RLAlgorithm(eqx.Module):
                 "that may not be compatible with this algorithm. "
                 "If this is the case, training will crash during compilation."
             )
+        if is_wrapped(env, "JaxMARLWrapper"):
+            if getattr(env, "name", None) == "coin_game":
+                logger.warning(
+                    "Coin game is currently not supported due to an inconsistent API"
+                )
         if is_wrapped(env, "NormalizeVecObsWrapper") and getattr(
             self, "normalize_obs", False
         ):
@@ -133,5 +143,9 @@ class RLAlgorithm(eqx.Module):
         if vectorized and not is_wrapped(env, VecEnvWrapper):
             logger.info("Wrapping environment in VecEnvWrapper")
             env = VecEnvWrapper(env)
+
+        if flatten_action_space and not is_wrapped(env, FlattenActionSpaceWrapper):
+            logger.info("Wrapping environment in FlattenActionSpaceWrapper")
+            env = FlattenActionSpaceWrapper(env)
 
         return env
