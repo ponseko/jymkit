@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Tuple
+from typing import Any, Tuple
 
 import equinox as eqx
 import jax
@@ -121,7 +121,8 @@ class PPO(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            **self.policy_kwargs,
+            actor_kwargs=self.actor_kwargs,
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -373,19 +374,24 @@ class PPO(RLAlgorithm):
         return updated_state
 
     def _make_agent_state(
-        self, key: PRNGKeyArray, obs_space: jym.Space, output_space: jym.Space
+        self,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        output_space: jym.Space,
+        actor_kwargs: dict[str, Any],
+        critic_kwargs: dict[str, Any],
     ):
         actor_key, critic_key = jax.random.split(key)
         actor = ActorNetwork(
             key=actor_key,
             obs_space=obs_space,
             output_space=output_space,
-            **self.actor_kwargs,
+            **actor_kwargs,
         )
         critic = ValueNetwork(
             key=critic_key,
             obs_space=obs_space,
-            **self.critic_kwargs,
+            **critic_kwargs,
         )
         optimizer_state = self.optimizer.init(
             eqx.filter((actor, critic), eqx.is_inexact_array)

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Callable, Tuple
+from typing import Any, Callable, Tuple
 
 import distrax
 import equinox as eqx
@@ -123,7 +123,7 @@ class PQN(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            **self.policy_kwargs,
+            **self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -287,13 +287,17 @@ class PQN(RLAlgorithm):
         return updated_state
 
     def _make_agent_state(
-        self, key: PRNGKeyArray, obs_space: jym.Space, output_space: jym.Space
+        self,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        output_space: jym.Space,
+        critic_kwargs: dict[str, Any],
     ):
         critic = QValueNetwork(
             key=key,
             obs_space=obs_space,
             output_space=output_space,
-            **self.critic_kwargs,
+            **critic_kwargs,
         )
         optimizer_state = self.optimizer.init(eqx.filter(critic, eqx.is_inexact_array))
 
