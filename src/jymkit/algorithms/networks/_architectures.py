@@ -14,16 +14,16 @@ class MLP(eqx.Module):
     """Simple MLP architecture."""
 
     layers: List[eqx.nn.Linear]
-    activation: Callable = eqx.field(static=True)
     in_features: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
     hidden_sizes: Sequence[int] = eqx.field(static=True)
+    activation: Callable = eqx.field(static=True)
 
     def __init__(
         self,
         key: PRNGKeyArray,
         in_features: int,
-        hidden_sizes: Sequence[int],
+        hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.gelu,
         **kwargs,
     ):
