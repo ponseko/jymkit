@@ -248,10 +248,10 @@ class SimpleMultiAgentEnvWithPyTreeAction(Environment):
         return True
 
     def reset_env(self, key: PRNGKeyArray):
-        state = {"agent0": jnp.ones(()), "agent1": jnp.zeros(()), "current_step": 0}
+        state = {"agent0": jnp.ones((1,)), "agent1": jnp.zeros((1,)), "current_step": 0}
         obs = {
-            "agent0": jnp.ones(()),
-            "agent1": jnp.zeros(()),
+            "agent0": jnp.ones((1,)),
+            "agent1": jnp.zeros((1,)),
         }
         return obs, state
 

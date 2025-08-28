@@ -1,5 +1,6 @@
 import fnmatch
 
+import _consts as TEST_CONSTS  # noqa: F401
 import jax
 import pytest
 
@@ -32,6 +33,7 @@ TEST_SET_SMALL_ONLY_DISCRETE = [
 SKIP_ENVS = {
     "SimpleBandit-bsuite": "Known issue with this environment  (https://github.com/RobertTLange/gymnax/pull/106)",
     "BinPack-v2": "Heterogeneous multi-discrete action space",  # TODO: MultiDiscrete->PyTree[Discrete] Wrapper?
+    "MultiCVRP-v0": "Observation space mismatch",
     # "some_problematic_env": "Known issue with this environment"
 }
 
@@ -39,7 +41,10 @@ WRAP_ENVS = {
     "Game2048-v1": [jym.FlattenObservationWrapper],  # Too small 2d obs space
     "MultiCVRP-v0": [jym.FlattenObservationWrapper],  # Too small 2d obs space
     "connect_four": [jym.FlattenObservationWrapper],  # Too small 2d obs space
+    "Catch-bsuite": [jym.FlattenObservationWrapper],  # Too small 2d obs space
+    "LevelBasedForaging-v0": [jym.FlattenObservationWrapper],  # Too small 2d obs space
     "XLand-MiniGrid-*": [jym.FlattenObservationWrapper],  # Partial obs is too small
+    "Navix-*": [jym.FlattenObservationWrapper],  # Partial obs is too small
 }
 
 

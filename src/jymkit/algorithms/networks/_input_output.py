@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import PRNGKeyArray, PyTree, PyTreeDef
 
 import jymkit as jym
 import jymkit.tree
@@ -274,8 +274,8 @@ class DiscreteOutputNetwork(eqx.Module):
 class ContinuousOutputNetwork(eqx.Module):
     layers: List[eqx.nn.Linear]
     distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
-    low: Float[Array, " action_dim"] = eqx.field(static=True)
-    high: Float[Array, " action_dim"] = eqx.field(static=True)
+    low: np.ndarray
+    high: np.ndarray
 
     def __init__(
         self,
@@ -289,8 +289,8 @@ class ContinuousOutputNetwork(eqx.Module):
             "must have 'low' and 'high' and `shape` attributes."
         )
 
-        self.low = jnp.array(output_space.low, dtype=jnp.float32)
-        self.high = jnp.array(output_space.high, dtype=jnp.float32)
+        self.low = np.array(output_space.low, dtype=float)
+        self.high = np.array(output_space.high, dtype=float)
         if distribution is None:
             self.distribution = None
         elif distribution == "normal":
