@@ -117,6 +117,9 @@ class MultiInputNetwork(eqx.Module):
             self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
     def __call__(self, x):
+        # Convert non-float inputs to float32
+        x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
+
         if self.num_observation_spaces == 1:
             return self.networks(x)  # More efficient compared to map (?)
 

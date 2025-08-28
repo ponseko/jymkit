@@ -1,3 +1,4 @@
+import logging
 from typing import Callable, List, Sequence
 
 import equinox as eqx
@@ -8,6 +9,8 @@ from jaxtyping import PRNGKeyArray
 from jymkit import Space
 
 Identity = eqx.nn.Identity
+
+logger = logging.getLogger(__name__)
 
 
 class MLP(eqx.Module):
@@ -54,11 +57,13 @@ class CNN(eqx.Module):
     """Standard CNN architecture similar to the DQN Nature paper.
 
     Operates on 2D inputs.
+    Assumes channels first format (C, H, W).
     """
 
     layers: List[eqx.nn.Conv2d]
     in_channels: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
+    channels_axis: int = eqx.field(static=True)
 
     def __init__(
         self,
@@ -72,7 +77,19 @@ class CNN(eqx.Module):
     ):
         assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
 
-        in_channels = obs_space.shape[0]
+        if (
+            obs_space.shape[0] == obs_space.shape[1]
+            and obs_space.shape[2] != obs_space.shape[0]
+        ):
+            logger.warning(
+                "2D input is in channels last format, moving channels to first dimension"
+                "Prefer providing channels first observations (C, H, W)."
+            )
+            self.channels_axis = -1
+        else:  # channels first
+            self.channels_axis = 0
+
+        in_channels = obs_space.shape[self.channels_axis]
         self.in_channels = in_channels
 
         self.layers = []
@@ -98,6 +115,8 @@ class CNN(eqx.Module):
         self.out_features = out_shape.shape[0]
 
     def __call__(self, x):
+        if self.channels_axis == -1:
+            x = jnp.moveaxis(x, -1, 0)
         for layer in self.layers:
             x = jax.nn.relu(layer(x))
         x = jnp.reshape(x, -1)
