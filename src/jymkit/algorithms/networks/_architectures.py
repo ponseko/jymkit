@@ -63,7 +63,7 @@ class CNN(eqx.Module):
     layers: List[eqx.nn.Conv2d]
     in_channels: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
-    channels_axis: int = eqx.field(static=True)
+    channels_axis: int | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -77,7 +77,14 @@ class CNN(eqx.Module):
     ):
         assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
 
-        if (
+        if len(obs_space.shape) == 2:
+            logger.warning(
+                "2D input without channels, adding leading channels in __call__()"
+                "In case the observation should be treated as 1d, use a FlattenObservationWrapper."
+            )
+            self.channels_axis = None
+            in_channels = 1
+        elif (
             obs_space.shape[0] == obs_space.shape[1]
             and obs_space.shape[2] != obs_space.shape[0]
         ):
@@ -86,10 +93,11 @@ class CNN(eqx.Module):
                 "Prefer providing channels first observations (C, H, W)."
             )
             self.channels_axis = -1
+            in_channels = obs_space.shape[self.channels_axis]
         else:  # channels first
             self.channels_axis = 0
+            in_channels = obs_space.shape[self.channels_axis]
 
-        in_channels = obs_space.shape[self.channels_axis]
         self.in_channels = in_channels
 
         self.layers = []
@@ -118,8 +126,11 @@ class CNN(eqx.Module):
         self.out_features = out_shape[0]
 
     def __call__(self, x):
-        if self.channels_axis == -1:
+        if self.channels_axis is None:
+            x = jnp.expand_dims(x, axis=0)
+        elif self.channels_axis == -1:
             x = jnp.moveaxis(x, -1, 0)
+
         for layer in self.layers:
             x = jax.nn.relu(layer(x))
         x = jnp.reshape(x, -1)

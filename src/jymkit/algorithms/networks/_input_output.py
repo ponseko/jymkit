@@ -52,11 +52,10 @@ class MultiInputNetwork(eqx.Module):
         **kwargs,
     ):
         def _create_input_network(key: PRNGKeyArray, obs_space: jym.Space):
-            if len(obs_space.shape) > 3 or len(obs_space.shape) == 2:
-                NotImplementedError(
+            if len(obs_space.shape) > 3:
+                raise NotImplementedError(
                     f"Observation space shape: {obs_space.shape} not supported. "
                     f"Only 1D and 2D (excluding channels) observations are supported."
-                    f"{' If you have a 2D observation, make sure to include a leading channels dimension (C, H, W).' if len(obs_space.shape) == 2 else ''}"
                 )
 
             if obs_space.shape == () or len(obs_space.shape) == 1:  # 0d or 1d input
@@ -71,7 +70,7 @@ class MultiInputNetwork(eqx.Module):
                 else:
                     raise ValueError(f"Unsupported 1d architecture: {architecture_1d}")
 
-            if len(obs_space.shape) == 3:  # first dim is channel dimension
+            elif len(obs_space.shape) == 3 or len(obs_space.shape) == 2:
                 if architecture_2d.lower() in ["cnn", "naturecnn"]:
                     # in_channels = obs_space.shape[0]  # Assume channel-first
                     return CNN(
@@ -87,6 +86,10 @@ class MultiInputNetwork(eqx.Module):
 
                 else:
                     raise ValueError(f"Unsupported 2d architecture: {architecture_2d}")
+            else:
+                raise NotImplementedError(
+                    f"Unsupported observation space shape: {obs_space.shape}"
+                )
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
         self.input_structure = jax.tree.structure(obs_space)
@@ -120,7 +123,7 @@ class MultiInputNetwork(eqx.Module):
         # Convert non-float inputs to float32
         x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
 
-        if self.num_observation_spaces == 1:
+        if callable(self.networks) and self.num_observation_spaces == 1:
             return self.networks(x)  # More efficient compared to map (?)
 
         outputs = jax.tree.map(

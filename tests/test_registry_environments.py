@@ -1,3 +1,5 @@
+import fnmatch
+
 import jax
 import pytest
 
@@ -29,8 +31,32 @@ TEST_SET_SMALL_ONLY_DISCRETE = [
 # Skip certain environments that might have special requirements or known issues
 SKIP_ENVS = {
     "SimpleBandit-bsuite": "Known issue with this environment  (https://github.com/RobertTLange/gymnax/pull/106)",
+    "BinPack-v2": "Heterogeneous multi-discrete action space",  # TODO: MultiDiscrete->PyTree[Discrete] Wrapper?
     # "some_problematic_env": "Known issue with this environment"
 }
+
+WRAP_ENVS = {
+    "Game2048-v1": [jym.FlattenObservationWrapper],  # Too small 2d obs space
+    "MultiCVRP-v0": [jym.FlattenObservationWrapper],  # Too small 2d obs space
+    "connect_four": [jym.FlattenObservationWrapper],  # Too small 2d obs space
+    "XLand-MiniGrid-*": [jym.FlattenObservationWrapper],  # Partial obs is too small
+}
+
+
+def get_wrappers_for_env(env_id, wrap_envs_dict):
+    """Get wrappers for an environment, supporting wildcard patterns."""
+    wrappers = []
+
+    # First check for exact match
+    if env_id in wrap_envs_dict:
+        wrappers.extend(wrap_envs_dict[env_id])
+
+    # Then check for wildcard matches
+    for pattern, pattern_wrappers in wrap_envs_dict.items():
+        if "*" in pattern and fnmatch.fnmatch(env_id, pattern):
+            wrappers.extend(pattern_wrappers)
+
+    return wrappers
 
 
 def run_env_3_steps(env_id):
@@ -68,6 +94,8 @@ def test_subset_registered_environments_train(env_id, alg):
         pytest.skip(f"Skipping {env_id}: {SKIP_ENVS[env_id]}")
     try:
         env = jym.make(env_id)
+        for wrapper in get_wrappers_for_env(env_id, WRAP_ENVS):
+            env = wrapper(env)
     except ImportError as e:
         pytest.skip(f"Skipping {env_id} due to ImportError: {e}")
     config = {"total_timesteps": 500, "log_function": None, "num_envs": 2}
@@ -85,6 +113,8 @@ def test_subset_registered_environments_train_discrete(env_id, alg):
         pytest.skip(f"Skipping {env_id}: {SKIP_ENVS[env_id]}")
     try:
         env = jym.make(env_id)
+        for wrapper in get_wrappers_for_env(env_id, WRAP_ENVS):
+            env = wrapper(env)
     except ImportError as e:
         pytest.skip(f"Skipping {env_id} due to ImportError: {e}")
     config = {"total_timesteps": 1000, "log_function": None, "num_envs": 2}
