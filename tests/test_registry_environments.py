@@ -17,8 +17,6 @@ TEST_SET_SMALL_ONLY_DISCRETE = [
     "gymnax:Acrobot-v1",
     "Breakout-MinAtar",
     "Catch-bsuite",
-    "ant",
-    "halfcheetah",
     "Snake-v1",
     "Game2048-v1",
     "chess",

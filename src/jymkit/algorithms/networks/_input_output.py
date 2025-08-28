@@ -104,7 +104,7 @@ class MultiInputNetwork(eqx.Module):
         # Infer the output feature size if concatenating to 1d
         if concatenate_outputs_to_1d:
             dummy_obs = jax.tree.map(
-                lambda o: jnp.zeros(obs_space.shape, dtype=jnp.float32), obs_space
+                lambda o: jnp.zeros(o.shape, dtype=jnp.float32), obs_space
             )
             f = lambda obs: jym.tree.concatenate(
                 jax.tree.map(
