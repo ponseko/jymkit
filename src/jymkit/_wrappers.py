@@ -649,6 +649,11 @@ class FlattenActionSpaceWrapper(Wrapper):
 
             return jax.tree.unflatten(space_structure, original_actions)
 
+        if (
+            self.action_space == self.original_action_space
+        ):  # Skip if action space did not change
+            return self._env.step(key, state, action)
+
         if self._multi_agent:
             action = jym.tree.map_one_level(
                 lambda sp, a: from_single_discrete_space(sp, a),
@@ -691,3 +696,51 @@ class FlattenActionSpaceWrapper(Wrapper):
     def original_action_space(self) -> Space:
         """Return the original action space of the environment."""
         return self._env.action_space
+
+
+class ChannelsLastToChannelsFirstWrapper(Wrapper):
+    """
+    Wrapper to convert observations with channels last to channels first.
+    Assumes the observation is an image with shape (H, W, C).
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    """
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, env_state = self._env.reset(key)
+        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
+        obs = jax.tree.map(lambda x: jnp.moveaxis(x, -1, 0), obs)
+        obs = eqx.combine(obs, masks)
+        return obs, env_state
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
+    ) -> Tuple[TimeStep, TEnvState]:
+        timestep, env_state = self._env.step(key, state, action)
+        obs, masks = _partition_obs_and_masks(
+            timestep.observation, self._env._multi_agent
+        )
+        obs = jax.tree.map(lambda x: jnp.moveaxis(x, -1, 0), obs)
+        obs = eqx.combine(obs, masks)
+
+        info = timestep.info
+        info[ORIGINAL_OBSERVATION_KEY] = jax.tree.map(
+            lambda x: jnp.moveaxis(x, -1, 0), info[ORIGINAL_OBSERVATION_KEY]
+        )
+        timestep = timestep._replace(observation=obs, info=info)
+        return timestep, env_state
+
+    @property
+    def observation_space(self) -> Space | PyTree[Space]:
+        def to_channels_first(space: jym.Box) -> jym.Box:
+            new_shape = (space.shape[-1],) + space.shape[:-1]
+            new_high, new_low = space.high, space.low
+            if hasattr(space.high, "ndim") and space.high.ndim == 3:  # type: ignore
+                new_high = jnp.moveaxis(space.high, -1, 0)
+            if hasattr(space.low, "ndim") and space.low.ndim == 3:  # type: ignore
+                new_low = jnp.moveaxis(space.low, -1, 0)
+            return jym.Box(new_low, new_high, shape=new_shape, dtype=space.dtype)
+
+        return jax.tree.map(to_channels_first, self._env.observation_space)

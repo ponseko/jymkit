@@ -12,6 +12,7 @@ from ._spaces import (
 )
 from ._types import AgentObservation as AgentObservation
 from ._wrappers import (
+    ChannelsLastToChannelsFirstWrapper as ChannelsLastToChannelsFirstWrapper,
     DiscreteActionWrapper as DiscreteActionWrapper,
     FlattenActionSpaceWrapper as FlattenActionSpaceWrapper,
     FlattenObservationWrapper as FlattenObservationWrapper,
