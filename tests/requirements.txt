@@ -10,3 +10,4 @@ pgx==2.6.0
 # jaxmarl==0.1.0 
 xminigrid==0.9.1
 craftax==1.5.0
+navix==0.7.3
