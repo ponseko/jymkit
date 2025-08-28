@@ -34,6 +34,7 @@ SKIP_ENVS = {
     "SimpleBandit-bsuite": "Known issue with this environment  (https://github.com/RobertTLange/gymnax/pull/106)",
     "BinPack-v2": "Heterogeneous multi-discrete action space",  # TODO: MultiDiscrete->PyTree[Discrete] Wrapper?
     "MultiCVRP-v0": "Observation space mismatch",
+    "LevelBasedForaging-v0": "Is multi-agent, but not marked as such yet",  # TODO: multi agent flag in registry?
     # "some_problematic_env": "Known issue with this environment"
 }
 

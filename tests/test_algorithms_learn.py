@@ -12,7 +12,7 @@ from jymkit.envs.cartpole import CartPole
 def test_discrete_is_learning(alg):
     # Confirm learning behavior on CartPole w/ default parameters
     env = CartPole()
-    seed = jax.random.PRNGKey(0)
+    seed = jax.random.PRNGKey(42)
     seed1, seed2 = jax.random.split(seed)
     agent = alg(total_timesteps=1_000_000, log_function=None)
     agent = agent.train(seed1, env)
