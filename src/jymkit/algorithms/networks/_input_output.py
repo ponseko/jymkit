@@ -53,14 +53,10 @@ class MultiInputNetwork(eqx.Module):
     ):
         def _create_input_network(key: PRNGKeyArray, obs_space: jym.Space):
             if len(obs_space.shape) > 3 or len(obs_space.shape) == 2:
-                raise NotImplementedError(
-                    f"Observation space shape: {obs_space.shape} not supported.",
-                    "Only 1D and 2D (excluding channels) observations are supported."
-                    f"{
-                        ' If you have a 2D observation, make sure to include a leading channels dimension (C, H, W).'
-                        if len(obs_space.shape) == 2
-                        else ''
-                    }",
+                NotImplementedError(
+                    f"Observation space shape: {obs_space.shape} not supported. "
+                    f"Only 1D and 2D (excluding channels) observations are supported."
+                    f"{' If you have a 2D observation, make sure to include a leading channels dimension (C, H, W).' if len(obs_space.shape) == 2 else ''}"
                 )
 
             if obs_space.shape == () or len(obs_space.shape) == 1:  # 0d or 1d input
