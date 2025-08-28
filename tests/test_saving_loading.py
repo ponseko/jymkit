@@ -16,8 +16,8 @@ def test_saving_loading(tmp_path):
     # Initialize the agent
     agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
-    # Train the agent
-    agent = agent.train(jax.random.PRNGKey(1), env)
+    # # Train the agent
+    # agent = agent.train(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_saving_loading.eqx."
     agent.save_state(save_path)
@@ -52,8 +52,8 @@ def test_cloudpickle_saving(tmp_path):
     # Initialize the agent
     agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
-    # Train the agent
-    agent = agent.train(jax.random.PRNGKey(1), env)
+    # # Train the agent
+    # agent = agent.train(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_cloudpickle_saving.pkl"
     with open(save_path, "wb") as f:

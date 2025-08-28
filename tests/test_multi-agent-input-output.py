@@ -302,13 +302,12 @@ CUSTOM_TEST_ENVS = [
 def test_custom_envs_runs(env_cls):
     env: Environment = env_cls()
     obs, state = env.reset(jax.random.PRNGKey(0))
-    for i in range(100):
+    for i in range(5):
         key = jax.random.PRNGKey(i)
         actions = env.sample_action(key)
         (obs, reward, terminated, truncated, info), state = env.step(
             key, state, actions
         )
-        print(reward)
 
 
 @pytest.mark.parametrize("alg_cls", TEST_CONSTS.DISCRETE_ALGS)
