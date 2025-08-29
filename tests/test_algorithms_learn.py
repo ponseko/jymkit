@@ -60,6 +60,10 @@ def test_discrete_is_learning(alg):
     avg_reward = jnp.mean(rewards)
     assert avg_reward > 200, (
         f"Average reward too low: {avg_reward}. Training may have failed."
+        f"Average reward: {avg_reward}, "
+        f"Rewards array: {rewards}, "
+        f"Rewards type: {type(rewards)}, "
+        f"Rewards shape: {getattr(rewards, 'shape', 'no shape')}"
     )
 
 
