@@ -16,8 +16,9 @@ def test_saving_loading(tmp_path):
     # Initialize the agent
     agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
-    # Train the agent
-    agent = agent.train(jax.random.PRNGKey(1), env)
+    # # Train the agent
+    # agent = agent.train(jax.random.PRNGKey(1), env)
+    agent = agent.init_state(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_saving_loading.eqx."
     agent.save_state(save_path)
@@ -29,12 +30,12 @@ def test_saving_loading(tmp_path):
 
     # Check if weights match (via some arbitary layer)
     assert jnp.all(
-        agent.state.actor.ffn_layers[0].weight
-        == load_agent.state.actor.ffn_layers[0].weight
+        agent.state.actor.mlp.layers[0].weight
+        == load_agent.state.actor.mlp.layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.ffn_layers[1].weight
-        == load_agent.state.critic.ffn_layers[1].weight
+        agent.state.critic.mlp.layers[1].weight
+        == load_agent.state.critic.mlp.layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train
@@ -52,8 +53,9 @@ def test_cloudpickle_saving(tmp_path):
     # Initialize the agent
     agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
 
-    # Train the agent
-    agent = agent.train(jax.random.PRNGKey(1), env)
+    # # Train the agent
+    # agent = agent.train(jax.random.PRNGKey(1), env)
+    agent = agent.init_state(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_cloudpickle_saving.pkl"
     with open(save_path, "wb") as f:
@@ -65,12 +67,12 @@ def test_cloudpickle_saving(tmp_path):
 
     # Check if weights match
     assert jnp.all(
-        agent.state.actor.ffn_layers[0].weight
-        == load_agent.state.actor.ffn_layers[0].weight
+        agent.state.actor.mlp.layers[0].weight
+        == load_agent.state.actor.mlp.layers[0].weight
     ), "Weights do not match after loading."
     assert jnp.all(
-        agent.state.critic.ffn_layers[1].weight
-        == load_agent.state.critic.ffn_layers[1].weight
+        agent.state.critic.mlp.layers[1].weight
+        == load_agent.state.critic.mlp.layers[1].weight
     ), "Weights do not match after loading."
 
     # Check if the loaded agent can still train

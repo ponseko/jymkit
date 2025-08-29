@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Callable, Tuple
+from typing import Any, Callable, Tuple
 
 import distrax
 import equinox as eqx
@@ -13,12 +13,14 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
-from jymkit.algorithms import QValueNetwork, RLAlgorithm
+from jymkit.algorithms import RLAlgorithm
 from jymkit.algorithms.utils import (
     Normalizer,
     Transition,
     scan_callback,
 )
+
+from .networks import QValueNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +123,7 @@ class PQN(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            critic_features=self.policy_kwargs.get("critic_features", [128, 128]),
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -289,13 +291,13 @@ class PQN(RLAlgorithm):
         key: PRNGKeyArray,
         obs_space: jym.Space,
         output_space: jym.Space,
-        critic_features: list,
+        critic_kwargs: dict[str, Any],
     ):
         critic = QValueNetwork(
             key=key,
             obs_space=obs_space,
             output_space=output_space,
-            hidden_dims=critic_features,
+            **critic_kwargs,
         )
         optimizer_state = self.optimizer.init(eqx.filter(critic, eqx.is_inexact_array))
 
@@ -339,7 +341,8 @@ class PQN(RLAlgorithm):
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
-                done = jnp.logical_or(terminated, truncated)
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
                 episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
                 return (rng, obs, env_state, done, episode_reward)
 

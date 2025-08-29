@@ -1,5 +1,6 @@
 try:
     from ._tree import (
+        tree_concatenate as tree_concatenate,
         tree_get_first as tree_get_first,
         tree_map_one_level as tree_map_one_level,
         tree_mean as tree_mean,
@@ -12,8 +13,9 @@ try:
     mean = tree_mean
     stack = tree_stack
     unstack = tree_unstack
+    concatenate = tree_concatenate
 
-    __all__ = ["get_first", "map_one_level", "mean", "stack", "unstack"]
+    __all__ = ["get_first", "map_one_level", "mean", "stack", "unstack", "concatenate"]
 except ImportError:
     print(
         "JymKit.tree module requires `optax` to be installed. Please install via `pip install optax`."

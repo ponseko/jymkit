@@ -29,7 +29,8 @@ class RLAlgorithm(eqx.Module):
 
     multi_agent: bool = eqx.field(static=True, default=False)
     auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
-    policy_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    actor_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
     )

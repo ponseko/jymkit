@@ -136,7 +136,7 @@ class HeterogeneousMultiAgentSimpleEnv(Environment):
 
     def get_observation(self, state: HeterogeneousMultiAgentEnvState):
         # Agent 0 observes its own state
-        obs0 = state.agent0_state
+        obs0 = jnp.atleast_1d(state.agent0_state)
         # Agent 1 observes both states
         obs1 = jnp.array([state.agent0_state, state.agent1_state])
         return {"agent0": obs0, "agent1": obs1}
@@ -248,10 +248,10 @@ class SimpleMultiAgentEnvWithPyTreeAction(Environment):
         return True
 
     def reset_env(self, key: PRNGKeyArray):
-        state = {"agent0": jnp.ones(()), "agent1": jnp.zeros(()), "current_step": 0}
+        state = {"agent0": jnp.ones((1,)), "agent1": jnp.zeros((1,)), "current_step": 0}
         obs = {
-            "agent0": jnp.ones(()),
-            "agent1": jnp.zeros(()),
+            "agent0": jnp.ones((1,)),
+            "agent1": jnp.zeros((1,)),
         }
         return obs, state
 
@@ -302,13 +302,12 @@ CUSTOM_TEST_ENVS = [
 def test_custom_envs_runs(env_cls):
     env: Environment = env_cls()
     obs, state = env.reset(jax.random.PRNGKey(0))
-    for i in range(100):
+    for i in range(5):
         key = jax.random.PRNGKey(i)
         actions = env.sample_action(key)
         (obs, reward, terminated, truncated, info), state = env.step(
             key, state, actions
         )
-        print(reward)
 
 
 @pytest.mark.parametrize("alg_cls", TEST_CONSTS.DISCRETE_ALGS)

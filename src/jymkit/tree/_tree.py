@@ -53,6 +53,27 @@ def tree_map_one_level(fn: Callable, tree, *rest):
     return jax.tree.map(fn, tree, *rest, is_leaf=_is_child_of(tree))
 
 
+def tree_concatenate(trees: PyTree) -> Array:
+    """Concatenate the leaves of a pytree into a single 1D array.
+
+    **Arguments**:
+        `trees`: A pytree whose leaves are array-like and all 1d or 0d.
+
+    **Returns**:
+        A 1D array containing the concatenated leaves of the pytree.
+
+    **Example**:
+    ```python
+        >>> tree = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
+        >>> tree_concatenate(tree)
+        Array([1, 2, 3], dtype=int32)
+    ```
+    """
+    trees = jax.tree.map(jnp.atleast_1d, trees)
+    leaves = jax.tree.leaves(trees)
+    return jnp.concatenate(leaves)
+
+
 def tree_get_first(tree: PyTree, key: str) -> Any:
     """Get the first value from a pytree with the given key.
     Like `optax.tree.get()` but returns the first value found in case

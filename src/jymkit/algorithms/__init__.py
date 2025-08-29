@@ -2,7 +2,7 @@ try:
     # Weird import for proper copy from the CLI
     from jymkit.algorithms._algorithm import RLAlgorithm as RLAlgorithm  # noqa: I001
 
-    from ._networks import (
+    from .networks import (
         ActorNetwork as ActorNetwork,
         QValueNetwork as QValueNetwork,
         ValueNetwork as ValueNetwork,

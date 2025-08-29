@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Callable, Tuple
+from typing import Any, Callable, Tuple
 
 import distrax
 import equinox as eqx
@@ -119,7 +119,7 @@ class DQN(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            critic_features=self.policy_kwargs.get("critic_features", [128, 128]),
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -198,7 +198,7 @@ class DQN(RLAlgorithm):
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            update_count = jym.tree.get_first(self.state.optimizer_state, "count")
+            update_count = jym.tree.get_first(self.state, "count")
             current_epsilon = self._epsilon_schedule(update_count)
             get_action = partial(self.get_action, epsilon=current_epsilon)
             action = jax.vmap(get_action, in_axes=(0, None, 0))(
@@ -300,13 +300,13 @@ class DQN(RLAlgorithm):
         key: PRNGKeyArray,
         obs_space: jym.Space,
         output_space: jym.Space,
-        critic_features: list,
+        critic_kwargs: dict[str, Any],
     ):
         critic = QValueNetwork(
             key=key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
             output_space=output_space,
+            **critic_kwargs,
         )
         critic_target = jax.tree.map(lambda x: x, critic)
 
@@ -353,7 +353,8 @@ class DQN(RLAlgorithm):
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
-                done = jnp.logical_or(terminated, truncated)
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
                 episode_reward += jym.tree.mean(reward)
                 return (rng, obs, env_state, done, episode_reward)
 

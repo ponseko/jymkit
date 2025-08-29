@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Tuple
+from typing import Any, Tuple
 
 import equinox as eqx
 import jax
@@ -121,8 +121,8 @@ class PPO(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            actor_features=self.policy_kwargs.get("actor_features", [64, 64]),
-            critic_features=self.policy_kwargs.get("critic_features", [64, 64]),
+            actor_kwargs=self.actor_kwargs,
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -378,20 +378,20 @@ class PPO(RLAlgorithm):
         key: PRNGKeyArray,
         obs_space: jym.Space,
         output_space: jym.Space,
-        actor_features: list,
-        critic_features: list,
+        actor_kwargs: dict[str, Any],
+        critic_kwargs: dict[str, Any],
     ):
         actor_key, critic_key = jax.random.split(key)
         actor = ActorNetwork(
             key=actor_key,
             obs_space=obs_space,
-            hidden_dims=actor_features,
             output_space=output_space,
+            **actor_kwargs,
         )
         critic = ValueNetwork(
             key=critic_key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
+            **critic_kwargs,
         )
         optimizer_state = self.optimizer.init(
             eqx.filter((actor, critic), eqx.is_inexact_array)
@@ -436,7 +436,8 @@ class PPO(RLAlgorithm):
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
-                done = jnp.logical_or(terminated, truncated)
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
                 episode_reward += jym.tree.mean(reward)
                 return (rng, obs, env_state, done, episode_reward)
 

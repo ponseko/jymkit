@@ -1,6 +1,6 @@
 import logging
 from dataclasses import replace
-from typing import Tuple
+from typing import Any, Tuple
 
 import distrax
 import equinox as eqx
@@ -48,8 +48,8 @@ class SAC(RLAlgorithm):
     state: PyTree[SACState] = None
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
-    learning_rate: float = 3e-4
-    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
+    learning_rate: float = 3e-3
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=True)
     gamma: float = 0.99
     max_grad_norm: float = 0.5
     update_every: int = eqx.field(static=True, default=128)
@@ -64,7 +64,7 @@ class SAC(RLAlgorithm):
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=8)
 
-    normalize_obs: bool = eqx.field(static=True, default=True)
+    normalize_obs: bool = eqx.field(static=True, default=False)
     normalize_rew: bool = eqx.field(static=True, default=False)
 
     @property
@@ -128,8 +128,8 @@ class SAC(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            actor_features=self.policy_kwargs.get("actor_features", [128, 128]),
-            critic_features=self.policy_kwargs.get("critic_features", [128, 128]),
+            actor_kwargs=self.actor_kwargs,
+            critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
@@ -415,28 +415,27 @@ class SAC(RLAlgorithm):
         key: PRNGKeyArray,
         obs_space: jym.Space,
         output_space: jym.Space,
-        actor_features: list,
-        critic_features: list,
+        actor_kwargs: dict[str, Any],
+        critic_kwargs: dict[str, Any],
     ):
         actor_key, critic1_key, critic2_key = jax.random.split(key, 3)
         actor = ActorNetwork(
             key=actor_key,
             obs_space=obs_space,
-            hidden_dims=actor_features,
             output_space=output_space,
-            continuous_output_dist="tanhNormal",
+            **actor_kwargs,
         )
         critic1 = QValueNetwork(
             key=critic1_key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
             output_space=output_space,
+            **critic_kwargs,
         )
         critic2 = QValueNetwork(
             key=critic2_key,
             obs_space=obs_space,
-            hidden_dims=critic_features,
             output_space=output_space,
+            **critic_kwargs,
         )
         critic1_target = jax.tree.map(lambda x: x, critic1)
         critic2_target = jax.tree.map(lambda x: x, critic2)
@@ -489,7 +488,8 @@ class SAC(RLAlgorithm):
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
-                done = jnp.logical_or(terminated, truncated)
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
                 episode_reward += jym.tree.mean(reward)
                 return (rng, obs, env_state, done, episode_reward)
 

@@ -649,6 +649,10 @@ class FlattenActionSpaceWrapper(Wrapper):
 
             return jax.tree.unflatten(space_structure, original_actions)
 
+        # Skip if action space did not change
+        if hasattr(self.original_action_space, "n"):
+            return self._env.step(key, state, action)
+
         if self._multi_agent:
             action = jym.tree.map_one_level(
                 lambda sp, a: from_single_discrete_space(sp, a),
