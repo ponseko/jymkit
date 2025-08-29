@@ -9,8 +9,8 @@ jax.config.update(
     "jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir"
 )
 
-DISCRETE_ALGS = [PPO, SAC, PQN, DQN]
-CONTINUOUS_ALGS = [PPO, SAC]
+DISCRETE_ALGS = [PPO, PQN, DQN]
+CONTINUOUS_ALGS = [PPO]
 
 PPO_MIN_CONFIG = {
     "num_envs": 2,
