@@ -4,8 +4,9 @@ from typing import Callable, List, Optional
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray, PyTreeDef
+
+from jymkit.tree import map_one_level, stack, unstack
 
 
 def _result_tuple_to_tuple_result(r):
@@ -56,34 +57,31 @@ def transform_multi_agent(
     Essentially, this function either applies a vmap over the agents (if the agent are homogeneous)
     or applies a `jax.tree.map` over the first level of the PyTree structure of the arguments.
 
+    Essentially, this transformation allows for writing single-agent functions that can
+    automatically be upgraded to multi-agent settings.
+
     **Arguments**:
         `func`: The function to be transformed. If None, returns a decorator.
-        `shared_argnames`: A optional list of argument names that are shared across agents. If None, the first (non-PRNGKey) argument is
+        `shared_argnames`: An optional list of argument names that are shared across agents. If None, the first (non-PRNGKey) argument is
         assumed to be a per-agent argument. All arguments with the same first-level PyTree structure are also considered per-agent arguments.
         The rest are considered shared arguments. PRNG keys that are provided as arguments are automatically split over agents.
 
+    **Example**:
+    ```python
+    >>> @transform_multi_agent
+    ... def get_action(key, agent, observation):
+    ...     action_dist = agent.actor(observation)
+    ...     return action_dist.sample(seed=key)
+
+    # Usage:
+    >>> models = {"agent0": model1, "agent1": model2}
+    >>> agent_observations = {"agent0": obs0, "agent1": obs1} # <-- Same first-level structure as `models`
+    >>> key = jax.random.PRNGKey(42) # <-- `key` inputs are automatically split over agents
+    >>> actions = get_action(agent_states, agent_observations, key)
+    >>> # Result: {"agent0": action0, "agent1": action1}
+    ```
     """
     assert callable(func) or func is None
-
-    def _treemap_each_agent(agent_func: Callable, agent_args: dict):
-        def map_one_level(f, tree, *rest):
-            return jax.tree.map(f, tree, *rest, is_leaf=lambda x: x is not tree)
-
-        return map_one_level(agent_func, *agent_args.values())
-
-    def _vmap_each_agent(agent_func: Callable, agent_args: dict):
-        def stack_agents(agent_dict):
-            return jax.tree.map(lambda *xs: jnp.stack(xs, axis=0), *agent_dict.values())
-
-        dummy = agent_args[list(agent_args.keys())[0]]
-        agent_structure = jax.tree.structure(dummy, is_leaf=lambda x: x is not dummy)
-
-        stacked = {k: stack_agents(v) for k, v in agent_args.items()}
-        result = jax.vmap(agent_func)(*stacked.values())
-        leaves = jax.tree.leaves(result)
-        leaves = [list(x) for x in zip(*leaves)]
-        leaves = [jax.tree.unflatten(jax.tree.structure(result), x) for x in leaves]
-        return jax.tree.unflatten(agent_structure, leaves)
 
     def decorator(func):
         @functools.wraps(func)
@@ -96,9 +94,8 @@ def transform_multi_agent(
             shared: set[str] = set(shared_argnames or ())
             shared.update(k for k in ("self", "cls") if k in params)
 
-            if (
-                shared_argnames is None
-            ):  # We infer the shared arguments from the function signature
+            # Infer the shared arguments from the function signature if not provided
+            if shared_argnames is None:
                 ref_key = next(
                     (
                         k
@@ -139,10 +136,16 @@ def transform_multi_agent(
                 per_agent_kwargs = dict(zip(per_agent_params.keys(), agent_args))
                 return func(**per_agent_kwargs, **shared_params)
 
-            try:
-                result = _vmap_each_agent(agent_func, per_agent_params)
-            except Exception:
-                result = _treemap_each_agent(agent_func, per_agent_params)
+            try:  # Try stack + vmap
+                first_arg = next(iter(per_agent_params.values()))
+                _, agent_structure = eqx.tree_flatten_one_level(first_arg)
+                stacked_args = {k: stack(v) for k, v in per_agent_params.items()}
+                result = jax.vmap(agent_func)(*stacked_args.values())
+                result = unstack(result, structure=agent_structure)
+
+            except Exception:  # Homogeneous inputs, cannot vmap. Apply map instead.
+                result = map_one_level(agent_func, *per_agent_params.values())
+
             return _result_tuple_to_tuple_result(result)
 
         return wrapper

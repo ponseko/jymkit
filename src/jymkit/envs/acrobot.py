@@ -7,6 +7,7 @@ import numpy as np
 from jaxtyping import Array, Bool, Float, PRNGKeyArray
 
 from jymkit._environment import Environment, TimeStep
+from jymkit._registry import registry
 from jymkit._spaces import Box, Discrete
 
 
@@ -18,7 +19,8 @@ class EnvState(eqx.Module):
     time: int
 
 
-class Acrobot(Environment):
+@registry.register("Acrobot-v1")
+class Acrobot(Environment[EnvState]):
     """
     Acrobot environment from OpenAI Gym.
     """

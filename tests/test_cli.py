@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 
+import _consts as TEST_CONSTS  # noqa: F401
 import pytest
 
 

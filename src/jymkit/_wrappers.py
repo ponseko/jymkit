@@ -8,6 +8,8 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 
+import jymkit as jym
+
 from ._environment import (
     ORIGINAL_OBSERVATION_KEY,
     AgentObservation,
@@ -120,6 +122,10 @@ class Wrapper(Environment):
     def observation_space(self) -> Space | PyTree[Space]:
         return self._env.observation_space
 
+    @property
+    def _multi_agent(self) -> bool:
+        return getattr(self, "multi_agent", getattr(self._env, "_multi_agent", False))
+
     def __getattr__(self, name):
         return getattr(self._env, name)
 
@@ -204,7 +210,11 @@ class LogWrapper(Wrapper):
         self, key: PRNGKeyArray, state: LogEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, LogEnvState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
-        done = jnp.logical_or(timestep.terminated, timestep.truncated)  # .any()
+
+        terminated, truncated = timestep.terminated, timestep.truncated
+        assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+        done = jax.tree.map(jnp.logical_or, terminated, truncated)
+        done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
         new_episode_return = jax.tree.map(
             lambda _r, r: (_r + r), state.episode_returns, timestep.reward
         )
@@ -574,4 +584,114 @@ class DiscreteActionWrapper(Wrapper):
         Return the original action space of the environment.
         This is useful for algorithms that need to know the original action space.
         """
+        return self._env.action_space
+
+
+class MetaParamsWrapper(Wrapper):
+    def reset(self, key, params: dict):  # pyright: ignore[reportIncompatibleMethodOverride]
+        env = self._env
+        for k in params:
+            if not hasattr(self._env, k):
+                raise ValueError(
+                    f"Trying to map over {k}, but environment {k} not found in {self._env}."
+                )
+            env = eqx.tree_at(lambda env: getattr(env, k), self._env, params[k])
+        return env.reset(key)
+
+    def step(self, key, state, action, params: dict):  # pyright: ignore[reportIncompatibleMethodOverride]
+        env = self._env
+        for k in params:
+            if not hasattr(self._env, k):
+                raise ValueError(
+                    f"Trying to map over {k}, but environment {k} not found in {self._env}."
+                )
+            env = eqx.tree_at(lambda env: getattr(env, k), self._env, params[k])
+        return env.step(key, state, action)
+
+
+class FlattenActionSpaceWrapper(Wrapper):
+    """Wrapper to convert (PyTrees of) (multi-)discrete action spaces to a single
+    discrete action space. This grows the action space (significantly for large action spaces),
+    but allows to use algorithms that only support discrete action spaces.
+
+    First flattens each MultiDiscrete action space to a single discrete action space,
+    then combines possibly remaining discrete action spaces to a single discrete action space.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    """
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: int
+    ) -> Tuple[TimeStep, TEnvState]:
+        # Converts the single discrete action back to the original PyTree of (multi-)discrete actions
+
+        def from_single_discrete_space(action_space: PyTree[Space], action: int):
+            """Converts a single discrete action to a (multi-)discrete action space."""
+
+            original_actions = []
+            spaces, space_structure = jax.tree.flatten(action_space)
+            for space in spaces:
+                if hasattr(space, "n"):
+                    original_actions.append(action % space.n)
+                    action = action // space.n
+                elif hasattr(space, "nvec"):
+                    _actions = []
+                    for n in space.nvec:
+                        _actions.append(action % n)
+                        action = action // n
+                    original_actions.append(jnp.array(_actions))
+                else:
+                    raise ValueError(
+                        f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
+                    )
+
+            return jax.tree.unflatten(space_structure, original_actions)
+
+        # Skip if action space did not change
+        if hasattr(self.original_action_space, "n"):
+            return self._env.step(key, state, action)
+
+        if self._multi_agent:
+            action = jym.tree.map_one_level(
+                lambda sp, a: from_single_discrete_space(sp, a),
+                self.original_action_space,
+                action,
+            )
+            return self._env.step(key, state, action)
+
+        action = from_single_discrete_space(self.original_action_space, action)
+        return self._env.step(key, state, action)
+
+    @property
+    def action_space(self) -> Discrete:
+        def to_single_discrete_space(spaces):
+            """Combines a PyTree of (multi-)discrete spaces to a single discrete space."""
+
+            n_values = []
+            spaces = jax.tree.leaves(spaces)
+            for space in spaces:
+                if hasattr(space, "n"):
+                    n_values.append(int(space.n))
+                elif hasattr(space, "nvec"):
+                    n_values.append(int(np.prod(np.array(space.nvec))))
+                else:
+                    raise ValueError(
+                        f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
+                    )
+
+            combined_num_actions = int(np.prod(np.array(n_values)))
+            return Discrete(combined_num_actions)
+
+        if self._multi_agent:
+            return jym.tree.map_one_level(
+                to_single_discrete_space, self._env.action_space
+            )
+
+        return to_single_discrete_space(self._env.action_space)
+
+    @property
+    def original_action_space(self) -> Space:
+        """Return the original action space of the environment."""
         return self._env.action_space

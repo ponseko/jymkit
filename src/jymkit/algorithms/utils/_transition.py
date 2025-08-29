@@ -68,7 +68,7 @@ class Transition(eqx.Module):
             e.g. {a1: Transition(observation=..., action=..., ...), a2: Transition(observation=..., action=..., ...), ...}
         This is useful for multi-agent environments where we want to have a single Transition object per agent.
         """
-        if self.structure.num_leaves == 1:  # single agent
+        if self.structure == jax.tree.structure(0):  # single agent
             return self
 
         field_names = list(self.__dataclass_fields__.keys())

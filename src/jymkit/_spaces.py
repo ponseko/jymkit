@@ -72,6 +72,10 @@ class Box(Space):
     shape: tuple[int, ...] = ()
     dtype: type = jnp.float32
 
+    def __post_init__(self):
+        if not isinstance(self.shape, tuple):
+            self.shape = (self.shape,)
+
     def sample(self, rng: PRNGKeyArray) -> Array:
         """Sample random action uniformly from set of continuous choices."""
         low = self.low
@@ -102,7 +106,7 @@ class Discrete(Space):
     dtype: type
     shape: tuple[int, ...] = ()
 
-    def __init__(self, n: int, dtype: type = jnp.int16):
+    def __init__(self, n: int, dtype: type = jnp.int_):
         self.n = n
         self.dtype = dtype
 
@@ -129,7 +133,7 @@ class MultiDiscrete(Space):
     shape: tuple[int, ...]
 
     def __init__(
-        self, nvec: Int[Array | np.ndarray, " num_actions"], dtype: type = jnp.int16
+        self, nvec: Int[Array | np.ndarray, " num_actions"], dtype: type = jnp.int_
     ):
         self.nvec = nvec
         self.dtype = dtype

@@ -10,10 +10,18 @@ from typing import Any, Callable, List, Literal, Optional
 import equinox as eqx
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
-from jymkit import Environment, VecEnvWrapper, is_wrapped
+from jymkit import Environment, FlattenActionSpaceWrapper, VecEnvWrapper, is_wrapped
 from jymkit.algorithms.utils import transform_multi_agent
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PER_AGENT_FUNCTIONS = [
+    "get_action",
+    "get_value",
+    "_update_agent_state",
+    "_make_agent_state",
+    "_postprocess_rollout",
+]
 
 
 class RLAlgorithm(eqx.Module):
@@ -21,7 +29,8 @@ class RLAlgorithm(eqx.Module):
 
     multi_agent: bool = eqx.field(static=True, default=False)
     auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
-    policy_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    actor_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
     )
@@ -51,7 +60,9 @@ class RLAlgorithm(eqx.Module):
     ) -> Float[Array, " num_eval_episodes"]:
         pass
 
-    def __make_multi_agent__(self, *, upgrade_func_names: List[str]):
+    def __make_multi_agent__(
+        self, *, upgrade_func_names: List[str] = DEFAULT_PER_AGENT_FUNCTIONS
+    ):
         cls = self.__class__
         new_attrs: dict[str, object] = {}
 
@@ -59,7 +70,14 @@ class RLAlgorithm(eqx.Module):
             try:
                 attr_obj = inspect.getattr_static(cls, name)
             except AttributeError:
+                if (
+                    name in DEFAULT_PER_AGENT_FUNCTIONS
+                    and upgrade_func_names == DEFAULT_PER_AGENT_FUNCTIONS
+                ):  # If algorithm is just using defaults, then we skip missing methods
+                    # If upgrade_func_names is set, then we expect methods to be present.
+                    continue
                 raise AttributeError(f"Method {name!r} not found in {cls.__name__}. ")
+
             if isinstance(attr_obj, staticmethod):
                 orig_fn: Callable = attr_obj.__func__
                 new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))
@@ -84,7 +102,12 @@ class RLAlgorithm(eqx.Module):
         object.__setattr__(new_instance, "__class__", NewCls)  # safe: NewCls ⊂ cls
         return new_instance
 
-    def __check_env__(self, env: Environment, vectorized: bool = False):
+    def __check_env__(
+        self,
+        env: Environment,
+        vectorized: bool = False,
+        flatten_action_space: bool = False,
+    ) -> Environment:
         """
         Some validation checks on the current environment and its compatibility with the current
         algorithm setup.
@@ -97,6 +120,11 @@ class RLAlgorithm(eqx.Module):
                 "that may not be compatible with this algorithm. "
                 "If this is the case, training will crash during compilation."
             )
+        if is_wrapped(env, "JaxMARLWrapper"):
+            if getattr(env, "name", None) == "coin_game":
+                logger.warning(
+                    "Coin game is currently not supported due to an inconsistent API"
+                )
         if is_wrapped(env, "NormalizeVecObsWrapper") and getattr(
             self, "normalize_obs", False
         ):
@@ -116,5 +144,9 @@ class RLAlgorithm(eqx.Module):
         if vectorized and not is_wrapped(env, VecEnvWrapper):
             logger.info("Wrapping environment in VecEnvWrapper")
             env = VecEnvWrapper(env)
+
+        if flatten_action_space and not is_wrapped(env, FlattenActionSpaceWrapper):
+            logger.info("Wrapping environment in FlattenActionSpaceWrapper")
+            env = FlattenActionSpaceWrapper(env)
 
         return env

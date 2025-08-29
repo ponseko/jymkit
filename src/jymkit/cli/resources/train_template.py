@@ -38,7 +38,7 @@ if __name__ == "__main__":
     agent = PPO(
         total_timesteps=50000,
         num_steps=64,
-        learning_rate=2.5e-2,
+        learning_rate=2.5e-3,
         ent_coef=0.0,
         num_epochs=1,
     )

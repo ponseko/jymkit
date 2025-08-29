@@ -48,30 +48,9 @@ class Environment(eqx.Module, Generic[TEnvState]):
         - `action`: Action to take in the environment.
         """
 
-        (obs_step, reward, terminated, truncated, info), state_step = self.step_env(
-            key, state, action
-        )
-
-        # Auto-reset
-        obs_reset, state_reset = self.reset_env(key)
-        done = jnp.any(jnp.logical_or(terminated, truncated))
-        state = jax.tree.map(
-            lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
-        )
-        obs = jax.tree.map(lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step)
-
-        # Insert the original observation in info to bootstrap correctly
-        try:  # remove action mask if present
-            obs_step = jax.tree.map(
-                lambda o: o.observation,
-                obs_step,
-                is_leaf=lambda x: isinstance(x, AgentObservation),
-            )
-        except Exception:
-            pass
-        info[ORIGINAL_OBSERVATION_KEY] = obs_step
-
-        return TimeStep(obs, reward, terminated, truncated, info), state
+        timestep_step, state_step = self.step_env(key, state, action)
+        timestep, state = self.auto_reset(key, timestep_step, state_step)
+        return timestep, state
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
@@ -138,6 +117,54 @@ class Environment(eqx.Module, Generic[TEnvState]):
         See [`jymkit.spaces`](Spaces.md) for more information on how to define (composite) observation spaces.
         """
         pass
+
+    def auto_reset(
+        self, key: PRNGKeyArray, timestep_step: TimeStep, state_step: TEnvState
+    ) -> Tuple[TimeStep, TEnvState]:
+        """
+        Auto-resets the environment when the episode is terminated or truncated.
+
+        Given a step timestep and state, this function will auto-reset the environment
+        and return the new timestep and state when the episode is terminated or truncated.
+        Inserts the original observation in info to bootstrap correctly on truncated episodes.
+
+        **Arguments:**
+
+        - `key`: JAX PRNG key.
+        - `timestep_step`: The timestep returned by the `step_env` method.
+        - `state_step`: The state returned by the `step_env` method.
+
+        **Returns:**
+        A tuple of the new timestep and state with the state and observation reset to a new
+        initial state and observation when the episode is terminated or truncated.
+        The original observation is inserted in info to bootstrap correctly on truncated episodes.
+        """
+
+        obs_step, reward, terminated, truncated, info = timestep_step
+
+        assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+        done = jax.tree.map(jnp.logical_or, terminated, truncated)
+        done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
+        obs_reset, state_reset = self.reset(key)
+
+        # Replace state and obs based on done
+        state = jax.tree.map(
+            lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
+        )
+        obs = jax.tree.map(lambda x, y: jax.lax.select(done, x, y), obs_reset, obs_step)
+
+        # Insert the original observation in info to bootstrap correctly
+        try:  # removing possible action mask to lower the memory footprint
+            obs_step = jax.tree.map(
+                lambda o: o.observation,
+                obs_step,
+                is_leaf=lambda x: isinstance(x, AgentObservation),
+            )
+        except Exception:
+            pass
+        info[ORIGINAL_OBSERVATION_KEY] = obs_step
+
+        return TimeStep(obs, reward, terminated, truncated, info), state
 
     def sample_action(self, key: PRNGKeyArray) -> PyTree[Real[Array, "..."]]:
         """

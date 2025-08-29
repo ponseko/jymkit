@@ -1,9 +1,16 @@
-import optax
+import jax
 
-from jymkit.algorithms import PPO, SAC
+from jymkit.algorithms import DQN, PPO, PQN, SAC  # noqa: F401
 
-DISCRETE_ALGS = [PPO, SAC]
-CONTINUOUS_ALGS = [PPO, SAC]
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update(
+    "jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir"
+)
+
+DISCRETE_ALGS = [PPO, PQN, DQN]
+CONTINUOUS_ALGS = [PPO]
 
 PPO_MIN_CONFIG = {
     "num_envs": 2,
@@ -16,18 +23,20 @@ PPO_MIN_CONFIG = {
 SAC_CONTINUOUS_CONFIG = {
     "total_timesteps": 1_000_000,
     "num_envs": 8,
-    "learning_rate": 0.001,
-    "update_every": 8,
-    "batch_size": 256,
-    "target_entropy_scale": optax.linear_schedule(
-        init_value=1.5, end_value=0.2, transition_steps=1_000_000 // 8
-    ),
+    "learning_rate": 0.003,
+    "anneal_learning_rate": True,
+    "update_every": 64,
+    "batch_size": 512,
+    "target_entropy_scale": 1.5,
+    "anneal_entropy_scale": 0.1,
     "replay_buffer_size": 500_000,
-    "normalize_rew": False,
+    "normalize_rew": True,
     "normalize_obs": False,
-    "policy_kwargs": {
-        "actor_features": [128, 128],
-        "critic_features": [128, 128],
+    "actor_kwargs": {
+        "hidden_sizes": (128, 128),
+    },
+    "critic_kwargs": {
+        "hidden_sizes": (128, 128),
     },
     "log_function": None,
 }
@@ -37,7 +46,7 @@ CLASSIC_CONTROL_ENVS = [
     "MountainCar-v0",
     "Acrobot-v1",
     "Pendulum-v1",
-    "ContinuousMountainCar-v0",
+    "MountainCarContinuous-v0",
 ]
 
 GYMNAX_TEST_ENVS = [

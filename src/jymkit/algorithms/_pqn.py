@@ -1,8 +1,9 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any, Tuple
+from typing import Any, Callable, Tuple
 
+import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,37 +14,36 @@ import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 from jymkit.algorithms import RLAlgorithm
-from jymkit.algorithms.utils import Normalizer, Transition, scan_callback
+from jymkit.algorithms.utils import (
+    Normalizer,
+    Transition,
+    scan_callback,
+)
 
-from .networks import ActorNetwork, ValueNetwork
+from .networks import QValueNetwork
 
 logger = logging.getLogger(__name__)
 
 
-class PPOState(eqx.Module):
-    actor: ActorNetwork
-    critic: ValueNetwork
+class PQNState(eqx.Module):
+    critic: QValueNetwork
     optimizer_state: optax.OptState
     normalizer: Normalizer
 
 
-class PPO(RLAlgorithm):
-    state: PPOState = eqx.field(default=None)
+class PQN(RLAlgorithm):
+    state: PQNState = eqx.field(default=None)
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 2.5e-3
     anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
     gamma: float = 0.99
-    gae_lambda: float = 0.95
     max_grad_norm: float = 0.5
-    clip_coef: float = 0.2
-    clip_coef_vf: float = 10.0
-    ent_coef: float = 0.01
-    anneal_ent_coef: bool | float = eqx.field(static=True, default=False)
-    vf_coef: float = 0.25
+    epsilon: float = 0.2
+    anneal_epsilon: bool | float = eqx.field(static=True, default=True)
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=6)
+    num_envs: int = eqx.field(static=True, default=16)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
@@ -65,15 +65,15 @@ class PPO(RLAlgorithm):
         return optax.constant_schedule(self.learning_rate)
 
     @property
-    def _ent_coef_schedule(self):
-        if self.anneal_ent_coef:
-            end_value = 0.0 if self.anneal_ent_coef is True else self.anneal_ent_coef
+    def _epsilon_schedule(self) -> Callable[..., float]:
+        if self.anneal_epsilon:
+            end_value = 0.0 if self.anneal_epsilon is True else self.anneal_epsilon
             return optax.linear_schedule(
-                init_value=self.ent_coef,
+                init_value=self.epsilon,
                 end_value=end_value,
                 transition_steps=self.num_training_updates,
-            )
-        return optax.constant_schedule(self.ent_coef)
+            )  # type: ignore
+        return optax.constant_schedule(self.epsilon)  # type: ignore
 
     @property
     def minibatch_size(self):
@@ -89,24 +89,24 @@ class PPO(RLAlgorithm):
 
     @property
     def num_training_updates(self):
-        return self.num_iterations * self.num_epochs
+        return self.num_iterations * self.num_epochs * self.num_minibatches
 
     @staticmethod
     def get_action(
-        key: PRNGKeyArray, state: PPOState, observation, *, get_log_prob: bool = False
-    ) -> Array | Tuple[Array, Array]:
+        key: PRNGKeyArray, state: PQNState, observation: PyTree, epsilon: float
+    ):
         observation = state.normalizer.normalize_obs(observation)
-        action_dist = state.actor(observation)
-        if get_log_prob:
-            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
+        q_values = state.critic(observation)
+        action_dist = distrax.EpsilonGreedy(q_values, epsilon=epsilon)
         return action_dist.sample(seed=key)
 
     @staticmethod
-    def get_value(state: PPOState, observation):
+    def get_value(state: PQNState, observation: PyTree) -> Float[Array, ""]:
         observation = state.normalizer.normalize_obs(observation)
-        return state.critic(observation)
+        q_values = state.critic(observation)
+        return q_values
 
-    def init_state(self, key: PRNGKeyArray, env: Environment) -> "PPO":
+    def init(self, key: PRNGKeyArray, env: Environment) -> "PQN":
         if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
@@ -115,7 +115,7 @@ class PPO(RLAlgorithm):
                 self,
                 optimizer=optax.chain(
                     optax.clip_by_global_norm(self.max_grad_norm),
-                    optax.adabelief(learning_rate=self._learning_rate_schedule),
+                    optax.adabelief(learning_rate=self.learning_rate),
                 ),
             )
 
@@ -123,53 +123,52 @@ class PPO(RLAlgorithm):
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            actor_kwargs=self.actor_kwargs,
             critic_kwargs=self.critic_kwargs,
         )
 
         return replace(self, state=agent_states)
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PQN":
         @scan_callback(
             callback_fn=self.log_function,
             callback_interval=self.log_interval,
             n=self.num_iterations,
         )
-        def train_iteration(runner_state, _):
+        def train_iteration(runner_state, train_iter):
             """
             Performs a single training iteration (A single `Collect data + Update` run).
             This is repeated until the total number of timesteps is reached.
             """
 
             # Do rollout of single trajactory
-            self: PPO = runner_state[0]
+            self: PQN = runner_state[0]
             rollout_state = runner_state[1:]
             (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-                rollout_state, env
+                rollout_state, env, train_iter
             )
             metric = trajectory_batch.info or {}
 
             # Post-process the trajectory batch (GAE, returns, normalization)
-            trajectory_batch, updated_state = self._postprocess_rollout(
+            updated_state = self._postprocess_rollout(
                 trajectory_batch.view_transposed, self.state
             )
 
             # Update agent
             updated_state = self._update_agent_state(
                 rng,
-                updated_state,  # <-- Use updated state with updated normalizer
-                trajectory_batch,
+                updated_state,  # <-- Use updated_state w/ updated normalizer
+                trajectory_batch.view_transposed,
             )
             self = replace(self, state=updated_state)
 
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
-        env = self.__check_env__(env, vectorized=True)
+        env = self.__check_env__(env, vectorized=True, flatten_action_space=True)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init_state(key, env)
+            self = self.init(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
@@ -179,15 +178,17 @@ class PPO(RLAlgorithm):
         updated_self = runner_state[0]
         return updated_self
 
-    def _collect_rollout(self, rollout_state, env: Environment):
+    def _collect_rollout(self, rollout_state, env: Environment, train_iter: int = 0):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            get_action_and_log_prob = partial(self.get_action, get_log_prob=True)
-            action, log_prob = jax.vmap(get_action_and_log_prob, in_axes=(0, None, 0))(
+            update_count = jym.tree.get_first(self.state, "count")
+            current_epsilon = self._epsilon_schedule(update_count)
+            get_action = partial(self.get_action, epsilon=current_epsilon)
+            action = jax.vmap(get_action, in_axes=(0, None, 0))(
                 sample_key, self.state, last_obs
             )
 
@@ -196,28 +197,16 @@ class PPO(RLAlgorithm):
             (obsv, reward, terminated, truncated, info), env_state = env.step(
                 step_key, env_state, action
             )
-            value = jax.vmap(self.get_value, in_axes=(None, 0))(self.state, last_obs)
-            next_value = jax.vmap(self.get_value, in_axes=(None, 0))(
-                self.state, info[ORIGINAL_OBSERVATION_KEY]
-            )
 
-            # TODO: variable gamma from env
-            # gamma = self.gamma
-            # if "discount" in info:
-            #     gamma = info["discount"]
-
-            # Build a single transition. Jax.lax.scan will build the batch
-            # returning num_steps transitions.
+            # Build a single transition. jax.lax.scan builds a batch of transitions.
             transition = Transition(
                 observation=last_obs,
                 action=action,
                 reward=reward,
                 terminated=terminated,
                 truncated=truncated,
-                log_prob=log_prob,
+                next_observation=info[ORIGINAL_OBSERVATION_KEY],
                 info=info,
-                value=value,
-                next_value=next_value,
             )
 
             rollout_state = (env_state, obsv, rng)
@@ -231,129 +220,51 @@ class PPO(RLAlgorithm):
         return rollout_state, trajectory_batch
 
     def _postprocess_rollout(
-        self, trajectory_batch: Transition, current_state: PPOState
-    ) -> Tuple[Transition, PPOState]:
-        """
-        1) Computes GAE and Returns and adds them to the trajectory batch.
-        2) Returns updated normalization based on the new trajectory batch.
-        """
-
-        def compute_gae_scan(gae, batch: Transition):
-            """
-            Computes the Generalized Advantage Estimation (GAE) for the given batch of transitions.
-            """
-
-            assert batch.value is not None
-            assert batch.next_value is not None
-
-            reward = current_state.normalizer.normalize_reward(batch.reward)
-            done = batch.terminated
-            if done.ndim < reward.ndim:
-                # correct for multi-agent envs that do not return done flags per agent
-                done = jnp.expand_dims(done, axis=-1)
-
-            delta = reward + self.gamma * batch.next_value * (1 - done) - batch.value
-            gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-            return gae, (gae, gae + batch.value)
-
-        assert trajectory_batch.value is not None
-        _, (advantages, returns) = jax.lax.scan(
-            compute_gae_scan,
-            optax.tree.zeros_like(trajectory_batch.value[-1]),
-            trajectory_batch,
-            reverse=True,
-            unroll=16,
-        )
-
-        trajectory_batch = replace(
-            trajectory_batch,
-            advantage=advantages,
-            return_=returns,
-        )
+        self, trajectory_batch: Transition, current_state: PQNState
+    ) -> PQNState:
+        """Returns updated normalization based on the new trajectory batch."""
 
         # Update normalization params
         updated_state = replace(
             current_state, normalizer=current_state.normalizer.update(trajectory_batch)
         )
 
-        return trajectory_batch, updated_state
+        return updated_state
 
     def _update_agent_state(
-        self, key, current_state: PPOState, train_data: Transition
-    ) -> PPOState:
-        @eqx.filter_grad
-        def __ppo_los_fn(
-            params: Tuple[ActorNetwork, ValueNetwork],
-            train_batch: Transition,
-        ):
-            assert train_batch.advantage is not None
-            assert train_batch.return_ is not None
-            assert train_batch.log_prob is not None
-
-            def pytree_batch_sum(values):
-                batch_wise_sums = jax.tree.map(
-                    lambda x: jnp.sum(x, axis=tuple(range(1, x.ndim)))
-                    if x.ndim > 1
-                    else x,
-                    values,
+        self, key, current_state: PQNState, train_data: Transition
+    ) -> PQNState:
+        def scan_minibatch_update(current_state: PQNState, minibatch: Transition):
+            @eqx.filter_grad
+            def __dqn_loss(params: QValueNetwork, train_batch: Transition):
+                q_out_1 = jax.vmap(params)(train_batch.observation)
+                acted_q_values = jax.tree.map(
+                    lambda q, a: jnp.take_along_axis(
+                        q, a[..., None], axis=-1
+                    ).squeeze(),
+                    q_out_1,
+                    train_batch.action,
                 )
-                return jax.tree.reduce(lambda a, b: a + b, batch_wise_sums)
+                # idx1 = jnp.arange(q_out_1.shape[0])
+                # selected_q_values = q_out_1[idx1, train_batch.action]
+                q_loss = jnp.mean((acted_q_values - target) ** 2)
+                return q_loss
 
-            actor, critic = params
-            norm_obs = current_state.normalizer.normalize_obs(train_batch.observation)
-            action_dist = jax.vmap(actor)(norm_obs)
-            log_prob = action_dist.log_prob(train_batch.action)
-            entropy = action_dist.entropy()
-            value = jax.vmap(critic)(norm_obs)
-            init_log_prob = train_batch.log_prob
-
-            log_prob = pytree_batch_sum(log_prob)
-            init_log_prob = pytree_batch_sum(init_log_prob)
-            entropy = pytree_batch_sum(entropy)
-
-            ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
-                train_batch.advantage.std() + 1e-8
+            # Compute target
+            q_target_output = jax.vmap(current_state.critic)(minibatch.next_observation)
+            reward = current_state.normalizer.normalize_reward(minibatch.reward)
+            target = reward + ~minibatch.terminated * self.gamma * jnp.max(
+                q_target_output,
+                axis=-1,  # assumes discrete actions (flatten multidiscrete spaces first)
             )
-            actor_loss1 = _advantages * ratio
 
-            actor_loss2 = (
-                jnp.clip(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
-                * _advantages
-            )
-            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-            # critic loss
-            value_pred_clipped = train_batch.value + (
-                jnp.clip(
-                    value - train_batch.value,
-                    -self.clip_coef_vf,
-                    self.clip_coef_vf,
-                )
-            )
-            value_losses = jnp.square(value - train_batch.return_)
-            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
-            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-            update_count = jym.tree.get_first(current_state.optimizer_state, "count")
-            ent_coef = self._ent_coef_schedule(update_count)
-
-            # Total loss
-            total_loss = (
-                actor_loss + self.vf_coef * value_loss - ent_coef * entropy.mean()
-            )
-            return total_loss  # , (actor_loss, value_loss, entropy)
-
-        def scan_minibatch_update(current_state, minibatch):
-            actor, critic = current_state.actor, current_state.critic
-            grads = __ppo_los_fn((actor, critic), minibatch)
+            grads = __dqn_loss(current_state.critic, minibatch)
             updates, optimizer_state = self.optimizer.update(
                 grads, current_state.optimizer_state
             )
-            new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+            new_critic = eqx.apply_updates(current_state.critic, updates)
 
-            updated_state = PPOState(
-                actor=new_actor,
+            updated_state = PQNState(
                 critic=new_critic,
                 optimizer_state=optimizer_state,
                 normalizer=current_state.normalizer,  # already updated
@@ -380,24 +291,15 @@ class PPO(RLAlgorithm):
         key: PRNGKeyArray,
         obs_space: jym.Space,
         output_space: jym.Space,
-        actor_kwargs: dict[str, Any],
         critic_kwargs: dict[str, Any],
     ):
-        actor_key, critic_key = jax.random.split(key)
-        actor = ActorNetwork(
-            key=actor_key,
+        critic = QValueNetwork(
+            key=key,
             obs_space=obs_space,
             output_space=output_space,
-            **actor_kwargs,
-        )
-        critic = ValueNetwork(
-            key=critic_key,
-            obs_space=obs_space,
             **critic_kwargs,
         )
-        optimizer_state = self.optimizer.init(
-            eqx.filter((actor, critic), eqx.is_inexact_array)
-        )
+        optimizer_state = self.optimizer.init(eqx.filter(critic, eqx.is_inexact_array))
 
         dummy_obs = jax.tree.map(
             lambda space: space.sample(jax.random.PRNGKey(0)),
@@ -411,8 +313,7 @@ class PPO(RLAlgorithm):
             rew_shape=(self.num_steps, self.num_envs),
         )
 
-        return PPOState(
-            actor=actor,
+        return PQNState(
             critic=critic,
             optimizer_state=optimizer_state,
             normalizer=normalization_state,
@@ -422,25 +323,27 @@ class PPO(RLAlgorithm):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init_state()."
+            "Agent state is not initialized. Create one via e.g. train() or init()."
         )
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
             env = remove_wrapper(env, VecEnvWrapper)
 
+        env = self.__check_env__(env, vectorized=False, flatten_action_space=True)
+
         def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
             def step_env(carry):
                 rng, obs, env_state, done, episode_reward = carry
                 rng, action_key, step_key = jax.random.split(rng, 3)
 
-                action = self.get_action(action_key, self.state, obs)
+                action = self.get_action(action_key, self.state, obs, epsilon=0.0)
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
                 done = jax.tree.map(jnp.logical_or, terminated, truncated)
                 done = jnp.all(jnp.array(jax.tree.leaves(done)))
-                episode_reward += jym.tree.mean(reward)
+                episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
                 return (rng, obs, env_state, done, episode_reward)
 
             key, reset_key = jax.random.split(key)
