@@ -12,8 +12,10 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 import jymkit as jym
 from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
-from jymkit.algorithms import ActorNetwork, RLAlgorithm, ValueNetwork
+from jymkit.algorithms import RLAlgorithm
 from jymkit.algorithms.utils import Normalizer, Transition, scan_callback
+
+from .networks import ActorNetwork, ValueNetwork
 
 logger = logging.getLogger(__name__)
 
