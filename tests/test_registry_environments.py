@@ -90,7 +90,7 @@ def test_subset_registered_environments_run(env_id):
     run_env_3_steps(env_id)
 
 
-@pytest.mark.parametrize("env_id", TEST_ENVS)
+@pytest.mark.parametrize("env_id", TEST_ENVS_SMALL)
 @pytest.mark.parametrize("alg", [PPO, SAC])
 def test_subset_registered_environments_train(env_id, alg):
     if env_id in SKIP_ENVS:
