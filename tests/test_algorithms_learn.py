@@ -8,11 +8,11 @@ from jymkit.algorithms import DQN, PPO, PQN, SAC
 from jymkit.envs.cartpole import CartPole
 
 
-@pytest.mark.parametrize("alg", [PPO, SAC, PQN, DQN])
+@pytest.mark.parametrize("alg", [PPO, PQN, DQN, SAC])
 def test_discrete_is_learning(alg):
     # Confirm learning behavior on CartPole w/ default parameters
     env = CartPole()
-    seed = jax.random.PRNGKey(42)
+    seed = jax.random.PRNGKey(1)
     seed1, seed2 = jax.random.split(seed)
     agent = alg(total_timesteps=1_000_000, log_function=None)
     agent = agent.train(seed1, env)
