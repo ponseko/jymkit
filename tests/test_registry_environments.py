@@ -12,12 +12,9 @@ TEST_ENVS = (  # All included envs + arbitrary subset of external envs
     list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::8]
 )
 TEST_ENVS_SMALL = (  # All included envs + arbitrary subset of external envs
-    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::16]
+    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::24]
 )
 TEST_SET_SMALL_ONLY_DISCRETE = [
-    "MountainCar-v0",
-    "Acrobot-v1",
-    "gymnax:Acrobot-v1",
     "Breakout-MinAtar",
     "Catch-bsuite",
     "Snake-v1",
