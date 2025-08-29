@@ -11,8 +11,6 @@ from jaxtyping import Array, PRNGKeyArray
 from jymkit import Discrete, Environment, MultiDiscrete, Space, TimeStep
 from jymkit.algorithms import PPO
 
-pytest.skip("skipping", allow_module_level=True)
-
 
 class SimpleEnvState(eqx.Module):
     last_actions: Array
