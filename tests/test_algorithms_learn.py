@@ -1,13 +1,14 @@
 import _consts as TEST_CONSTS
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
 import jymkit as jym
-from jymkit.algorithms import DQN, PPO, PQN, SAC
+from jymkit.algorithms import SAC
 
 
-@pytest.mark.parametrize("alg", [PPO, SAC, PQN, DQN])
+@pytest.mark.parametrize("alg", TEST_CONSTS.DISCRETE_ALGS)
 def test_discrete_is_learning(alg):
     # Confirm learning behavior on CartPole w/ default parameters
     env = jym.make("CartPole-v1")
@@ -17,13 +18,13 @@ def test_discrete_is_learning(alg):
     agent = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
-    avg_reward = np.mean(rewards)
+    avg_reward = jnp.mean(rewards)
     assert avg_reward > 200, (
         f"Average reward too low: {avg_reward}. Training may have failed."
     )
 
 
-@pytest.mark.parametrize("alg", [PPO, SAC])
+@pytest.mark.parametrize("alg", TEST_CONSTS.CONTINUOUS_ALGS)
 def test_continuous_is_learning(alg):
     # Confirm learning behavior on Pendulum w/ default parameters
     env = jym.make("Pendulum-v1")

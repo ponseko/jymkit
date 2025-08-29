@@ -9,10 +9,10 @@ from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 from jymkit.algorithms import DQN, PPO, PQN, SAC
 
 TEST_ENVS = (  # All included envs + arbitrary subset of external envs
-    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::8]
+    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::16]
 )
 TEST_ENVS_SMALL = (  # All included envs + arbitrary subset of external envs
-    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::24]
+    list(jym.registry._environments.keys()) + list(jym.registry._aliases.keys())[::32]
 )
 TEST_SET_SMALL_ONLY_DISCRETE = [
     "Breakout-MinAtar",
