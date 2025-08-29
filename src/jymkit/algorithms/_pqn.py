@@ -341,7 +341,8 @@ class PQN(RLAlgorithm):
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
-                done = jnp.logical_or(terminated, truncated)
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
                 episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
                 return (rng, obs, env_state, done, episode_reward)
 
