@@ -106,7 +106,7 @@ class PQN(RLAlgorithm):
         q_values = state.critic(observation)
         return q_values
 
-    def init(self, key: PRNGKeyArray, env: Environment) -> "PQN":
+    def init_state(self, key: PRNGKeyArray, env: Environment) -> "PQN":
         if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
@@ -166,7 +166,7 @@ class PQN(RLAlgorithm):
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init(key, env)
+            self = self.init_state(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
@@ -321,7 +321,7 @@ class PQN(RLAlgorithm):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init()."
+            "Agent state is not initialized. Create one via e.g. train() or init_state()."
         )
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
