@@ -107,7 +107,7 @@ class PQN(RLAlgorithm):
         return q_values
 
     def init(self, key: PRNGKeyArray, env: Environment) -> "PQN":
-        if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
+        if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
         if self.optimizer is None:
@@ -149,15 +149,13 @@ class PQN(RLAlgorithm):
             metric = trajectory_batch.info or {}
 
             # Post-process the trajectory batch (GAE, returns, normalization)
-            updated_state = self._postprocess_rollout(
-                trajectory_batch.view_transposed, self.state
-            )
+            updated_state = self._postprocess_rollout(trajectory_batch, self.state)
 
             # Update agent
             updated_state = self._update_agent_state(
                 rng,
                 updated_state,  # <-- Use updated_state w/ updated normalizer
-                trajectory_batch.view_transposed,
+                trajectory_batch,
             )
             self = replace(self, state=updated_state)
 

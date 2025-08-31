@@ -20,10 +20,7 @@ class SimpleEnvState(eqx.Module):
 class SimpleMultiAgentEnv(Environment):
     num_agents: int = 3
     episode_length: int = 100
-
-    @property
-    def multi_agent(self) -> bool:
-        return True
+    _multi_agent: bool = True
 
     def reset_env(self, key: PRNGKeyArray):
         state = SimpleEnvState(
@@ -82,10 +79,7 @@ class HeterogeneousMultiAgentEnvState(eqx.Module):
 class HeterogeneousMultiAgentSimpleEnv(Environment):
     num_agents: int = 2
     episode_length: int = 50
-
-    @property
-    def multi_agent(self) -> bool:
-        return True
+    _multi_agent: bool = True
 
     def reset_env(self, key: PRNGKeyArray):
         # Use dict keys to access spaces for sampling
@@ -242,10 +236,7 @@ class SimpleMultiAgentEnvWithPyTreeAction(Environment):
 
     num_agents: int = 2
     episode_length: int = 100
-
-    @property
-    def multi_agent(self) -> bool:
-        return True
+    _multi_agent: bool = True
 
     def reset_env(self, key: PRNGKeyArray):
         state = {"agent0": jnp.ones((1,)), "agent1": jnp.zeros((1,)), "current_step": 0}

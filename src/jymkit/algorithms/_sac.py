@@ -114,7 +114,7 @@ class SAC(RLAlgorithm):
         return action_dist.sample(seed=key)
 
     def init_state(self, key: PRNGKeyArray, env: Environment) -> "SAC":
-        if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
+        if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
         if self.optimizer is None:
@@ -157,9 +157,7 @@ class SAC(RLAlgorithm):
             )
 
             # Post-process the trajectory batch: normalization update (possibly per-agent)
-            updated_state = self._postprocess_rollout(
-                trajectory_batch.view_transposed, self.state
-            )
+            updated_state = self._postprocess_rollout(trajectory_batch, self.state)
 
             # Add new data to buffer & Sample update batch from the buffer
             buffer = buffer.insert(trajectory_batch)
@@ -169,7 +167,7 @@ class SAC(RLAlgorithm):
             updated_state = self._update_agent_state(
                 rng,
                 updated_state,  # <-- use updated_state w/ updated norm
-                train_data.view_transposed,
+                train_data,
             )
 
             metric = trajectory_batch.info or {}

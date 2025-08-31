@@ -123,8 +123,8 @@ class Wrapper(Environment):
         return self._env.observation_space
 
     @property
-    def _multi_agent(self) -> bool:
-        return getattr(self, "multi_agent", getattr(self._env, "_multi_agent", False))
+    def multi_agent(self) -> bool:
+        return getattr(self, "_multi_agent", getattr(self._env, "multi_agent", False))
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -306,7 +306,7 @@ class NormalizeVecObsWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecObsState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
+        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
         state = NormalizeVecObsState(
             env_state=env_state,
             mean=jax.tree.map(jnp.zeros_like, obs),
@@ -325,7 +325,7 @@ class NormalizeVecObsWrapper(Wrapper):
     ) -> Tuple[TimeStep, NormalizeVecObsState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
         obs = timestep.observation
-        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
+        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
         state = replace(state, env_state=env_state)
         normalized_obs, state = self.update_state_and_get_obs(obs, state)
         normalized_obs = eqx.combine(normalized_obs, masks)
@@ -413,7 +413,7 @@ class NormalizeVecRewardWrapper(Wrapper):
             return_val=return_val,
         )
 
-        if np.any(self._env._multi_agent):  # type: ignore[reportGeneralTypeIssues]
+        if np.any(self._env.multi_agent):  # type: ignore[reportGeneralTypeIssues]
             reward = reward / jnp.sqrt(jnp.expand_dims(state.var, axis=-1) + 1e-8)
             reward = jax.tree.unflatten(reward_structure, reward)
         else:
@@ -436,7 +436,7 @@ class FlattenObservationWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env._multi_agent)
+        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
         obs = eqx.combine(obs, masks)
         return obs, env_state
@@ -446,7 +446,7 @@ class FlattenObservationWrapper(Wrapper):
     ) -> Tuple[TimeStep, TEnvState]:
         timestep, env_state = self._env.step(key, state, action)
         obs, masks = _partition_obs_and_masks(
-            timestep.observation, self._env._multi_agent
+            timestep.observation, self._env.multi_agent
         )
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
         # if not isinstance(obs, jnp.ndarray):
@@ -653,7 +653,7 @@ class FlattenActionSpaceWrapper(Wrapper):
         if hasattr(self.original_action_space, "n"):
             return self._env.step(key, state, action)
 
-        if self._multi_agent:
+        if self.multi_agent:
             action = jym.tree.map_one_level(
                 lambda sp, a: from_single_discrete_space(sp, a),
                 self.original_action_space,
@@ -684,7 +684,7 @@ class FlattenActionSpaceWrapper(Wrapper):
             combined_num_actions = int(np.prod(np.array(n_values)))
             return Discrete(combined_num_actions)
 
-        if self._multi_agent:
+        if self.multi_agent:
             return jym.tree.map_one_level(
                 to_single_discrete_space, self._env.action_space
             )
