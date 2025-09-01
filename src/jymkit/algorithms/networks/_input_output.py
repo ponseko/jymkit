@@ -109,7 +109,7 @@ class MultiInputNetwork(eqx.Module):
             dummy_obs = jax.tree.map(
                 lambda o: jnp.zeros(o.shape, dtype=jnp.float32), obs_space
             )
-            f = lambda obs: self(obs)
+            f = lambda obs: jnp.atleast_1d(self(obs))  # type: ignore
             self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
     def __call__(self, x):
