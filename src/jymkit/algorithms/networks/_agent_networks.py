@@ -1,6 +1,6 @@
 import logging
 
-# from typing import Literal, Tuple, TypedDict
+import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -48,6 +48,10 @@ class ActorNetwork(eqx.Module):
         x = self.input_layers(x)
         x = self.mlp(x)
         action_dists = self.output_layers(x, action_mask)
+        if isinstance(action_dists, distrax.Distribution):
+            return action_dists  # Single distribution
+
+        # Else return a grouped container of distributions
         return DistraxContainer(action_dists)
 
 
@@ -136,3 +140,6 @@ class QValueNetwork(eqx.Module):
         x = self.mlp(x)
         q_values = self.output_layers(x, action_mask)
         return q_values
+
+
+AdvantageCriticNetwork = QValueNetwork

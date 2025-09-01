@@ -190,12 +190,14 @@ class Environment(eqx.Module, Generic[TEnvState]):
         )
 
     @property
-    def _multi_agent(self) -> bool:
+    def multi_agent(self) -> bool:
+        """Indicates if the environment is a multi-agent environment.
+
+        Infers this via the `_multi_agent` property. If not set, assumes single-agent.
         """
-        Indicates if the environment is a multi-agent environment.
-        For multi-agent environments, include a property `multi_agent = True` in the subclass.
-        """
-        return getattr(self, "multi_agent", False)
+        if hasattr(self, "_multi_agent"):
+            return self._multi_agent
+        return False
 
     @property
     def agent_structure(self) -> PyTreeDef:
@@ -203,7 +205,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         Returns the structure of the agent space.
         This is useful for environments with multiple agents.
         """
-        if not self._multi_agent:
+        if not self.multi_agent:
             return jax.tree.structure(0)
         _, agent_structure = eqx.tree_flatten_one_level(self.action_space)
         return agent_structure

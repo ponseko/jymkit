@@ -8,6 +8,8 @@ from jaxtyping import PRNGKeyArray, PyTreeDef
 
 from jymkit.tree import map_one_level, stack, unstack
 
+from ._transition import Transition
+
 
 def _result_tuple_to_tuple_result(r):
     """
@@ -51,6 +53,8 @@ def transform_multi_agent(
     func: Optional[Callable] = None,
     *,
     shared_argnames: Optional[List[str]] = None,
+    auto_split_keys: bool = True,
+    auto_transpose_transitions: bool = True,
 ) -> Callable:
     """
     Transformation docorator to handle multi-agent settings.
@@ -65,6 +69,9 @@ def transform_multi_agent(
         `shared_argnames`: An optional list of argument names that are shared across agents. If None, the first (non-PRNGKey) argument is
         assumed to be a per-agent argument. All arguments with the same first-level PyTree structure are also considered per-agent arguments.
         The rest are considered shared arguments. PRNG keys that are provided as arguments are automatically split over agents.
+        `auto_split_keys`: When enabled, provided single PRNGKeys are automatically split over the same structure as the first argument.
+        `auto_split_transitions`: When enabled, `Transition` objects are automatically transposed before being passed to the function.
+            After the function call, the `Transition` object is reconstructed into the original structure.
 
     **Example**:
     ```python
@@ -94,39 +101,41 @@ def transform_multi_agent(
             shared: set[str] = set(shared_argnames or ())
             shared.update(k for k in ("self", "cls") if k in params)
 
+            _has_transposed_transition = False
+
+            # Grab the first param key that is not in shared and is not a PRNGKey
+            # We use the "first-level" PyTree structure as the "agent structure" and use it as reference
+            ref_key = next(
+                (k for k in params if k not in shared and not _is_prng_key(params[k])),
+                None,
+            )
+            if ref_key is None:
+                raise ValueError("No per-agent args found in the function signature.")
+            ref_arg = params[ref_key]
+            if isinstance(ref_arg, Transition):
+                ref_structure = ref_arg.structure
+            else:
+                _, ref_structure = eqx.tree_flatten_one_level(ref_arg)
+
             # Infer the shared arguments from the function signature if not provided
             if shared_argnames is None:
-                ref_key = next(
-                    (
-                        k
-                        for k in params
-                        if k not in shared and not _is_prng_key(params[k])
-                    ),
-                    None,
-                )  # Skip 'self', 'cls', or single-prng keys if present
-                if ref_key is None:
-                    raise ValueError(
-                        "Trying to transform a function without any per-agent arguments. "
-                    )
-                ref_arg = params[ref_key]
-                ref_structure = jax.tree.structure(
-                    ref_arg, is_leaf=lambda x: x is not ref_arg
-                )
+                for k, v in params.items():
+                    _, param_structure = eqx.tree_flatten_one_level(v)
+                    if ref_structure != param_structure:
+                        shared.add(k)
 
-                _shared = {
-                    k
-                    for k, v in params.items()
-                    if ref_structure
-                    != jax.tree.structure(v, is_leaf=lambda x: x is not v)
-                }
-                shared.update(_shared)
+            # Auto splitting:
+            for shared_param in shared.copy():
+                arg = params[shared_param]
 
-                for param in params:  # Auto split JAX PRNG keys for each agent
-                    if param not in shared or not _is_prng_key(params[param]):
-                        continue
-                    # If the parameter is a PRNGKeyArray, we split it over agents
-                    params[param] = split_key_over_agents(params[param], ref_structure)
-                    shared.remove(param)
+                if auto_split_keys and _is_prng_key(arg):
+                    params[shared_param] = split_key_over_agents(arg, ref_structure)
+                    shared.remove(shared_param)
+
+                if auto_transpose_transitions and isinstance(arg, Transition):
+                    params[shared_param] = arg.view_transposed
+                    shared.remove(shared_param)
+                    _has_transposed_transition = True
 
             shared_params = {k: params[k] for k in shared}
             per_agent_params = {k: params[k] for k in params if k not in shared}
@@ -146,7 +155,27 @@ def transform_multi_agent(
             except Exception:  # Homogeneous inputs, cannot vmap. Apply map instead.
                 result = map_one_level(agent_func, *per_agent_params.values())
 
-            return _result_tuple_to_tuple_result(result)
+            result = _result_tuple_to_tuple_result(result)
+
+            if _has_transposed_transition:
+                # If a Transition was transposed, and the function
+                # returns an (updated) transpsed Transition,
+                # we need to rebuild the original structure
+                is_pytree_of_transitions = lambda x: all(
+                    isinstance(y, Transition) for y in eqx.tree_flatten_one_level(x)[0]
+                )
+                if is_pytree_of_transitions(result):
+                    result = Transition.from_transposed(result)
+                elif isinstance(result, tuple):
+                    result_list = []
+                    for res in result:
+                        if is_pytree_of_transitions(res):
+                            result_list.append(Transition.from_transposed(res))
+                        else:
+                            result_list.append(res)
+                    result = tuple(result_list)
+
+            return result
 
         return wrapper
 

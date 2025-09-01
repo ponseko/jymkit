@@ -291,7 +291,7 @@ class PgxWrapper(Wrapper):
         observation = state.observation
         action_mask = state.legal_action_mask
         obs = AgentObservation(observation, action_mask)
-        if self._multi_agent:
+        if self.multi_agent:
             obs = (obs,) * self._env.num_players
         return obs, state  # pyright: ignore
 
@@ -312,7 +312,7 @@ class PgxWrapper(Wrapper):
         action_mask = pgx_state.legal_action_mask
         reward = pgx_state.rewards.squeeze()
         obs = AgentObservation(observation, action_mask)
-        if self._multi_agent:
+        if self.multi_agent:
             obs = (obs,) * self._env.num_players
             reward = tuple(reward)
         timestep_step = TimeStep(
@@ -335,7 +335,7 @@ class PgxWrapper(Wrapper):
             shape=shape,
             dtype=jnp.int32,
         )
-        if self._multi_agent:
+        if self.multi_agent:
             return (obs_space,) * num_players
         return obs_space
 
@@ -344,7 +344,7 @@ class PgxWrapper(Wrapper):
         num_players = self._env.num_players
         num_actions = self._env.num_actions
         action_space = Discrete(num_actions)
-        if self._multi_agent:
+        if self.multi_agent:
             return (action_space,) * num_players
         return action_space
 
@@ -461,7 +461,7 @@ class JaxMARLWrapper(Wrapper):
     """
 
     _env: Any
-    multi_agent: bool = True
+    _multi_agent: bool = True
     remove_world_state: bool = True
     """ Removes the world_state that is present in some environments from the observation. Required in JymKit algorithms """
 
