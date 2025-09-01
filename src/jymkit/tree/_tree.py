@@ -49,8 +49,43 @@ def tree_mean(tree):
 
 
 def tree_map_one_level(fn: Callable, tree, *rest):
-    """Simple `jax.tree.map` operation over the first level of a pytree."""
+    """Simple `jax.tree.map` operation over the first level of a pytree.
+
+    **Arguments**:
+        `fn`: A function to map over the pytree.
+        `tree`: A pytree.
+        `*rest`: Additional pytrees to map over.
+    """
     return jax.tree.map(fn, tree, *rest, is_leaf=_is_child_of(tree))
+
+
+def tree_map_distribution(fn: Callable, tree, *rest):
+    """Map a function with `distrax.Distribution` instances marked as leaves.
+    Additionally, if one of the inputs is a `DistraxContainer`, the function
+    is applied to the `distribution` attribute of the `DistraxContainer`.
+
+    **Arguments**:
+        `fn`: A function to map over the pytree.
+        `tree`: A pytree.
+        `*rest`: Additional pytrees to map over.
+    """
+    try:
+        import distrax
+
+        from jymkit.algorithms.utils import DistraxContainer
+    except ImportError:
+        raise ImportError(
+            "jymkit.algorithms is required for `jymkit.tree.map_distributions()`. Please install  `pip install jymkit[algs]`."
+        )
+
+    if isinstance(tree, DistraxContainer):
+        tree = tree.distribution
+    # any of *rest should also be converted:
+    rest = tuple(r.distribution if isinstance(r, DistraxContainer) else r for r in rest)
+
+    return jax.tree.map(
+        fn, tree, *rest, is_leaf=lambda x: isinstance(x, distrax.Distribution)
+    )
 
 
 def tree_concatenate(trees: PyTree) -> Array:
