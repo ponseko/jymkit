@@ -1,6 +1,7 @@
 import functools
 from typing import Callable, Literal, Optional
 
+import equinox as eqx
 import jax
 
 
@@ -91,3 +92,46 @@ def scan_callback(
         return wrapper
 
     return _scan_callback(func) if callable(func) else _scan_callback
+
+
+def pretty_print_network(network: eqx.Module):
+    def _count_parameters(module: eqx.Module):
+        """Count the total number of trainable parameters in a module."""
+        total_params = 0
+        for leaf in jax.tree.leaves(module):
+            if hasattr(leaf, "shape"):
+                total_params += leaf.size
+        return total_params
+
+    def _print_recursive(network: eqx.Module, indent: str = "", is_last: bool = True):
+        module_name = network.__class__.__name__
+        param_count = _count_parameters(network)
+
+        indent_display = ""
+        if indent:
+            tree_char = "└── " if is_last else "├── "
+            indent_display = indent[:-4] + tree_char
+
+        full_path = indent_display + module_name
+        print(f"{full_path:<50} {param_count:<15,}")
+
+        # Get all child modules
+        child_modules = jax.tree.leaves(
+            network, is_leaf=lambda x: x is not network and isinstance(x, eqx.Module)
+        )
+        child_modules = [
+            child for child in child_modules if isinstance(child, eqx.Module)
+        ]
+
+        # Recursively process child modules
+        for i, child in enumerate(child_modules):
+            new_indent = indent + ("    " if is_last else "│   ")
+            is_last_child = i == len(child_modules) - 1
+            _print_recursive(child, new_indent, is_last_child)
+
+    print("=" * 100)
+    print(f"{'Module name':<50} {'Param count':<15}")
+    _print_recursive(network)
+    print("\n")
+    print(f"Total parameters: {_count_parameters(network):,}")
+    print("=" * 100)
