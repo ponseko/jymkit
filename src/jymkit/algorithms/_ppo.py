@@ -107,7 +107,7 @@ class PPO(RLAlgorithm):
         return state.critic(observation)
 
     def init_state(self, key: PRNGKeyArray, env: Environment) -> "PPO":
-        if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
+        if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
         if self.optimizer is None:
@@ -151,7 +151,7 @@ class PPO(RLAlgorithm):
 
             # Post-process the trajectory batch (GAE, returns, normalization)
             trajectory_batch, updated_state = self._postprocess_rollout(
-                trajectory_batch.view_transposed, self.state
+                trajectory_batch, self.state
             )
 
             # Update agent

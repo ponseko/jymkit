@@ -109,14 +109,7 @@ class MultiInputNetwork(eqx.Module):
             dummy_obs = jax.tree.map(
                 lambda o: jnp.zeros(o.shape, dtype=jnp.float32), obs_space
             )
-            f = lambda obs: jym.tree.concatenate(
-                jax.tree.map(
-                    lambda layer, x: layer(x),
-                    self.networks,
-                    obs,
-                    is_leaf=lambda x: isinstance(x, eqx.Module),
-                )
-            )
+            f = lambda obs: jnp.atleast_1d(self(obs))  # type: ignore
             self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
     def __call__(self, x):
@@ -293,9 +286,9 @@ class ContinuousOutputNetwork(eqx.Module):
         self.high = np.array(output_space.high, dtype=float)
         if distribution is None:
             self.distribution = None
-        elif distribution == "normal":
+        elif distribution.lower() == "normal":
             self.distribution = distrax.Normal
-        elif distribution == "tanhnormal":
+        elif distribution.lower() == "tanhnormal":
             self.distribution = TanhNormalFactory(low=self.low, high=self.high)
         else:
             raise ValueError(f"Unsupported continuous distribution: {distribution}")

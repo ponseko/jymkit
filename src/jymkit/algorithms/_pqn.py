@@ -106,8 +106,8 @@ class PQN(RLAlgorithm):
         q_values = state.critic(observation)
         return q_values
 
-    def init(self, key: PRNGKeyArray, env: Environment) -> "PQN":
-        if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
+    def init_state(self, key: PRNGKeyArray, env: Environment) -> "PQN":
+        if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
         if self.optimizer is None:
@@ -149,15 +149,13 @@ class PQN(RLAlgorithm):
             metric = trajectory_batch.info or {}
 
             # Post-process the trajectory batch (GAE, returns, normalization)
-            updated_state = self._postprocess_rollout(
-                trajectory_batch.view_transposed, self.state
-            )
+            updated_state = self._postprocess_rollout(trajectory_batch, self.state)
 
             # Update agent
             updated_state = self._update_agent_state(
                 rng,
                 updated_state,  # <-- Use updated_state w/ updated normalizer
-                trajectory_batch.view_transposed,
+                trajectory_batch,
             )
             self = replace(self, state=updated_state)
 
@@ -168,7 +166,7 @@ class PQN(RLAlgorithm):
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init(key, env)
+            self = self.init_state(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
@@ -323,7 +321,7 @@ class PQN(RLAlgorithm):
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
         assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init()."
+            "Agent state is not initialized. Create one via e.g. train() or init_state()."
         )
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times

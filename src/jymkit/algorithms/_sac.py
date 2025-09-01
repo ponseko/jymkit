@@ -69,6 +69,10 @@ class SAC(RLAlgorithm):
     normalize_obs: bool = eqx.field(static=True, default=False)
     normalize_rew: bool = eqx.field(static=True, default=False)
 
+    actor_kwargs: dict[str, Any] = eqx.field(
+        static=True, default_factory=lambda: {"continuous_output_dist": "tanhNormal"}
+    )
+
     @property
     def _learning_rate_schedule(self):
         if self.anneal_learning_rate:
@@ -114,7 +118,7 @@ class SAC(RLAlgorithm):
         return action_dist.sample(seed=key)
 
     def init_state(self, key: PRNGKeyArray, env: Environment) -> "SAC":
-        if getattr(env, "_multi_agent", False) and self.auto_upgrade_multi_agent:
+        if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
             self = self.__make_multi_agent__()
 
         if self.optimizer is None:
@@ -157,9 +161,7 @@ class SAC(RLAlgorithm):
             )
 
             # Post-process the trajectory batch: normalization update (possibly per-agent)
-            updated_state = self._postprocess_rollout(
-                trajectory_batch.view_transposed, self.state
-            )
+            updated_state = self._postprocess_rollout(trajectory_batch, self.state)
 
             # Add new data to buffer & Sample update batch from the buffer
             buffer = buffer.insert(trajectory_batch)
@@ -169,7 +171,7 @@ class SAC(RLAlgorithm):
             updated_state = self._update_agent_state(
                 rng,
                 updated_state,  # <-- use updated_state w/ updated norm
-                train_data.view_transposed,
+                train_data,
             )
 
             metric = trajectory_batch.info or {}
@@ -264,14 +266,14 @@ class SAC(RLAlgorithm):
         def _compute_soft_target(action_dist, action_log_probs, q_1, q_2):
             def discrete_soft_target(action_probs, q_1, q_2):
                 action_log_prob = jnp.log(action_probs + 1e-8)
-                target = (
-                    action_probs
-                    * (jnp.minimum(q_1, q_2) - current_state.alpha() * action_log_prob)
-                ).sum(axis=-1)
-                return target
+                min_q = jnp.minimum(q_1, q_2)
+                target = min_q - current_state.alpha() * action_log_prob
+                weighted_target = (action_probs * target).sum(axis=-1)
+                return weighted_target
 
             def continuous_soft_target(action_log_probs, q_1, q_2):
-                return jnp.minimum(q_1, q_2) - current_state.alpha() * action_log_probs
+                min_q = jnp.minimum(q_1, q_2)
+                return min_q - current_state.alpha() * action_log_probs
 
             if isinstance(action_dist, distrax.Categorical):
                 return discrete_soft_target(action_dist.probs, q_1, q_2)
@@ -289,6 +291,9 @@ class SAC(RLAlgorithm):
 
             q_out = jax.vmap(params)(batch.observation, batch.action)
             q_out = jax.tree.map(get_q_from_actions, q_out, batch.action)
+            # q_loss = jax.tree.map(
+            #     lambda q, t: optax.losses.huber_loss(q, t), q_out, q_target
+            # )
             q_loss = jax.tree.map(lambda q, t: jnp.mean((q - t) ** 2), q_out, q_target)
             return jym.tree.mean(q_loss)
 
@@ -298,20 +303,9 @@ class SAC(RLAlgorithm):
             action, log_prob = action_dist.sample_and_log_prob(seed=actor_loss_key)
             q_1 = jax.vmap(current_state.critic1)(batch.observation, action)
             q_2 = jax.vmap(current_state.critic2)(batch.observation, action)
-            try:
-                action_dist = action_dist.distribution
-            except AttributeError:
-                pass
-            target = jax.tree.map(
-                _compute_soft_target,
-                action_dist,
-                log_prob,
-                q_1,
-                q_2,
-                is_leaf=lambda x: isinstance(x, distrax.Distribution),
+            target = jym.tree.map_distribution(
+                _compute_soft_target, action_dist, log_prob, q_1, q_2
             )
-            # might still be lingering dimensions: flatten everything
-            target = jax.tree.map(lambda x: jnp.reshape(x, (-1,)), target)
             return -jym.tree.mean(target)
 
         @eqx.filter_grad
@@ -333,11 +327,7 @@ class SAC(RLAlgorithm):
                 return -jnp.mean(params() * (log_probs + target_entropy))
 
             action_dist = jax.vmap(current_state.actor)(batch.observation)
-            loss = jax.tree.map(
-                alpha_loss_per_action_dist,
-                action_dist,
-                is_leaf=lambda x: isinstance(x, distrax.Distribution),
-            )
+            loss = jym.tree.map_distribution(alpha_loss_per_action_dist, action_dist)
             loss = jym.tree.mean(loss)
             return loss
 
@@ -347,18 +337,8 @@ class SAC(RLAlgorithm):
         action, action_log_prob = action_dist.sample_and_log_prob(seed=target_key)
         q_1 = jax.vmap(current_state.critic1_target)(batch.next_observation, action)
         q_2 = jax.vmap(current_state.critic2_target)(batch.next_observation, action)
-        # Split continuous and discrete actions
-        try:
-            action_dist = action_dist.distribution
-        except AttributeError:
-            pass
-        target = jax.tree.map(
-            _compute_soft_target,
-            action_dist,
-            action_log_prob,
-            q_1,
-            q_2,
-            is_leaf=lambda x: isinstance(x, distrax.Distribution),
+        target = jym.tree.map_distribution(
+            _compute_soft_target, action_dist, action_log_prob, q_1, q_2
         )
         reward = current_state.normalizer.normalize_reward(batch.reward)
 
