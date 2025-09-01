@@ -69,6 +69,10 @@ class SAC(RLAlgorithm):
     normalize_obs: bool = eqx.field(static=True, default=False)
     normalize_rew: bool = eqx.field(static=True, default=False)
 
+    actor_kwargs: dict[str, Any] = eqx.field(
+        static=True, default_factory=lambda: {"continuous_output_dist": "tanhNormal"}
+    )
+
     @property
     def _learning_rate_schedule(self):
         if self.anneal_learning_rate:

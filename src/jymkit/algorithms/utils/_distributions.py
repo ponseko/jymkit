@@ -95,13 +95,13 @@ class DistraxContainer(eqx.Module):
 
 
 def TanhNormalFactory(low, high) -> Callable[..., distrax.Distribution]:
-    tanh = distrax.Tanh()
     scale = (high - low) / 2.0
     shift = (high + low) / 2.0
-    scale = distrax.ScalarAffine(shift=shift, scale=scale)
 
-    def TanhNormal(loc, scale):
-        dist = distrax.Normal(loc=loc, scale=scale)
-        return distrax.Transformed(dist, distrax.Chain([tanh, scale]))
+    def TanhNormal(mean, std):
+        dist = distrax.Normal(loc=mean, scale=std)
+        tanh = distrax.Tanh()
+        scaler = distrax.ScalarAffine(shift=shift, scale=scale)
+        return distrax.Transformed(dist, distrax.Chain([tanh, scaler]))
 
     return TanhNormal
