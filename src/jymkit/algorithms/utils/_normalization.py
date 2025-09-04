@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import optax
 from jaxtyping import Array, PyTree
 
+import jymkit as jym
+
 from ._transition import Transition
 
 """
@@ -30,6 +32,9 @@ class RunningStatisticsState(eqx.Module):
 
     def __init__(self, pytree_example, center_mean: bool = True):
         dtype: type = jnp.float64 if jax.config.jax_enable_x64 else jnp.float32  # type: ignore
+
+        if isinstance(pytree_example, jym.AgentObservation):
+            pytree_example = pytree_example.observation
 
         self.count = jnp.zeros((), dtype=dtype)
         self.mean = optax.tree_utils.tree_zeros_like(pytree_example, dtype=dtype)
@@ -85,6 +90,9 @@ class RunningStatisticsState(eqx.Module):
             std = jnp.clip(std, std_min_value, std_max_value)
             return std
 
+        if isinstance(batch, jym.AgentObservation):
+            batch = batch.observation
+
         assert jax.tree.structure(batch) == jax.tree.structure(self.mean)
         batch_leaves = jax.tree.leaves(batch)
 
@@ -123,6 +131,8 @@ class RunningStatisticsState(eqx.Module):
         )
 
     def normalize(self, batch: Array) -> Array:
+        if isinstance(batch, jym.AgentObservation):
+            batch = batch.observation
         if self.center_mean:
             batch = optax.tree.sub(batch, self.mean)
         return jax.tree.map(
