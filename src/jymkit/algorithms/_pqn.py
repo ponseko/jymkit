@@ -48,7 +48,7 @@ class PQN(RLAlgorithm):
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
-    normalize_obs: bool = eqx.field(static=True, default=False)
+    normalize_observations: bool = eqx.field(static=True, default=False)
     normalize_rewards: bool = eqx.field(static=True, default=False)
 
     @property
@@ -305,7 +305,7 @@ class PQN(RLAlgorithm):
         )
         normalization_state = Normalizer(
             dummy_obs,
-            normalize_obs=self.normalize_obs,
+            normalize_obs=self.normalize_observations,
             normalize_rew=self.normalize_rewards,
             gamma=self.gamma,
             rew_shape=(self.num_steps, self.num_envs),

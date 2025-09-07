@@ -51,8 +51,8 @@ class DQN(RLAlgorithm):
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=4)
 
-    normalize_obs: bool = eqx.field(static=True, default=False)
-    normalize_rew: bool = eqx.field(static=True, default=False)
+    normalize_observations: bool = eqx.field(static=True, default=False)
+    normalize_rewards: bool = eqx.field(static=True, default=False)
 
     @property
     def _learning_rate_schedule(self):
@@ -318,8 +318,8 @@ class DQN(RLAlgorithm):
         )
         normalization_state = Normalizer(
             dummy_obs,
-            normalize_obs=self.normalize_obs,
-            normalize_rew=self.normalize_rew,
+            normalize_obs=self.normalize_observations,
+            normalize_rew=self.normalize_rewards,
             gamma=self.gamma,
             rew_shape=(self.num_steps, self.num_envs),
         )
