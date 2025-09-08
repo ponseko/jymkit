@@ -222,11 +222,11 @@ class LogWrapper(Wrapper):
         state = LogEnvState(
             env_state=env_state,
             episode_returns=jax.tree.map(
-                lambda n_r: n_r * (1 - done), new_episode_return
+                lambda n_r: (n_r * (1 - done)).squeeze(), new_episode_return
             ),
             episode_lengths=new_episode_length * (1 - done),
             returned_episode_returns=jax.tree.map(
-                lambda r, n_r: r * (1 - done) + n_r * done,
+                lambda r, n_r: (r * (1 - done) + n_r * done).squeeze(),
                 state.returned_episode_returns,
                 new_episode_return,
             ),

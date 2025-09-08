@@ -28,7 +28,11 @@ from ._wrappers import (
 from ._wrappers_ext import (
     BraxWrapper as BraxWrapper,
     GymnaxWrapper as GymnaxWrapper,
+    JaxMARLWrapper as JaxMARLWrapper,
     JumanjiWrapper as JumanjiWrapper,
+    NavixWrapper as NavixWrapper,
+    PgxWrapper as PgxWrapper,
+    xMinigridWrapper as xMinigridWrapper,
 )
 
 registry = _registry.registry
