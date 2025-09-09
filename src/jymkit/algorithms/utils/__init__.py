@@ -4,6 +4,7 @@ from ._distributions import (
     TanhNormalFactory as TanhNormalFactory,
 )
 from ._logging import (
+    pretty_print_network as pretty_print_network,
     scan_callback as scan_callback,
 )
 from ._multi_agent import (
