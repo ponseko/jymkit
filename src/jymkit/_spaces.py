@@ -142,5 +142,9 @@ class MultiDiscrete(Space):
     def sample(self, rng: PRNGKeyArray) -> Int[Array, ""]:
         """Sample random action uniformly from set of discrete choices."""
         return jax.random.randint(
-            rng, shape=self.shape, minval=0, maxval=self.nvec, dtype=self.dtype
+            rng,
+            shape=self.shape,
+            minval=0,
+            maxval=np.array(self.nvec),
+            dtype=self.dtype,
         )
