@@ -5,12 +5,20 @@ import types
 import warnings
 from abc import abstractmethod
 from dataclasses import replace
-from typing import Any, Callable, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional, Tuple
 
 import equinox as eqx
+import jax
+import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
-from jymkit import Environment, FlattenActionSpaceWrapper, VecEnvWrapper, is_wrapped
+import jymkit as jym
+from jymkit import (
+    Environment,
+    VecEnvWrapper,
+    is_wrapped,
+    remove_wrapper,
+)
 from jymkit.algorithms.utils import transform_multi_agent
 
 logger = logging.getLogger(__name__)
@@ -50,15 +58,62 @@ class RLAlgorithm(eqx.Module):
         agent = replace(self, state=state)
         return agent
 
+    @staticmethod
+    @abstractmethod
+    def get_action(
+        key: PRNGKeyArray, state: Any, observation: PyTree, deterministic: bool
+    ) -> Any:
+        pass
+
     @abstractmethod
     def train(self, key: PRNGKeyArray, env: Environment) -> "RLAlgorithm":
         pass
 
-    @abstractmethod
     def evaluate(
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
     ) -> Float[Array, " num_eval_episodes"]:
-        pass
+        assert self.is_initialized, (
+            "Agent state is not initialized. Create one via e.g. train() or init_state()."
+        )
+        if is_wrapped(env, VecEnvWrapper):
+            # Cannot vectorize because terminations may occur at different times
+            # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
+            env = remove_wrapper(env, VecEnvWrapper)
+
+        def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
+            def step_env(carry):
+                rng, obs, env_state, done, episode_reward = carry
+                rng, action_key, step_key = jax.random.split(rng, 3)
+
+                action = self.get_action(
+                    action_key, self.state, obs, deterministic=True
+                )
+                (obs, reward, terminated, truncated, info), env_state = env.step(
+                    step_key, env_state, action
+                )
+                done = jax.tree.map(jnp.logical_or, terminated, truncated)
+                done = jnp.all(jnp.array(jax.tree.leaves(done)))
+                episode_reward += jym.tree.mean(reward)
+                return (rng, obs, env_state, done, episode_reward)
+
+            key, reset_key = jax.random.split(key)
+            obs, env_state = env.reset(reset_key)
+            done = False
+            episode_reward = 0.0
+
+            key, obs, env_state, done, episode_reward = jax.lax.while_loop(
+                lambda carry: jnp.logical_not(carry[3]),
+                step_env,
+                (key, obs, env_state, done, episode_reward),
+            )
+
+            return key, episode_reward
+
+        _, episode_rewards = jax.lax.scan(
+            eval_episode, key, jnp.arange(num_eval_episodes)
+        )
+
+        return episode_rewards
 
     def __make_multi_agent__(
         self, *, upgrade_func_names: List[str] = DEFAULT_PER_AGENT_FUNCTIONS
@@ -106,7 +161,7 @@ class RLAlgorithm(eqx.Module):
         self,
         env: Environment,
         vectorized: bool = False,
-        flatten_action_space: bool = False,
+        # flatten_action_space: bool = False,
     ) -> Environment:
         """
         Some validation checks on the current environment and its compatibility with the current
@@ -144,9 +199,5 @@ class RLAlgorithm(eqx.Module):
         if vectorized and not is_wrapped(env, VecEnvWrapper):
             logger.info("Wrapping environment in VecEnvWrapper")
             env = VecEnvWrapper(env)
-
-        if flatten_action_space and not is_wrapped(env, FlattenActionSpaceWrapper):
-            logger.info("Wrapping environment in FlattenActionSpaceWrapper")
-            env = FlattenActionSpaceWrapper(env)
 
         return env
