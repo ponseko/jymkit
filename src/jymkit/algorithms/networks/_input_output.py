@@ -305,6 +305,6 @@ class ContinuousOutputNetwork(eqx.Module):
         mean = logits[..., 0]
         log_std = logits[..., 1]
         log_std = jnp.clip(log_std, -20, 2)
-        std = jnp.exp(log_std)
+        std = jax.nn.softplus(log_std)
 
         return self.distribution(mean, std)

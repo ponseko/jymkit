@@ -31,8 +31,8 @@ class PPO(RLAlgorithm):
     state: PPOState = eqx.field(default=None)
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
-    learning_rate: float = 2.5e-4
-    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
+    learning_rate: float = 2.5e-3
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=True)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     max_grad_norm: float = 0.5
@@ -49,7 +49,7 @@ class PPO(RLAlgorithm):
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
     normalize_observations: bool = eqx.field(static=True, default=False)
-    normalize_rewards: bool = eqx.field(static=True, default=False)
+    normalize_rewards: bool = eqx.field(static=True, default=True)
 
     @property
     def _learning_rate_schedule(self):

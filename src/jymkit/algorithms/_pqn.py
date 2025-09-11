@@ -36,14 +36,14 @@ class PQN(RLAlgorithm):
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
     learning_rate: float = 2.5e-3
-    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=True)
     gamma: float = 0.99
     max_grad_norm: float = 0.5
-    epsilon: float = 0.2
+    epsilon: float = 0.1
     anneal_epsilon: bool | float = eqx.field(static=True, default=True)
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=16)
+    num_envs: int = eqx.field(static=True, default=24)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
