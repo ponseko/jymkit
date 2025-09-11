@@ -1,8 +1,10 @@
+from functools import partial
 from typing import Callable
 
 import distrax
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from jaxtyping import PyTree
 
 
@@ -94,14 +96,23 @@ class DistraxContainer(eqx.Module):
         )
 
 
-def TanhNormalFactory(low, high) -> Callable[..., distrax.Distribution]:
-    scale = (high - low) / 2.0
-    shift = (high + low) / 2.0
-
-    def TanhNormal(mean, std):
+class TanhNormal(distrax.Transformed):
+    def __init__(self, mean, std, shift=0.0, scale=1.0):
         dist = distrax.Normal(loc=mean, scale=std)
         tanh = distrax.Tanh()
         scaler = distrax.ScalarAffine(shift=shift, scale=scale)
-        return distrax.Transformed(dist, distrax.Chain([tanh, scaler]))
+        super().__init__(dist, distrax.Chain([tanh, scaler]))
+        self._mean = mean
+        self._std = std
+        self._shift = shift
+        self._scale = scale
 
-    return TanhNormal
+    def mode(self):
+        return self._shift + self._scale * jnp.tanh(self._mean)
+
+
+def TanhNormalFactory(low, high) -> Callable[..., TanhNormal]:
+    scale = (high - low) / 2.0
+    shift = (high + low) / 2.0
+
+    return partial(TanhNormal, shift=shift, scale=scale)

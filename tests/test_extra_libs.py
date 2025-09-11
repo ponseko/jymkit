@@ -28,3 +28,17 @@ def test_rice_jax_env():
     env = Rice(region_yamls)
     agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
     agent = agent.train(jax.random.PRNGKey(1), env)
+
+
+def test_chargax_env():
+    try:
+        from chargax import Chargax, get_electricity_prices
+    except ImportError:
+        pytest.skip("chargax is not installed.")
+
+    env = Chargax(
+        elec_grid_buy_price=get_electricity_prices("2023_NL"),
+        elec_grid_sell_price=get_electricity_prices("2023_NL") - 0.02,
+    )
+    agent = jymkit.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
+    agent = agent.train(jax.random.PRNGKey(1), env)

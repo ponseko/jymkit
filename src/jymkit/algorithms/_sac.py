@@ -1,16 +1,16 @@
 import logging
 from dataclasses import replace
-from typing import Any, Tuple
+from typing import Any
 
 import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jymkit as jym
-from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
+from jymkit import Environment
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 from jymkit.algorithms import RLAlgorithm
 from jymkit.algorithms.utils import (
@@ -47,7 +47,7 @@ class SACState(eqx.Module):
 
 
 class SAC(RLAlgorithm):
-    state: PyTree[SACState] = None
+    state: SACState = eqx.field(default=None)
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
     learning_rate: float = 3e-3
@@ -112,9 +112,16 @@ class SAC(RLAlgorithm):
         return self.num_iterations  # * num_epochs
 
     @staticmethod
-    def get_action(key: PRNGKeyArray, state: SACState, observation) -> Array:
+    def get_action(
+        key: PRNGKeyArray,
+        state: SACState,
+        observation: PyTree,
+        deterministic: bool = False,
+    ) -> Array:
         observation = state.normalizer.normalize_obs(observation)
         action_dist = state.actor(observation)
+        if deterministic:
+            return action_dist.mode()
         return action_dist.sample(seed=key)
 
     def init_state(self, key: PRNGKeyArray, env: Environment) -> "SAC":
@@ -449,47 +456,3 @@ class SAC(RLAlgorithm):
             optimizer_state=optimizer_state,
             normalizer=normalization_state,
         )
-
-    def evaluate(
-        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
-    ) -> Float[Array, " num_eval_episodes"]:
-        assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init_state()."
-        )
-        if is_wrapped(env, VecEnvWrapper):
-            # Cannot vectorize because terminations may occur at different times
-            # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
-            env = remove_wrapper(env, VecEnvWrapper)
-
-        def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
-            def step_env(carry):
-                rng, obs, env_state, done, episode_reward = carry
-                rng, action_key, step_key = jax.random.split(rng, 3)
-
-                action = self.get_action(action_key, self.state, obs)
-                (obs, reward, terminated, truncated, info), env_state = env.step(
-                    step_key, env_state, action
-                )
-                done = jax.tree.map(jnp.logical_or, terminated, truncated)
-                done = jnp.all(jnp.array(jax.tree.leaves(done)))
-                episode_reward += jym.tree.mean(reward)
-                return (rng, obs, env_state, done, episode_reward)
-
-            key, reset_key = jax.random.split(key)
-            obs, env_state = env.reset(reset_key)
-            done = False
-            episode_reward = 0.0
-
-            key, obs, env_state, done, episode_reward = jax.lax.while_loop(
-                lambda carry: jnp.logical_not(carry[3]),
-                step_env,
-                (key, obs, env_state, done, episode_reward),
-            )
-
-            return key, episode_reward
-
-        _, episode_rewards = jax.lax.scan(
-            eval_episode, key, jnp.arange(num_eval_episodes)
-        )
-
-        return episode_rewards

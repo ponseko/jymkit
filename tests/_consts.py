@@ -30,8 +30,8 @@ SAC_CONTINUOUS_CONFIG = {
     "target_entropy_scale": 1.5,
     "anneal_entropy_scale": 0.1,
     "replay_buffer_size": 500_000,
-    "normalize_rew": True,
-    "normalize_obs": False,
+    "normalize_rewards": True,
+    "normalize_observations": False,
     "actor_kwargs": {
         "hidden_sizes": (128, 128),
     },
