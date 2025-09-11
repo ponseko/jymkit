@@ -18,106 +18,49 @@ from ._architectures import CNN, Identity
 logger = logging.getLogger(__name__)
 
 
-class MultiInputNetwork(eqx.Module):
+class AgentObservationNet(eqx.Module):
     """Input network for **single and multi** observation space environments.
 
     Builds a separate input network for each observation space. Automatically
     builds a 1d architecture for 1d observation spaces (default=None/Identity) and
     a 2d architecture for 2d observation spaces (default=NatureCNN-like).
 
-    During a forward call this network simply returns a jax.tree.map over all input spaces.
-    optionally concatenates the outputs of all input networks as a single 1d vector.
+    During a forward call this network simply returns a jax.tree.map over all input spaces
+    and concatenates the outputs of all input networks as a single 1d vector.
     """
 
     networks: PyTree[eqx.Module]
+
     num_observation_spaces: int = eqx.field(static=True)
     input_structure: PyTreeDef = eqx.field(static=True)
-    output_structure: PyTreeDef = eqx.field(static=True)
-    out_features: int | None = eqx.field(static=True, default=None)
-    """ Only set if `concatenate_outputs_to_1d=True`. """
-    concatenate_outputs_to_1d: bool = eqx.field(static=True, default=True)
+    out_features: int = eqx.field(static=True)
 
-    def __init__(
-        self,
-        key: PRNGKeyArray,
-        obs_space: PyTree[jym.Space],
-        *,
-        concatenate_outputs_to_1d: bool = True,
-        architecture_1d: Literal["identity"] = "identity",
-        architecture_2d: Literal["cnn"] = "cnn",
-        cnn_hidden_sizes: Tuple[int, ...] = (32, 64, 64),
-        cnn_kernel_sizes: Tuple[int, ...] = (3, 3, 2),
-        cnn_strides: Tuple[int, ...] = (1, 1, 1),
-        cnn_padding: Tuple[int, ...] = (0, 0, 0),
-        **kwargs,
-    ):
-        def _create_input_network(key: PRNGKeyArray, obs_space: jym.Space):
-            if len(obs_space.shape) > 3:
-                raise NotImplementedError(
-                    f"Observation space shape: {obs_space.shape} not supported. "
-                    f"Only 1D and 2D (excluding channels) observations are supported."
-                )
-
-            if obs_space.shape == () or len(obs_space.shape) == 1:  # 0d or 1d input
-                if architecture_1d.lower() in ["identity"]:
-                    return Identity()
-
-                # elif architecture == "broNet":
-                #     depth = 3
-                #     width_size = 128
-                #     return BroNet(key, obs_space.shape[0], depth, width_size)
-
-                else:
-                    raise ValueError(f"Unsupported 1d architecture: {architecture_1d}")
-
+    def __init__(self, key: PRNGKeyArray, obs_space: PyTree[jym.Space], **kwargs):
+        def create_obs_processor(key: PRNGKeyArray, obs_space: jym.Space, **kwargs):
+            if obs_space.shape == () or len(obs_space.shape) == 1:
+                return self._create_1d_obs_processor(key, obs_space, **kwargs)
             elif len(obs_space.shape) == 3 or len(obs_space.shape) == 2:
-                if architecture_2d.lower() in ["cnn", "naturecnn"]:
-                    # in_channels = obs_space.shape[0]  # Assume channel-first
-                    return CNN(
-                        key,
-                        obs_space,
-                        cnn_hidden_sizes,
-                        cnn_kernel_sizes,
-                        cnn_strides,
-                        cnn_padding,
-                    )
-                # elif architecture == "hadamax":
-                #     pass
-
-                else:
-                    raise ValueError(f"Unsupported 2d architecture: {architecture_2d}")
-            else:
-                raise NotImplementedError(
-                    f"Unsupported observation space shape: {obs_space.shape}"
-                )
+                return self._create_2d_obs_processor(key, obs_space, **kwargs)
+            raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
         self.input_structure = jax.tree.structure(obs_space)
-        self.concatenate_outputs_to_1d = concatenate_outputs_to_1d
-        if concatenate_outputs_to_1d:
-            self.output_structure = jax.tree.structure(0)
-        else:
-            self.output_structure = self.input_structure
 
         keys = optax.tree.split_key_like(key, obs_space)
         self.networks = jax.tree.map(
-            lambda o, k: _create_input_network(k, o), obs_space, keys
+            lambda o, k: create_obs_processor(k, o, **kwargs),
+            obs_space,
+            keys,
         )
 
-        # Infer the output feature size if concatenating to 1d
-        if concatenate_outputs_to_1d:
-            dummy_obs = jax.tree.map(
-                lambda o: jnp.zeros(o.shape, dtype=jnp.float32), obs_space
-            )
-            f = lambda obs: jnp.atleast_1d(self(obs))  # type: ignore
-            self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
+        # Infer the output feature size
+        dummy_obs = jax.tree.map(lambda o: jnp.zeros(o.shape), obs_space)
+        f = lambda obs: jnp.atleast_1d(self(obs))
+        self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
     def __call__(self, x):
         # Convert non-float inputs to float32
         x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
-
-        if callable(self.networks) and self.num_observation_spaces == 1:
-            return self.networks(x)  # More efficient compared to map (?)
 
         outputs = jax.tree.map(
             lambda layer, x: layer(x),
@@ -125,12 +68,49 @@ class MultiInputNetwork(eqx.Module):
             x,
             is_leaf=lambda x: isinstance(x, eqx.Module),
         )
-        if self.concatenate_outputs_to_1d:
-            return jymkit.tree.concatenate(outputs)
-        return outputs
+        return jymkit.tree.concatenate(outputs)
+
+    def _create_1d_obs_processor(
+        self,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        architecture_1d: Literal["identity"] = "identity",
+        **kwargs,
+    ):
+        if architecture_1d.lower() in ["identity"]:
+            return Identity()
+
+        # elif architecture == "broNet":
+
+        raise ValueError(f"Unsupported 1d architecture: {architecture_1d}")
+
+    def _create_2d_obs_processor(
+        self,
+        key: PRNGKeyArray,
+        obs_space: jym.Space,
+        architecture_2d: Literal["cnn"] = "cnn",
+        cnn_hidden_sizes: Tuple[int, ...] = (32, 64, 64),
+        cnn_kernel_sizes: Tuple[int, ...] = (3, 3, 2),
+        cnn_strides: Tuple[int, ...] = (1, 1, 1),
+        cnn_padding: Tuple[int, ...] = (0, 0, 0),
+        **kwargs,
+    ):
+        if architecture_2d.lower() in ["cnn", "naturecnn"]:
+            return CNN(
+                key,
+                obs_space,
+                cnn_hidden_sizes,
+                cnn_kernel_sizes,
+                cnn_strides,
+                cnn_padding,
+            )
+        # elif architecture == "hadamax":
+        #     pass
+
+        raise ValueError(f"Unsupported 2d architecture: {architecture_2d}")
 
 
-class MultiOutputNetwork(eqx.Module):
+class AgentOutputNet(eqx.Module):
     """Output network for **single and multi** action space environments.
 
     Will build an individual output head for each action space and inner individual
@@ -152,7 +132,7 @@ class MultiOutputNetwork(eqx.Module):
         continuous_output_dist: Literal["normal", "tanhnormal"] | None = "normal",
         **kwargs,
     ):
-        def _create_output_network(key: PRNGKeyArray, output_space: jym.Space):
+        def create_output_network(key: PRNGKeyArray, output_space: jym.Space):
             is_discrete = hasattr(output_space, "n") or hasattr(output_space, "nvec")
             if is_discrete:
                 return DiscreteOutputNetwork(
@@ -174,19 +154,17 @@ class MultiOutputNetwork(eqx.Module):
         self.num_action_spaces = len(jax.tree.leaves(output_space))
         keys = optax.tree.split_key_like(key, output_space)
         self.networks = jax.tree.map(
-            lambda a, k: _create_output_network(k, a), output_space, keys
+            lambda a, k: create_output_network(k, a), output_space, keys
         )
 
     def __call__(self, x, action_mask):
-        if self.num_action_spaces == 1:
-            return self.networks(x, action_mask)  # More efficient compared to map (?)
-
         if action_mask is None:  # Dummy action mask if not provided
             action_mask = jax.tree.map(
                 lambda _: None,
                 self.networks,
                 is_leaf=lambda x: isinstance(x, eqx.Module),
             )
+
         return jax.tree.map(
             lambda layer, mask: layer(x, mask),
             self.networks,
@@ -267,8 +245,6 @@ class DiscreteOutputNetwork(eqx.Module):
 class ContinuousOutputNetwork(eqx.Module):
     layers: List[eqx.nn.Linear]
     distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
-    low: np.ndarray
-    high: np.ndarray
 
     def __init__(
         self,
@@ -282,14 +258,14 @@ class ContinuousOutputNetwork(eqx.Module):
             "must have 'low' and 'high' and `shape` attributes."
         )
 
-        self.low = np.array(output_space.low, dtype=float)
-        self.high = np.array(output_space.high, dtype=float)
+        low = np.array(output_space.low, dtype=float)
+        high = np.array(output_space.high, dtype=float)
         if distribution is None:
             self.distribution = None
         elif distribution.lower() == "normal":
             self.distribution = distrax.Normal
         elif distribution.lower() == "tanhnormal":
-            self.distribution = TanhNormalFactory(low=self.low, high=self.high)
+            self.distribution = TanhNormalFactory(low=low, high=high)
         else:
             raise ValueError(f"Unsupported continuous distribution: {distribution}")
 
