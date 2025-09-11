@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://ponseko.github.io/jymkit/</loc>
+         <lastmod>2025-09-11</lastmod>
+    </url>
+    <url>
+         <loc>https://ponseko.github.io/jymkit/api/Environment/</loc>
+         <lastmod>2025-09-11</lastmod>
+    </url>
+    <url>
+         <loc>https://ponseko.github.io/jymkit/api/Spaces/</loc>
+         <lastmod>2025-09-11</lastmod>
+    </url>
+    <url>
+         <loc>https://ponseko.github.io/jymkit/api/Wrappers/</loc>
+         <lastmod>2025-09-11</lastmod>
+    </url>
+</urlset>
