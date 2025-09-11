@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 from jaxtyping import Array, PRNGKeyArray
 
+import jymkit as jym
 from jymkit import Discrete, Environment, MultiDiscrete, Space, TimeStep
-from jymkit.algorithms import PPO
+from jymkit.algorithms import DQN, PPO, PQN
 
 
 class SimpleEnvState(eqx.Module):
@@ -310,6 +311,9 @@ def test_custom_envs_w_algs(alg_cls, env_cls):
         agent = alg_cls(**TEST_CONSTS.PPO_MIN_CONFIG)
     else:
         agent = alg_cls(total_timesteps=1000, log_function=None, num_envs=2)
+
+    if alg_cls in [PQN, DQN]:
+        env = jym.FlattenActionSpaceWrapper(env)
 
     try:
         agent = agent.train(seed, env)

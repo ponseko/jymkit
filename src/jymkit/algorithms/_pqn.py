@@ -1,17 +1,17 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any, Callable, Tuple
+from typing import Any, Callable
 
 import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-from jaxtyping import Array, Float, PRNGKeyArray, PyTree
+from jaxtyping import PRNGKeyArray, PyTree
 
 import jymkit as jym
-from jymkit import Environment, VecEnvWrapper, is_wrapped, remove_wrapper
+from jymkit import Environment
 from jymkit._environment import ORIGINAL_OBSERVATION_KEY
 from jymkit.algorithms import RLAlgorithm
 from jymkit.algorithms.utils import (
@@ -36,14 +36,14 @@ class PQN(RLAlgorithm):
     optimizer: optax.GradientTransformation = eqx.field(static=True, default=None)
 
     learning_rate: float = 2.5e-3
-    anneal_learning_rate: bool | float = eqx.field(static=True, default=False)
+    anneal_learning_rate: bool | float = eqx.field(static=True, default=True)
     gamma: float = 0.99
     max_grad_norm: float = 0.5
-    epsilon: float = 0.2
+    epsilon: float = 0.1
     anneal_epsilon: bool | float = eqx.field(static=True, default=True)
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=16)
+    num_envs: int = eqx.field(static=True, default=24)
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
@@ -93,18 +93,20 @@ class PQN(RLAlgorithm):
 
     @staticmethod
     def get_action(
-        key: PRNGKeyArray, state: PQNState, observation: PyTree, epsilon: float
+        key: PRNGKeyArray,
+        state: PQNState,
+        observation: PyTree,
+        deterministic: bool = False,
+        epsilon: float = 0.0,
     ):
+        if deterministic:
+            assert epsilon == 0.0, (
+                "Epsilon set to non-zero value for deterministic action"
+            )
         observation = state.normalizer.normalize_obs(observation)
         q_values = state.critic(observation)
         action_dist = distrax.EpsilonGreedy(q_values, epsilon=epsilon)
         return action_dist.sample(seed=key)
-
-    @staticmethod
-    def get_value(state: PQNState, observation: PyTree) -> Float[Array, ""]:
-        observation = state.normalizer.normalize_obs(observation)
-        q_values = state.critic(observation)
-        return q_values
 
     def init_state(self, key: PRNGKeyArray, env: Environment) -> "PQN":
         if getattr(env, "multi_agent", False) and self.auto_upgrade_multi_agent:
@@ -162,7 +164,7 @@ class PQN(RLAlgorithm):
             runner_state = (self, env_state, last_obs, rng)
             return runner_state, metric
 
-        env = self.__check_env__(env, vectorized=True, flatten_action_space=True)
+        env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
@@ -316,49 +318,3 @@ class PQN(RLAlgorithm):
             optimizer_state=optimizer_state,
             normalizer=normalization_state,
         )
-
-    def evaluate(
-        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
-    ) -> Float[Array, " num_eval_episodes"]:
-        assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init_state()."
-        )
-        if is_wrapped(env, VecEnvWrapper):
-            # Cannot vectorize because terminations may occur at different times
-            # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
-            env = remove_wrapper(env, VecEnvWrapper)
-
-        env = self.__check_env__(env, vectorized=False, flatten_action_space=True)
-
-        def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
-            def step_env(carry):
-                rng, obs, env_state, done, episode_reward = carry
-                rng, action_key, step_key = jax.random.split(rng, 3)
-
-                action = self.get_action(action_key, self.state, obs, epsilon=0.0)
-                (obs, reward, terminated, truncated, info), env_state = env.step(
-                    step_key, env_state, action
-                )
-                done = jax.tree.map(jnp.logical_or, terminated, truncated)
-                done = jnp.all(jnp.array(jax.tree.leaves(done)))
-                episode_reward += jnp.mean(jnp.array(jax.tree.leaves(reward)))
-                return (rng, obs, env_state, done, episode_reward)
-
-            key, reset_key = jax.random.split(key)
-            obs, env_state = env.reset(reset_key)
-            done = False
-            episode_reward = 0.0
-
-            key, obs, env_state, done, episode_reward = jax.lax.while_loop(
-                lambda carry: jnp.logical_not(carry[3]),
-                step_env,
-                (key, obs, env_state, done, episode_reward),
-            )
-
-            return key, episode_reward
-
-        _, episode_rewards = jax.lax.scan(
-            eval_episode, key, jnp.arange(num_eval_episodes)
-        )
-
-        return episode_rewards

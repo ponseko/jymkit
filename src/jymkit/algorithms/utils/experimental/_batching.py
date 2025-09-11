@@ -58,8 +58,8 @@ def create_batched_grid_search_search(
 
     >>> # Process all combinations
     >>> for i, arg_combo in enumerate(args):
-    ...     (result, args_used) = vmapped_fn(arg_combo)
-    ...     print(f"Job {i}: {result}")
+    ...     results: list = vmapped_fn(arg_combo)
+    ...     print(f"Job {i}: Arguments used: result[i][1], fn output: {result[i][0]}")
 
     >>> # Or in a slurm job array
     ... #SBATCH --array=0-5
@@ -156,7 +156,7 @@ def create_batched_grid_search_search(
         else:
             # No vmap parameters, just call the function directly
             res = fn(**kw_args)
-            return (kw_args, res)
+            return [(res, kw_args)]
 
     # Create a list of all combinations of arguments that can subsequently be indexed
     pos_and_kw_fn_args = list(itertools.product(vmap_arg_chunks, static_combinations))
