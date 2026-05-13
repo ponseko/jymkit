@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PyTree, PyTreeDef
+from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
 
 """
 Convenience pytree functions used in the various RL algorithms which
@@ -19,7 +19,7 @@ def _tree_size(tree):
     return sum([jnp.size(leaf) for leaf in jax.tree.leaves(tree)])
 
 
-def _tree_sum(tree: Any, axis: Optional[int | tuple[int, ...]] = None) -> Array:
+def _tree_sum(tree: Any, axis: Optional[int | tuple[int, ...]] = None):
     """
     Compute the sum of all the elements in a pytree
     If axis is provided, sums each leaf over the specified axis and
@@ -289,3 +289,29 @@ def tree_unstack(tree, *, axis=0, structure: Optional[PyTreeDef] = None):  # typ
     if structure is not None:
         return structure.unflatten(list_of_leaves)
     return list_of_leaves
+
+
+def tree_split_key_like_structure(key: PRNGKeyArray, structure: PyTreeDef):  # pyright: ignore[reportInvalidTypeForm]
+    """Split a JAX PRNGKey into a pytree of keys with the same structure as `structure`.
+
+    Similar to `optax.tree_utils.tree_split_key_like`, but operates on PyTreeDefs.
+
+    *Arguments*:
+        `key`: A PRNGKeyArray to be split.
+        `agent_structure`: A pytree structure of agents.
+    """
+    num_keys = structure.num_leaves
+    keys = list(jax.random.split(key, num_keys))
+    return jax.tree.unflatten(structure, keys)
+
+
+batch_sum = tree_batch_sum
+get_first = tree_get_first
+gather_actions = tree_gather_actions
+map_one_level = tree_map_one_level
+mean = tree_mean
+stack = tree_stack
+unstack = tree_unstack
+concatenate = tree_concatenate
+map_distribution = tree_map_distribution
+split_key_like_structure = tree_split_key_like_structure

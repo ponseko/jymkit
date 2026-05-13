@@ -1,11 +1,8 @@
-import copy
-import inspect
 import logging
-import types
 import warnings
 from abc import abstractmethod
-from dataclasses import replace
-from typing import Any, Callable, List, Literal, Optional, Tuple
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Literal, Optional, Tuple
 
 import equinox as eqx
 import jax
@@ -13,23 +10,9 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium import (
-    Environment,
-    VecEnvWrapper,
-    is_wrapped,
-    remove_wrapper,
-)
-from jaxnasium.algorithms.utils import transform_multi_agent
+from jaxnasium import Environment, Space, VecEnvWrapper, is_wrapped, remove_wrapper
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PER_AGENT_FUNCTIONS = [
-    "get_action",
-    "get_value",
-    "_update_agent_state",
-    "_make_agent_state",
-    "_postprocess_rollout",
-]
 
 
 class RLAlgorithm(eqx.Module):
@@ -60,7 +43,7 @@ class RLAlgorithm(eqx.Module):
 
     """
 
-    state: eqx.AbstractVar[PyTree[eqx.Module]]
+    agent: eqx.AbstractVar[PyTree[eqx.Module]]
     "Trainable state of the algorithm, usually containing the networks, optimizer state and optional normalization running statistics."
 
     multi_agent: bool = eqx.field(static=True, default=False)
@@ -74,24 +57,22 @@ class RLAlgorithm(eqx.Module):
 
     @property
     def is_initialized(self) -> bool:
-        return self.state is not None
+        return self.agent is not None
 
     def save_state(self, file_path: str):
         with open(file_path, "wb") as f:
-            eqx.tree_serialise_leaves(f, self.state)
+            eqx.tree_serialise_leaves(f, self.agent)
 
     def load_state(self, file_path: str) -> "RLAlgorithm":
         with open(file_path, "rb") as f:
-            state = eqx.tree_deserialise_leaves(f, self.state)
-        agent = replace(self, state=state)
-        return agent
+            agent = eqx.tree_deserialise_leaves(f, self.agent)
+        algorithm = replace(self, agent=agent)
+        return algorithm
 
-    @staticmethod
-    @abstractmethod
     def get_action(
-        key: PRNGKeyArray, state: Any, observation: PyTree, deterministic: bool
-    ) -> Any:
-        pass
+        self, key: PRNGKeyArray, observation: PyTree, deterministic: bool, **kwargs
+    ):
+        return self.agent.get_action(key, observation, deterministic, **kwargs)
 
     @abstractmethod
     def train(self, key: PRNGKeyArray, env: Environment) -> "RLAlgorithm":
@@ -113,9 +94,7 @@ class RLAlgorithm(eqx.Module):
                 episode_reward, rng, obs, env_state, done = carry
                 rng, action_key, step_key = jax.random.split(rng, 3)
 
-                action = self.get_action(
-                    action_key, self.state, obs, deterministic=True
-                )
+                action = self.get_action(action_key, obs, deterministic=True)
                 (obs, reward, terminated, truncated, info), env_state = env.step(
                     step_key, env_state, action
                 )
@@ -142,48 +121,6 @@ class RLAlgorithm(eqx.Module):
         )
 
         return episode_rewards
-
-    def __make_multi_agent__(
-        self, *, upgrade_func_names: List[str] = DEFAULT_PER_AGENT_FUNCTIONS
-    ):
-        cls = self.__class__
-        new_attrs: dict[str, object] = {}
-
-        for name in upgrade_func_names:
-            try:
-                attr_obj = inspect.getattr_static(cls, name)
-            except AttributeError:
-                if (
-                    name in DEFAULT_PER_AGENT_FUNCTIONS
-                    and upgrade_func_names == DEFAULT_PER_AGENT_FUNCTIONS
-                ):  # If algorithm is just using defaults, then we skip missing methods
-                    # If upgrade_func_names is set, then we expect methods to be present.
-                    continue
-                raise AttributeError(f"Method {name!r} not found in {cls.__name__}. ")
-
-            if isinstance(attr_obj, staticmethod):
-                orig_fn: Callable = attr_obj.__func__
-                new_attrs[name] = staticmethod(transform_multi_agent(orig_fn))
-
-            elif callable(attr_obj) or callable(
-                attr_obj.method
-            ):  # instance or class method
-                orig_fn: Callable = (
-                    attr_obj if callable(attr_obj) else attr_obj.method
-                )  # .method compatibility with older equinox versions
-                new_attrs[name] = transform_multi_agent(orig_fn)
-
-            else:
-                raise TypeError(f"Attribute {name!r} is not a (static/class)method")
-
-        NewCls = types.new_class(
-            f"{cls.__name__}__MultiAgent", (cls,), {}, lambda ns: ns.update(new_attrs)
-        )
-
-        new_instance = copy.copy(self)  # keeps parameters unchanged
-        new_instance = replace(new_instance, multi_agent=True)
-        object.__setattr__(new_instance, "__class__", NewCls)  # safe: NewCls ⊂ cls
-        return new_instance
 
     def __check_env__(self, env: Environment, vectorized: bool = False) -> Environment:
         """
@@ -243,3 +180,79 @@ class RLAlgorithm(eqx.Module):
             env = VecEnvWrapper(env)
 
         return env
+
+
+class HackuinoxModule(type(eqx.Module)):
+    # Temporary name.
+    # Here, we override the regular __call__ of equinox modules to allow __new__ methods of
+    # modules to return something other than an instance of the module class (e.g. a MultiAgentWrapper of multiple instances).
+    # Normally, Equinox will bookkeep what classes should be created and are being created (presumably to keep track of what should be frozen).
+
+    def __call__(cls, *args, **kwargs):
+        # Subclasses with a __new_wrapped__ classmethod can use it to intercept the regular __call__
+        # and return something other than an instance of the class (e.g. a MultiAgentWrapper of multiple instances).
+        # The __new_wrapped__ method should make sure infinite recursion is avoided
+        dispatch = getattr(cls, "__new_wrapped__", None)
+        if dispatch is not None:
+            dispatched_result = dispatch(*args, **kwargs)
+            if dispatched_result:
+                return dispatched_result
+        return super().__call__(*args, **kwargs)
+
+
+class RLAgent(eqx.Module, metaclass=HackuinoxModule):
+    @abstractmethod
+    def __init__(self, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
+        pass
+
+    @classmethod
+    def __new_wrapped__(cls, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
+        @dataclass
+        class SingleAgentEnvView:
+            env: Environment
+            action_space: Space
+            observation_space: Space
+
+            def __getattr__(self, name):
+                return getattr(self.env, name)
+
+        auto_upgrade_multi_agent = getattr(trainer, "auto_upgrade_multi_agent", False)
+        if getattr(env, "multi_agent", False) and auto_upgrade_multi_agent:
+            from .utils._multi_agent import (
+                MultiAgentWrapper,
+                map_multi_agent,
+                to_per_agent,
+            )
+
+            # `map_multi_agent` infers the agent structure from the first non-key argument
+            # As such, we create a per-agent environment (with each environment having the obs/action space of a single agent)
+            agent_structure = jax.tree.structure(env.observation_space)
+            obs_spaces = eqx.tree_flatten_one_level(env.observation_space)[0]
+            action_spaces = eqx.tree_flatten_one_level(env.action_space)[0]
+            envs = [
+                SingleAgentEnvView(env, a, o) for a, o in zip(action_spaces, obs_spaces)
+            ]
+            envs = jax.tree.unflatten(agent_structure, envs)
+
+            # Also create a per-agent trainer that may have per agent hyperparemeters
+            trainer_args = {}
+            for k, value in trainer.__dict__.items():
+                if k == "auto_upgrade_multi_agent":
+                    continue  # prevent infinite recursion
+                trainer_args[k] = to_per_agent(value, agent_structure)
+            trainers = [
+                type(trainer)(
+                    auto_upgrade_multi_agent=False,  # prevent infinite recursion
+                    **{
+                        key: eqx.tree_flatten_one_level(trainer_args[key])[0][i]
+                        for key in trainer_args
+                    },
+                )
+                for i in range(agent_structure.num_leaves)
+            ]
+            trainers = jax.tree.unflatten(agent_structure, trainers)
+
+            return MultiAgentWrapper(
+                map_multi_agent(lambda k, e, t: cls(k, e, t), key, envs, trainers)
+            )
+        return None  # continue with regular __call__

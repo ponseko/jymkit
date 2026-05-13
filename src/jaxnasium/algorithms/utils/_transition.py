@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import equinox as eqx
 import jax
@@ -29,7 +29,7 @@ class Transition(eqx.Module):
     advantage: Optional[Float[Array, "..."]] = None
 
     @property
-    def structure(self) -> PyTreeDef:
+    def structure(self) -> PyTreeDef:  # pyright: ignore[reportInvalidTypeForm]
         """
         Returns the top-level structure of the transition objects (using reward as a reference).
         This is either PyTreeDef(*) for single agents
@@ -127,9 +127,53 @@ class Transition(eqx.Module):
         return jax.tree.map(
             _merge,
             *per_agent_leaves,
-            is_leaf=lambda x: x is not per_agent_leaves
-            and not isinstance(x, Transition),
+            is_leaf=lambda x: (
+                x is not per_agent_leaves and not isinstance(x, Transition)
+            ),
         )
+
+    def scan(self, fn, init, *, reverse=False, unroll=1, **scan_kwargs) -> Any:
+        """Scan an arbitrary function over the time axis of this transition batch.
+
+        The user writes ``fn`` as if operating on **single-agent** (plain array)
+        data.  In multi-agent settings the transition is automatically
+        transposed into per-agent Transitions, scanned individually, and the
+        results are merged back.
+
+        **Arguments:**
+
+        - ``fn``: ``(carry, step: Transition) -> (carry, output)`` – written
+          for a single agent.
+        - ``init``: Initial carry value.  If the transition is multi-agent and
+          ``init``'s pytree structure already matches the agent structure, each
+          agent gets its own init leaf. If any of ``init``'s
+           first-level children match the agent structure, these are forwarded to
+            the respective agent. Otherwise ``init`` is broadcast
+          (replicated) to every agent.
+        - ``reverse``, ``unroll``, ``**scan_kwargs``: forwarded to ``jax.lax.scan``.
+
+        **Returns:**
+            ``(final_carry, outputs)`` where in multi-agent mode every output
+            has been merged back into the original per-agent pytree structure.
+        """
+
+        structure = self.structure
+
+        # ---- single-agent: plain scan ----------------------------------------
+        if structure.num_leaves <= 1:
+            return jax.lax.scan(
+                fn, init, self, reverse=reverse, unroll=unroll, **scan_kwargs
+            )
+
+        scan_fn = lambda i, x: jax.lax.scan(
+            fn, i, x, reverse=reverse, unroll=unroll, **scan_kwargs
+        )
+
+        from ._multi_agent import map_multi_agent
+
+        out = map_multi_agent(scan_fn, init, self, agent_structure=structure)
+
+        return out
 
     def make_minibatches(
         self,
