@@ -33,38 +33,27 @@ class PPOAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "PPO"):
         actor_key, critic_key = jax.random.split(key)
-        actor_kwargs = trainer.actor_kwargs
-        critic_kwargs = trainer.critic_kwargs
-        normalize_observations = trainer.normalize_observations
-        normalize_rewards = trainer.normalize_rewards
-        gamma = trainer.gamma
-        num_steps = trainer.num_steps
-        num_envs = trainer.num_envs
-        optimizer = trainer.optimizer
         actor = ActorNetwork(
             key=actor_key,
             obs_space=env.observation_space,
             output_space=env.action_space,
-            **actor_kwargs,
+            **trainer.actor_kwargs,
         )
         critic = ValueNetwork(
             key=critic_key,
             obs_space=env.observation_space,
-            **critic_kwargs,
+            **trainer.critic_kwargs,
         )
-        optimizer_state = optimizer.init(
+        optimizer_state = trainer.optimizer.init(
             eqx.filter((actor, critic), eqx.is_inexact_array)
         )
 
-        dummy_obs = jax.tree.map(
-            lambda space: space.sample(jax.random.PRNGKey(0)), env.observation_space
-        )
         normalization_state = Normalizer(
-            dummy_obs,
-            normalize_obs=normalize_observations,
-            normalize_rew=normalize_rewards,
-            gamma=gamma,
-            rew_shape=(num_steps, num_envs),
+            obs_space=env.observation_space,
+            normalize_obs=trainer.normalize_observations,
+            normalize_rew=trainer.normalize_rewards,
+            gamma=trainer.gamma,
+            rew_shape=(trainer.num_steps, trainer.num_envs),
         )
 
         self.actor = actor
@@ -101,10 +90,6 @@ class PPOAgent(RLAgent):
 
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
-
-    def replace(self, **updates):
-        keys, values = zip(*updates.items())
-        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
 
 
 class PPO(RLAlgorithm):

@@ -205,6 +205,10 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
     def __init__(self, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
         pass
 
+    def replace(self, **updates):
+        keys, values = zip(*updates.items())
+        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
+
     @classmethod
     def __new_wrapped__(cls, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
         @dataclass
