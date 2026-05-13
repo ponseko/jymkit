@@ -70,7 +70,11 @@ class RLAlgorithm(eqx.Module):
         return algorithm
 
     def get_action(
-        self, key: PRNGKeyArray, observation: PyTree, deterministic: bool, **kwargs
+        self,
+        key: PRNGKeyArray,
+        observation: PyTree,
+        deterministic: bool = False,
+        **kwargs,
     ):
         return self.agent.get_action(key, observation, deterministic, **kwargs)
 
