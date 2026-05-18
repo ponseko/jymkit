@@ -27,6 +27,7 @@ class Transition(eqx.Module):
     next_observation: Optional[Array] = None
     return_: Optional[Float[Array, " "]] = None
     advantage: Optional[Float[Array, "..."]] = None
+    target: Optional[Float[Array, " "]] = None
 
     @property
     def structure(self) -> PyTreeDef:  # pyright: ignore[reportInvalidTypeForm]

@@ -22,3 +22,5 @@ dev*.ipynb
 .vscode
 site/
 uv.lock
+
+_dev**

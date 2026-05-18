@@ -145,6 +145,9 @@ class MultiAgentWrapper(eqx.Module):
         except Exception:
             return False
 
+    def __call__(self, *args, **kwargs):
+        return self.__getattr__("__call__")(*args, **kwargs)
+
     def __getattr__(self, name: str):
         agents = self.agents
         ref_structure = self._structure
@@ -166,6 +169,13 @@ class MultiAgentWrapper(eqx.Module):
                 )
 
             return multi_agent_dispatcher
+
+        elif isinstance(first_attr, eqx.Module):
+            return MultiAgentWrapper(
+                map_multi_agent(
+                    lambda a: getattr(a, name), agents, agent_structure=ref_structure
+                )
+            )
 
         return map_multi_agent(
             lambda a: getattr(a, name), agents, agent_structure=ref_structure
