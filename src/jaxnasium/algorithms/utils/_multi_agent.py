@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Any, Optional
 
 import equinox as eqx
@@ -76,7 +75,6 @@ def map_multi_agent(
     # Transition (Also as output)
     # MultiAgentWrapper (Also as output)
 
-    processed_arguments = []
     arguments = [tree] + list(rest)
 
     # infer agent structure if not provided
@@ -84,24 +82,38 @@ def map_multi_agent(
         first_arg = next((arg for arg in arguments if not _is_prng_key(arg)), None)
         _, agent_structure = eqx.tree_flatten_one_level(first_arg)
 
-    for item in arguments:
-        if _is_prng_key(item):
-            processed_arguments.append(
-                jym.tree.split_key_like_structure(item, agent_structure)
-            )
-        elif isinstance(item, Transition):
-            processed_arguments.append(item.view_transposed)
-        elif isinstance(item, MultiAgentWrapper):
-            processed_arguments.append(item.agents)
+    def _process_item(el):
+        if _is_prng_key(el):
+            return jym.tree.split_key_like_structure(el, agent_structure)
+        elif isinstance(el, Transition):
+            return el.view_transposed
+        elif isinstance(el, MultiAgentWrapper):
+            return el.agents
         else:
-            processed_arguments.append(to_per_agent(item, agent_structure))
+            return to_per_agent(el, agent_structure)
 
-    # Any kwargs must be duplicated for each agent:
+    # Process args:
+    processed_arguments = [_process_item(item) for item in arguments]
 
+    # Process kwargs:
     if kwargs:
-        f = partial(f, **kwargs)
+        processed_kwargs = {k: _process_item(v) for k, v in kwargs.items()}
+        kw_keys = list(processed_kwargs.keys())
+        processed_kwargs = jym.tree.map_one_level(
+            lambda *vals: dict(zip(kw_keys, vals)),
+            *[processed_kwargs[k] for k in kw_keys],
+        )
 
-    result = jym.tree.map_one_level(f, *processed_arguments)
+        def _new_call(*args_w_kw_dict):
+            *args, kw_dict = args_w_kw_dict
+            return f(*args, **kw_dict)
+
+        result = jym.tree.map_one_level(
+            _new_call, *processed_arguments, processed_kwargs
+        )
+
+    else:
+        result = jym.tree.map_one_level(f, *processed_arguments)
 
     # Now the ouput can contain:
     # a PyTree of Agents originally a MultiAgentWrapper → re-wrap in MultiAgentWrapper
