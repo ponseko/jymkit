@@ -80,15 +80,65 @@ class DQNAgent(RLAgent):
         observation = self.normalizer.normalize_obs(observation)
         return self.critic(observation)
 
-    def update_normalizer(self, trajectory_batch: Transition):
-        updated_normalizer = self.normalizer.update(trajectory_batch)
-        return self.replace(normalizer=updated_normalizer)
-
     def normalize_observation(self, observations: PyTree):
         return self.normalizer.normalize_obs(observations)
 
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
+
+    def update_normalizer(self, trajectory_batch: Transition):
+        updated_normalizer = self.normalizer.update(trajectory_batch)
+        return self.replace(normalizer=updated_normalizer)
+
+    def update_params(self, trajectory_batch: Transition, trainer: "DQN"):
+        @eqx.filter_grad
+        def __dqn_loss(params: QValueNetwork, train_batch: Transition):
+            q_out_1 = jax.vmap(params)(train_batch.observation)
+            q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
+            q_taken = jym.tree.batch_sum(q_taken)
+            q_loss = optax.huber_loss(q_taken, target)
+            return jym.tree.mean(q_loss)
+
+        obs, next_obs, reward = (
+            trajectory_batch.observation,
+            trajectory_batch.next_observation,
+            trajectory_batch.reward,
+        )
+        trajectory_batch = replace(
+            trajectory_batch,
+            observation=self.normalizer.normalize_obs(obs),
+            next_observation=self.normalizer.normalize_obs(next_obs),
+            reward=self.normalizer.normalize_reward(reward),
+        )
+
+        # Compute target
+        q_target_output = jax.vmap(self.critic_target)(
+            trajectory_batch.next_observation
+        )
+        q_target_output = jym.tree.batch_sum(
+            jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
+        )
+        target = (
+            trajectory_batch.reward
+            + ~trajectory_batch.terminated * trainer.gamma * q_target_output
+        )
+
+        grads = __dqn_loss(self.critic, trajectory_batch)
+        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        new_critic = eqx.apply_updates(self.critic, updates)
+
+        # update target policy
+        new_critic_target = jax.tree.map(
+            lambda x, y: trainer.tau * x + (1 - trainer.tau) * y,
+            self.critic_target,
+            new_critic,
+        )
+
+        return self.replace(
+            critic=new_critic,
+            critic_target=new_critic_target,
+            optimizer_state=optimizer_state,
+        )
 
 
 class DQN(RLAlgorithm):
@@ -188,14 +238,14 @@ class DQN(RLAlgorithm):
             metric = trajectory_batch.info or {}
 
             # Update normalizer with new data from the trajectory
-            agent = self.agent.update_normalizer(trajectory_batch)
+            agent: DQNAgent = self.agent.update_normalizer(trajectory_batch)
 
             # Add new data to buffer & Sample update batch from the buffer
             buffer = buffer.insert(trajectory_batch)
             train_data = buffer.sample(rng)
 
             # Update
-            updated_agent = self._update_agent_state(rng, agent, train_data)
+            updated_agent = agent.update_params(train_data, self)
             self = replace(self, agent=updated_agent)
 
             runner_state = (self, buffer, env_state, last_obs, rng)
@@ -267,59 +317,3 @@ class DQN(RLAlgorithm):
         )
 
         return rollout_state, trajectory_batch
-
-    def _update_agent_state(
-        self, key: PRNGKeyArray, current_agent: DQNAgent, batch: Transition
-    ) -> DQNAgent:
-        def scan_minibatch_update(agent, mini_batch):
-            @eqx.filter_grad
-            def __dqn_loss(params: QValueNetwork, train_batch: Transition):
-                q_out_1 = jax.vmap(params)(train_batch.observation)
-                q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-                q_taken = jym.tree.batch_sum(q_taken)
-                q_loss = optax.huber_loss(q_taken, target)
-                return jym.tree.mean(q_loss)
-
-            normalizer = agent.normalizer
-            mini_batch = replace(
-                mini_batch,
-                observation=normalizer.normalize_obs(mini_batch.observation),
-                next_observation=normalizer.normalize_obs(mini_batch.next_observation),
-                reward=normalizer.normalize_reward(mini_batch.reward),
-            )
-
-            # Compute target
-            q_target_output = jax.vmap(agent.critic_target)(mini_batch.next_observation)
-            q_target_output = jym.tree.batch_sum(
-                jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
-            )
-            target = (
-                mini_batch.reward
-                + ~mini_batch.terminated * self.gamma * q_target_output
-            )
-
-            grads = __dqn_loss(agent.critic, mini_batch)
-            updates, optimizer_state = self.optimizer.update(
-                grads, agent.optimizer_state
-            )
-            new_critic = eqx.apply_updates(agent.critic, updates)
-
-            # update target policy
-            new_critic_target = jax.tree.map(
-                lambda x, y: self.tau * x + (1 - self.tau) * y,
-                agent.critic_target,
-                new_critic,
-            )
-
-            return agent.replace(
-                critic=new_critic,
-                critic_target=new_critic_target,
-                optimizer_state=optimizer_state,
-            ), None
-
-        assert batch.next_observation is not None
-        train_data = batch.make_minibatches(key, self.num_minibatches)
-        updated_agent, _ = train_data.scan(
-            scan_minibatch_update, current_agent, unroll=16
-        )
-        return updated_agent
