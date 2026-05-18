@@ -16,6 +16,7 @@ from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.utils import (
     DistraxContainer,
     Normalizer,
+    Schedule,
     Transition,
     TransitionBuffer,
     scan_callback,
@@ -33,30 +34,25 @@ class DQNAgent(RLAgent):
     normalizer: Normalizer
 
     def __init__(self, key, env: Environment, trainer: "DQN"):
-        critic = QValueNetwork(
+        self.critic = QValueNetwork(
             key=key,
             obs_space=env.observation_space,
             output_space=env.action_space,
             **trainer.critic_kwargs,
         )
-        critic_target = jax.tree.map(lambda x: x, critic)
+        self.critic_target = jax.tree.map(lambda x: x, self.critic)
 
-        optimizer_state = trainer.optimizer.init(
-            eqx.filter(critic, eqx.is_inexact_array)
+        self.optimizer_state = trainer.optimizer.init(
+            eqx.filter(self.critic, eqx.is_inexact_array)
         )
 
-        normalization_state = Normalizer(
+        self.normalizer = Normalizer(
             obs_space=env.observation_space,
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
             rew_shape=(trainer.num_steps, trainer.num_envs),
         )
-
-        self.critic = critic
-        self.critic_target = critic_target
-        self.optimizer_state = optimizer_state
-        self.normalizer = normalization_state
 
     def get_action(
         self,
@@ -66,9 +62,7 @@ class DQNAgent(RLAgent):
         epsilon: float = 0.0,
     ):
         if deterministic:
-            assert epsilon == 0.0, (
-                "Epsilon set to non-zero value for deterministic action"
-            )
+            assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
         action_dist = DistraxContainer(
@@ -149,56 +143,38 @@ class DQN(RLAlgorithm):
     """
 
     agent: DQNAgent = eqx.field(default=None)
-    "State of the DQN algorithm, containing the networks, optimizer state and optional normalization running statistics."
+    "State of the DQN agent, containing the networks, optimizer state and optional normalization running statistics."
 
     learning_rate_start: float = 2.5e-4
     learning_rate_end: float | None = eqx.field(static=True, default=0.0)
-    "Whether to anneal the learning rate over time. Set to a float to specify the end value. True means 0.0."
     gamma: float = 0.99
     max_grad_norm: float = 1.0
     update_every: int = eqx.field(static=True, default=int(2e2))
     replay_buffer_size: int = int(1e4)
     batch_size: int = 64
-    epsilon_start: float = 0.2
-    epsilon_end: float | None = eqx.field(static=True, default=0.1)
+    epsilon_start: float = 0.1
+    epsilon_end: float | None = eqx.field(static=True, default=None)
     tau: float = 0.95
-    "Soft update coefficient for target network."
-
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_minibatches: int = eqx.field(static=True, default=4)
     num_envs: int = eqx.field(static=True, default=4)
-    "Number of parallel environments."
-
     normalize_observations: bool = eqx.field(static=True, default=False)
-    "Whether to normalize observations via running statistics."
     normalize_rewards: bool = eqx.field(static=True, default=False)
-    "Whether to normalize rewards via running statistics."
 
     @property
-    def learning_rate(self) -> optax.Schedule:
-        if self.learning_rate_end is not None:
-            return optax.linear_schedule(
-                init_value=self.learning_rate_start,
-                end_value=self.learning_rate_end,
-                transition_steps=self.num_training_updates,
-            )
-        return optax.constant_schedule(self.learning_rate_start)
+    def epsilon_schedule(self) -> Schedule:
+        return Schedule(self.epsilon_start, self.epsilon_end, self.num_training_updates)
 
     @property
-    def epsilon(self) -> optax.Schedule:
-        if self.epsilon_end is not None:
-            return optax.linear_schedule(
-                init_value=self.epsilon_start,
-                end_value=self.epsilon_end,
-                transition_steps=self.num_training_updates,
-            )
-        return optax.constant_schedule(self.epsilon_start)
+    def learning_rate_schedule(self) -> Schedule:
+        return Schedule(
+            self.learning_rate_start, self.learning_rate_end, self.num_training_updates
+        )
 
     @property
     def optimizer(self):
         return optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(learning_rate=self.learning_rate),
+            optax.adabelief(learning_rate=self.learning_rate_schedule),
         )
 
     @property
@@ -213,7 +189,7 @@ class DQN(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations  # * num_epochs
 
-    def init_state(self, key: PRNGKeyArray, env: Environment) -> "DQN":
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "DQN":
         return replace(self, agent=DQNAgent(key=key, env=env, trainer=self))
 
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "DQN":
@@ -255,7 +231,7 @@ class DQN(RLAlgorithm):
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init_state(key, env)
+            self = self.init_agent(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
@@ -285,7 +261,9 @@ class DQN(RLAlgorithm):
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
             update_count = jym.tree.get_first(self.agent, "count")
-            get_action = partial(self.get_action, epsilon=self.epsilon(update_count))
+            get_action = partial(
+                self.get_action, epsilon=self.epsilon_schedule(update_count)
+            )
             action = jax.vmap(get_action, in_axes=(0, 0))(sample_key, last_obs)
 
             # take a step in the environment

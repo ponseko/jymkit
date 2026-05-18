@@ -14,4 +14,5 @@ from ._normalization import (
     RunningStatisticsState as RunningStatisticsState,
 )
 from ._scan import scan_transitions as scan_transitions
+from ._schedule import Schedule as Schedule
 from ._transition import Transition as Transition
