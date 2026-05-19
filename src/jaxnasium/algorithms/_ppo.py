@@ -13,12 +13,7 @@ import jaxnasium as jym
 from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
-from jaxnasium.algorithms.utils import (
-    # MultiAgentWrapper,
-    Normalizer,
-    Transition,
-    scan_callback,
-)
+from jaxnasium.algorithms.utils import Normalizer, Schedule, Transition, scan_callback
 
 from .networks import ActorNetwork, ValueNetwork
 
@@ -33,33 +28,28 @@ class PPOAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "PPO"):
         actor_key, critic_key = jax.random.split(key)
-        actor = ActorNetwork(
+        self.actor = ActorNetwork(
             key=actor_key,
             obs_space=env.observation_space,
             output_space=env.action_space,
             **trainer.actor_kwargs,
         )
-        critic = ValueNetwork(
+        self.critic = ValueNetwork(
             key=critic_key,
             obs_space=env.observation_space,
             **trainer.critic_kwargs,
         )
-        optimizer_state = trainer.optimizer.init(
-            eqx.filter((actor, critic), eqx.is_inexact_array)
+        self.optimizer_state = trainer.optimizer.init(
+            eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
         )
 
-        normalization_state = Normalizer(
+        self.normalizer = Normalizer(
             obs_space=env.observation_space,
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
             rew_shape=(trainer.num_steps, trainer.num_envs),
         )
-
-        self.actor = actor
-        self.critic = critic
-        self.optimizer_state = optimizer_state
-        self.normalizer = normalization_state
 
     def get_action(
         self,
@@ -91,6 +81,69 @@ class PPOAgent(RLAgent):
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
 
+    def update_params(self, trajectory_batch: Transition, trainer: "PPO"):
+        @eqx.filter_grad
+        def __ppo_los_fn(
+            params: Tuple[ActorNetwork, ValueNetwork],
+            train_batch: Transition,
+        ):
+            assert train_batch.advantage is not None
+            assert train_batch.return_ is not None
+            assert train_batch.log_prob is not None
+            assert train_batch.value is not None
+
+            actor, critic = params
+            action_dist = jax.vmap(actor)(train_batch.observation)
+            log_prob = action_dist.log_prob(train_batch.action)
+            entropy = action_dist.entropy()
+            value = jax.vmap(critic)(train_batch.observation)
+            init_log_prob = train_batch.log_prob
+
+            log_prob = jym.tree.batch_sum(log_prob)
+            init_log_prob = jym.tree.batch_sum(init_log_prob)
+            entropy = jym.tree.batch_sum(entropy)
+
+            ratio = jnp.exp(log_prob - init_log_prob)
+            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
+                train_batch.advantage.std() + 1e-8
+            )
+            actor_loss1 = _advantages * ratio
+
+            actor_loss2 = (
+                jnp.clip(ratio, 1.0 - trainer.clip_coef, 1.0 + trainer.clip_coef)
+                * _advantages
+            )
+            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
+
+            # critic loss
+            value_pred_clipped = train_batch.value + (
+                jnp.clip(
+                    value - train_batch.value,
+                    -trainer.clip_coef_vf,
+                    trainer.clip_coef_vf,
+                )
+            )
+            value_losses = jnp.square(value - train_batch.return_)
+            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
+            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
+
+            update_count = jym.tree.get_first(self.optimizer_state, "count")
+            ent_coef = trainer.ent_coef_schedule(update_count)
+
+            # Total loss
+            total_loss = (
+                actor_loss + trainer.vf_coef * value_loss - ent_coef * entropy.mean()
+            )
+            return total_loss  # , (actor_loss, value_loss, entropy)
+
+        actor, critic = self.actor, self.critic
+        grads = __ppo_los_fn((actor, critic), trajectory_batch)
+        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+        return self.replace(
+            actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
+        )
+
 
 class PPO(RLAlgorithm):
     """Proximal Policy Optimization (PPO) algorithm implementation."""
@@ -118,30 +171,26 @@ class PPO(RLAlgorithm):
     normalize_rewards: bool = eqx.field(static=True, default=True)
 
     @property
-    def learning_rate(self) -> optax.Schedule:
-        if self.learning_rate_end is not None:
-            return optax.linear_schedule(
-                init_value=self.learning_rate_start,
-                end_value=self.learning_rate_end,
-                transition_steps=self.num_training_updates,
-            )
-        return optax.constant_schedule(self.learning_rate_start)
+    def learning_rate_schedule(self):
+        return Schedule(
+            start=self.learning_rate_start,
+            end=self.learning_rate_end,
+            transition_steps=self.num_training_updates,
+        )
 
     @property
-    def ent_coef(self) -> optax.Schedule:
-        if self.ent_coef_end is not None:
-            return optax.linear_schedule(
-                init_value=self.ent_coef_start,
-                end_value=self.ent_coef_end,
-                transition_steps=self.num_training_updates,
-            )
-        return optax.constant_schedule(self.ent_coef_start)
+    def ent_coef_schedule(self):
+        return Schedule(
+            start=self.ent_coef_start,
+            end=self.ent_coef_end,
+            transition_steps=self.num_training_updates,
+        )
 
     @property
     def optimizer(self):
         return optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(learning_rate=self.learning_rate),
+            optax.adabelief(learning_rate=self.learning_rate_schedule),
         )
 
     @property
@@ -160,7 +209,7 @@ class PPO(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations * self.num_epochs
 
-    def init_state(self, key: PRNGKeyArray, env: Environment) -> "PPO":
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
 
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
@@ -185,8 +234,18 @@ class PPO(RLAlgorithm):
 
             agent = self.agent.update_normalizer(trajectory_batch)
 
-            # Post-process the trajectory batch (GAE, returns, normalization)
-            trajectory_batch = self._postprocess_rollout(trajectory_batch)
+            # Calculate GAE and returns, add to trajectory batch
+            _, (advantages, returns) = (
+                trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
+                    lambda gae, transition: self._compute_gae_scan(gae, transition),
+                    jnp.zeros(self.num_envs),
+                    reverse=True,
+                    unroll=16,
+                )
+            )
+            trajectory_batch = replace(
+                trajectory_batch, advantage=advantages, return_=returns
+            )
 
             # Update agent
             updated_agent = self._update_agent_state(rng, agent, trajectory_batch)
@@ -199,7 +258,7 @@ class PPO(RLAlgorithm):
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
-            self = self.init_state(key, env)
+            self = self.init_agent(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
@@ -252,129 +311,43 @@ class PPO(RLAlgorithm):
 
         return rollout_state, trajectory_batch
 
-    def _postprocess_rollout(self, trajectory_batch: Transition) -> Transition:
-        """
-        1) Computes GAE and Returns and adds them to the trajectory batch.
-        2) Returns updated normalization based on the new trajectory batch.
-        """
+    def _compute_gae_scan(self, gae, transition: Transition):
+        assert transition.value is not None
+        assert transition.next_value is not None
 
-        def compute_gae_scan(gae, batch: Transition):
-            """
-            Computes the Generalized Advantage Estimation (GAE) for the given batch of transitions.
-            """
-
-            assert batch.value is not None
-            assert batch.next_value is not None
-
-            done = batch.terminated
-            if done.ndim < batch.reward.ndim:
-                # correct for multi-agent envs that do not return done flags per agent
-                done = jnp.expand_dims(done, axis=-1)
-
-            delta = (
-                batch.reward + self.gamma * batch.next_value * (1 - done) - batch.value
-            )
-            gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
-            return gae, (gae, gae + batch.value)
-
-        trajectory_batch = replace(
-            trajectory_batch,
-            reward=self.agent.normalize_reward(trajectory_batch.reward),
+        done = transition.terminated
+        delta = (
+            transition.reward
+            + self.gamma * transition.next_value * (1 - done)
+            - transition.value
         )
-        assert trajectory_batch.value is not None
-        _, (advantages, returns) = trajectory_batch.scan(
-            compute_gae_scan, jnp.zeros(self.num_envs), reverse=True, unroll=16
-        )
-
-        trajectory_batch = replace(
-            trajectory_batch,
-            advantage=advantages,
-            return_=returns,
-        )
-
-        return trajectory_batch
+        gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
+        return gae, (gae, gae + transition.value)
 
     def _update_agent_state(
         self, key, current_agent: PPOAgent, train_data: Transition
     ) -> PPOAgent:
-        @eqx.filter_grad
-        def __ppo_los_fn(
-            params: Tuple[ActorNetwork, ValueNetwork],
-            train_batch: Transition,
-        ):
-            assert train_batch.advantage is not None
-            assert train_batch.return_ is not None
-            assert train_batch.log_prob is not None
-            assert train_batch.value is not None
+        """Creates minibatches and performs updates for multiple epochs. Returns the updated agent."""
 
-            actor, critic = params
-            action_dist = jax.vmap(actor)(train_batch.observation)
-            log_prob = action_dist.log_prob(train_batch.action)
-            entropy = action_dist.entropy()
-            value = jax.vmap(critic)(train_batch.observation)
-            init_log_prob = train_batch.log_prob
-
-            log_prob = jym.tree.batch_sum(log_prob)
-            init_log_prob = jym.tree.batch_sum(init_log_prob)
-            entropy = jym.tree.batch_sum(entropy)
-
-            ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
-                train_batch.advantage.std() + 1e-8
-            )
-            actor_loss1 = _advantages * ratio
-
-            actor_loss2 = (
-                jnp.clip(ratio, 1.0 - self.clip_coef, 1.0 + self.clip_coef)
-                * _advantages
-            )
-            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-            # critic loss
-            value_pred_clipped = train_batch.value + (
-                jnp.clip(
-                    value - train_batch.value,
-                    -self.clip_coef_vf,
-                    self.clip_coef_vf,
-                )
-            )
-            value_losses = jnp.square(value - train_batch.return_)
-            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
-            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-            update_count = jym.tree.get_first(current_agent.optimizer_state, "count")
-            ent_coef = self.ent_coef(update_count)
-
-            # Total loss
-            total_loss = (
-                actor_loss + self.vf_coef * value_loss - ent_coef * entropy.mean()
-            )
-            return total_loss  # , (actor_loss, value_loss, entropy)
-
-        def scan_minibatch_update(current_agent, minibatch):
-            actor, critic = current_agent.actor, current_agent.critic
-            grads = __ppo_los_fn((actor, critic), minibatch)
-            updates, optimizer_state = self.optimizer.update(
-                grads, current_agent.optimizer_state
-            )
-            new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
-            updated_agent = current_agent.replace(
-                actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
-            )
-            return updated_agent, None
-
+        # (num_steps * num_envs, ...) > (batch_size, ...)
         train_data = jax.tree.map(
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
             train_data,
         )
-        train_data = replace(
+        train_data = replace(  # Normalization
             train_data,
             observation=current_agent.normalize_observation(train_data.observation),
         )
+        # Make minibatches
         train_data = train_data.make_minibatches(
             key, self.num_minibatches, self.num_epochs
         )
-        updated_agent, _ = train_data.scan(
-            scan_minibatch_update, current_agent, unroll=16
+
+        def scan_update(current_agent, batch):
+            agent = current_agent.update_params(batch, self)
+            return agent, None
+
+        updated_agent, _ = jax.lax.scan(
+            scan_update, current_agent, train_data, unroll=4
         )
         return updated_agent
