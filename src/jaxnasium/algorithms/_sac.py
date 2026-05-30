@@ -419,68 +419,58 @@ class SAC(RLAlgorithm):
         return rollout_state, trajectory_batch
 
     def _update_agent_state(
-        self, key: PRNGKeyArray, current_state: SACAgent, train_batch: Transition
+        self, key: PRNGKeyArray, current_agent: SACAgent, train_batch: Transition
     ) -> SACAgent:
-        def scan_critics_epoch_update(current_agent: SACAgent, key):
-            minibatches = train_batch.make_minibatches(
-                key, self.critics_num_minibatches
-            )
+        def update_network(key, agent, batch, update_fn, num_epochs, num_minibatches):
+            def scan_epoch_update(current_agent, key):
+                # Create a fresh set of minibatches and update the agent
+                shuffle_key, update_key = jax.random.split(key)
+                minibatches = batch.make_minibatches(shuffle_key, num_minibatches)
 
-            def do_update(key_and_current_agent, minibatch):
-                key, current_agent = key_and_current_agent
-                key, next_key = jax.random.split(key, 2)
-                updated_agent = current_agent.update_critics_params(
-                    key, minibatch, self
+                def scan_minibatch_update(agent, minibatch_and_key):
+                    minibatch, key = minibatch_and_key
+                    return update_fn(agent, key, minibatch), None
+
+                update_keys = jax.random.split(update_key, num_minibatches)
+                return jax.lax.scan(
+                    scan_minibatch_update,
+                    current_agent,
+                    (minibatches, update_keys),
+                    unroll=4,
                 )
-                return (next_key, updated_agent), None
 
-            (_, updated_agent), _ = jax.lax.scan(
-                do_update, (key, current_agent), minibatches
-            )
-            return updated_agent, None
+            update_keys = jax.random.split(key, num_epochs)
+            return jax.lax.scan(scan_epoch_update, agent, update_keys, unroll=4)
 
-        update_keys = jax.random.split(key, self.critics_num_epochs)
-        updated_agent, _ = jax.lax.scan(
-            scan_critics_epoch_update, current_state, update_keys
+        update_critic_fn = lambda a, k, m: a.update_critics_params(k, m, self)
+        update_actor_fn = lambda a, k, m: a.update_actor_params(k, m, self)
+        update_alpha_fn = lambda a, k, m: a.update_alpha_params(k, m, self)
+
+        agent, _ = update_network(
+            key,
+            current_agent,
+            train_batch,
+            update_critic_fn,
+            self.critics_num_epochs,
+            self.critics_num_minibatches,
         )
 
-        def scan_actor_epoch_update(current_agent: SACAgent, key):
-            minibatches = train_batch.make_minibatches(key, self.actor_num_minibatches)
-
-            def do_update(key_and_current_agent, minibatch):
-                key, current_agent = key_and_current_agent
-                key, next_key = jax.random.split(key, 2)
-                updated_agent = current_agent.update_actor_params(key, minibatch, self)
-                return (next_key, updated_agent), None
-
-            (_, updated_agent), _ = jax.lax.scan(
-                do_update, (key, current_agent), minibatches
-            )
-            return updated_agent, None
-
-        update_keys = jax.random.split(key, self.actor_num_epochs)
-        updated_agent, _ = jax.lax.scan(
-            scan_actor_epoch_update, updated_agent, update_keys
+        agent, _ = update_network(
+            key,
+            agent,
+            train_batch,
+            update_actor_fn,
+            self.actor_num_epochs,
+            self.actor_num_minibatches,
         )
 
-        def scan_alpha_epoch_update(current_agent: SACAgent, key):
-            minibatches = train_batch.make_minibatches(key, self.alpha_num_minibatches)
+        agent, _ = update_network(
+            key,
+            agent,
+            train_batch,
+            update_alpha_fn,
+            self.alpha_num_epochs,
+            self.alpha_num_minibatches,
+        )
 
-            def do_update(key_and_current_agent, minibatch):
-                key, current_agent = key_and_current_agent
-                key, next_key = jax.random.split(key, 2)
-                updated_agent = current_agent.update_alpha_params(key, minibatch, self)
-                return (next_key, updated_agent), None
-
-            (_, updated_agent), _ = jax.lax.scan(
-                do_update, (key, current_agent), minibatches
-            )
-            return updated_agent, None
-
-        if self.learn_alpha:
-            update_keys = jax.random.split(key, self.alpha_num_epochs)
-            updated_agent, _ = jax.lax.scan(
-                scan_alpha_epoch_update, updated_agent, update_keys
-            )
-
-        return updated_agent
+        return agent

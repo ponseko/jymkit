@@ -331,22 +331,24 @@ class PPO(RLAlgorithm):
     ) -> PPOAgent:
         """Creates minibatches and performs updates for multiple epochs. Returns the updated agent."""
 
+        def scan_epoch_update(current_agent: PPOAgent, key):
+            # Create a fresh set of minibatches and update the agent
+            minibatches = train_batch.make_minibatches(key, self.num_minibatches)
+            return jax.lax.scan(
+                lambda agent, minibatch: (agent.update_params(minibatch, self), None),
+                current_agent,
+                minibatches,
+                unroll=4,
+            )
+
         # (num_steps * num_envs, ...) > (batch_size, ...)
         train_batch = jax.tree.map(
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
             trajectory_batch,
         )
 
-        # Make minibatches
-        train_batch = train_batch.make_minibatches(
-            key, self.num_minibatches, self.num_epochs
-        )
-
-        def scan_update(current_agent, batch):
-            agent = current_agent.update_params(batch, self)
-            return agent, None
-
+        update_keys = jax.random.split(key, self.num_epochs)
         updated_agent, _ = jax.lax.scan(
-            scan_update, current_agent, train_batch, unroll=4
+            scan_epoch_update, current_agent, update_keys, unroll=4
         )
         return updated_agent

@@ -278,15 +278,20 @@ class PQN(RLAlgorithm):
         self, key, current_agent: PQNAgent, trajectory_batch: Transition
     ) -> PQNAgent:
         def scan_epoch_update(current_agent: PQNAgent, key):
-            minibatches = trajectory_batch.make_minibatches(
-                key, self.num_minibatches, n_batch_axis=2
+            # Create a fresh set of minibatches and update the agent
+            minibatches = train_batch.make_minibatches(key, self.num_minibatches)
+            return jax.lax.scan(
+                lambda agent, minibatch: (agent.update_params(minibatch, self), None),
+                current_agent,
+                minibatches,
+                unroll=4,
             )
 
-            def do_update(current_state, minibatch):
-                return current_state.update_params(minibatch, self), None
-
-            updated_agent, _ = jax.lax.scan(do_update, current_agent, minibatches)
-            return updated_agent, None
+        # (num_steps * num_envs, ...) > (batch_size, ...)
+        train_batch = jax.tree.map(
+            lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
+            trajectory_batch,
+        )
 
         update_keys = jax.random.split(key, self.num_epochs)
         updated_agent, _ = jax.lax.scan(
