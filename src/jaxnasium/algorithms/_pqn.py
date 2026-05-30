@@ -184,6 +184,8 @@ class PQN(RLAlgorithm):
             # Update normalizer with new data from the trajectory
             agent: PQNAgent = self.agent.update_normalizer(trajectory_batch)
 
+            trajectory_batch = trajectory_batch.normalize(agent.normalizer)
+
             # Calculate Qlambda returns, add to trajectory batch
             _, returns = (
                 trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
@@ -276,7 +278,7 @@ class PQN(RLAlgorithm):
         self, key, current_agent: PQNAgent, trajectory_batch: Transition
     ) -> PQNAgent:
         def scan_epoch_update(current_agent: PQNAgent, key):
-            minibatches = train_batch.make_minibatches(
+            minibatches = trajectory_batch.make_minibatches(
                 key, self.num_minibatches, n_batch_axis=2
             )
 
@@ -286,12 +288,6 @@ class PQN(RLAlgorithm):
             updated_agent, _ = jax.lax.scan(do_update, current_agent, minibatches)
             return updated_agent, None
 
-        train_batch = replace(
-            trajectory_batch,
-            observation=current_agent.normalizer.normalize_obs(
-                trajectory_batch.observation
-            ),
-        )
         update_keys = jax.random.split(key, self.num_epochs)
         updated_agent, _ = jax.lax.scan(
             scan_epoch_update, current_agent, update_keys, unroll=4

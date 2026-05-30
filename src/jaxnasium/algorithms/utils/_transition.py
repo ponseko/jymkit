@@ -1,10 +1,13 @@
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
+
+if TYPE_CHECKING:
+    from ._normalization import Normalizer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,19 @@ class Transition(eqx.Module):
         usefull for unflattening Transition.flat.properties back to the original structure.
         """
         return jax.tree.structure(self.reward)
+
+    def normalize(self, normalizer: "Normalizer"):
+        """Normalizes the observation and rewards in the transition based on the given normalizer."""
+        if self.next_observation is not None:
+            return self.replace(
+                observation=normalizer.normalize_obs(self.observation),
+                next_observation=normalizer.normalize_obs(self.next_observation),
+                reward=normalizer.normalize_reward(self.reward),
+            )
+        return self.replace(
+            observation=normalizer.normalize_obs(self.observation),
+            reward=normalizer.normalize_reward(self.reward),
+        )
 
     @property
     def view_flat(self) -> "Transition":

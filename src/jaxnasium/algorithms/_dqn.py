@@ -93,17 +93,17 @@ class DQNAgent(RLAgent):
             q_loss = optax.huber_loss(q_taken, target)
             return jym.tree.mean(q_loss)
 
-        obs, next_obs, reward = (
-            batch.observation,
-            batch.next_observation,
-            batch.reward,
-        )
-        batch = replace(
-            batch,
-            observation=self.normalizer.normalize_obs(obs),
-            next_observation=self.normalizer.normalize_obs(next_obs),
-            reward=self.normalizer.normalize_reward(reward),
-        )
+        # obs, next_obs, reward = (
+        #     batch.observation,
+        #     batch.next_observation,
+        #     batch.reward,
+        # )
+        # batch = replace(
+        #     batch,
+        #     observation=self.normalizer.normalize_obs(obs),
+        #     next_observation=self.normalizer.normalize_obs(next_obs),
+        #     reward=self.normalizer.normalize_reward(reward),
+        # )
 
         # Compute target
         q_target_output = jax.vmap(self.critic_target)(batch.next_observation)
@@ -214,6 +214,8 @@ class DQN(RLAlgorithm):
             # Add new data to buffer & Sample update batch from the buffer
             buffer = buffer.insert(trajectory_batch)
             train_batch = buffer.sample(rng)
+
+            train_batch = train_batch.normalize(agent.normalizer)
 
             # Update
             updated_agent = agent.update_params(train_batch, self)

@@ -342,6 +342,8 @@ class SAC(RLAlgorithm):
             buffer = buffer.insert(trajectory_batch)
             train_batch = buffer.sample(rng)
 
+            train_batch = train_batch.normalize(agent.normalizer)
+
             # Update
             updated_agent = self._update_agent_state(rng, agent, train_batch)
 
@@ -419,15 +421,6 @@ class SAC(RLAlgorithm):
     def _update_agent_state(
         self, key: PRNGKeyArray, current_state: SACAgent, train_batch: Transition
     ) -> SACAgent:
-        # Normalize all used inputs, if normalization is disabled, these are no-ops
-        normalizer = current_state.normalizer
-        train_batch = replace(
-            train_batch,
-            observation=normalizer.normalize_obs(train_batch.observation),
-            next_observation=normalizer.normalize_obs(train_batch.next_observation),
-            reward=normalizer.normalize_reward(train_batch.reward),
-        )
-
         def scan_critics_epoch_update(current_agent: SACAgent, key):
             minibatches = train_batch.make_minibatches(
                 key, self.critics_num_minibatches

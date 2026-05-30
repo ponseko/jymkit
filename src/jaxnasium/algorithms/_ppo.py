@@ -234,6 +234,8 @@ class PPO(RLAlgorithm):
 
             agent = self.agent.update_normalizer(trajectory_batch)
 
+            trajectory_batch = trajectory_batch.normalize(agent.normalizer)
+
             # Calculate GAE and returns, add to trajectory batch
             _, (advantages, returns) = (
                 trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
@@ -334,10 +336,7 @@ class PPO(RLAlgorithm):
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
             trajectory_batch,
         )
-        train_batch = replace(  # Normalization
-            train_batch,
-            observation=current_agent.normalize_observation(train_batch.observation),
-        )
+
         # Make minibatches
         train_batch = train_batch.make_minibatches(
             key, self.num_minibatches, self.num_epochs
