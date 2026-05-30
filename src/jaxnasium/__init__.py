@@ -4,6 +4,7 @@ __version__ = version("jaxnasium")
 from jaxnasium import _registry, envs as envs, tree as tree
 
 from ._environment import (
+    ORIGINAL_OBSERVATION_KEY as ORIGINAL_OBSERVATION_KEY,
     Environment as Environment,
     EnvState as EnvState,
     TimeStep as TimeStep,
