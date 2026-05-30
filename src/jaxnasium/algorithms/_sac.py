@@ -491,9 +491,10 @@ class SAC(RLAlgorithm):
             )
             return updated_agent, None
 
-        update_keys = jax.random.split(key, self.alpha_num_epochs)
-        updated_agent, _ = jax.lax.scan(
-            scan_alpha_epoch_update, updated_agent, update_keys
-        )
+        if self.learn_alpha:
+            update_keys = jax.random.split(key, self.alpha_num_epochs)
+            updated_agent, _ = jax.lax.scan(
+                scan_alpha_epoch_update, updated_agent, update_keys
+            )
 
         return updated_agent
