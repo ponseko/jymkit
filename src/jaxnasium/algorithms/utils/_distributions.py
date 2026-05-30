@@ -106,7 +106,7 @@ class TanhNormal(distrax.Transformed):
         dist = distrax.Normal(loc=mean, scale=std)
         tanh = distrax.Tanh()
         scaler = distrax.ScalarAffine(shift=shift, scale=scale)
-        super().__init__(dist, distrax.Chain([tanh, scaler]))
+        super().__init__(dist, distrax.Chain([scaler, tanh]))
         self._mean = mean
         self._std = std
         self._shift = shift
