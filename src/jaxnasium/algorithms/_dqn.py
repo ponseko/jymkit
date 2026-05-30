@@ -80,11 +80,11 @@ class DQNAgent(RLAgent):
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
 
-    def update_normalizer(self, trajectory_batch: Transition):
-        updated_normalizer = self.normalizer.update(trajectory_batch)
+    def update_normalizer(self, batch: Transition):
+        updated_normalizer = self.normalizer.update(batch)
         return self.replace(normalizer=updated_normalizer)
 
-    def update_params(self, trajectory_batch: Transition, trainer: "DQN"):
+    def update_params(self, batch: Transition, trainer: "DQN"):
         @eqx.filter_grad
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
@@ -94,30 +94,25 @@ class DQNAgent(RLAgent):
             return jym.tree.mean(q_loss)
 
         obs, next_obs, reward = (
-            trajectory_batch.observation,
-            trajectory_batch.next_observation,
-            trajectory_batch.reward,
+            batch.observation,
+            batch.next_observation,
+            batch.reward,
         )
-        trajectory_batch = replace(
-            trajectory_batch,
+        batch = replace(
+            batch,
             observation=self.normalizer.normalize_obs(obs),
             next_observation=self.normalizer.normalize_obs(next_obs),
             reward=self.normalizer.normalize_reward(reward),
         )
 
         # Compute target
-        q_target_output = jax.vmap(self.critic_target)(
-            trajectory_batch.next_observation
-        )
+        q_target_output = jax.vmap(self.critic_target)(batch.next_observation)
         q_target_output = jym.tree.batch_sum(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
         )
-        target = (
-            trajectory_batch.reward
-            + ~trajectory_batch.terminated * trainer.gamma * q_target_output
-        )
+        target = batch.reward + ~batch.terminated * trainer.gamma * q_target_output
 
-        grads = __dqn_loss(self.critic, trajectory_batch)
+        grads = __dqn_loss(self.critic, batch)
         updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
         new_critic = eqx.apply_updates(self.critic, updates)
 
@@ -218,10 +213,10 @@ class DQN(RLAlgorithm):
 
             # Add new data to buffer & Sample update batch from the buffer
             buffer = buffer.insert(trajectory_batch)
-            train_data = buffer.sample(rng)
+            train_batch = buffer.sample(rng)
 
             # Update
-            updated_agent = agent.update_params(train_data, self)
+            updated_agent = agent.update_params(train_batch, self)
             self = replace(self, agent=updated_agent)
 
             runner_state = (self, buffer, env_state, last_obs, rng)

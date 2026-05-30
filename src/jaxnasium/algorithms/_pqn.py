@@ -77,11 +77,11 @@ class PQNAgent(RLAgent):
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
 
-    def update_normalizer(self, trajectory_batch: Transition):
-        updated_normalizer = self.normalizer.update(trajectory_batch)
+    def update_normalizer(self, batch: Transition):
+        updated_normalizer = self.normalizer.update(batch)
         return self.replace(normalizer=updated_normalizer)
 
-    def update_params(self, trajectory_batch: Transition, trainer: "PQN"):
+    def update_params(self, batch: Transition, trainer: "PQN"):
         @eqx.filter_grad
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
@@ -90,7 +90,7 @@ class PQNAgent(RLAgent):
             q_loss = optax.huber_loss(q_taken, train_batch.return_)
             return jym.tree.mean(q_loss)
 
-        grads = __dqn_loss(self.critic, trajectory_batch)
+        grads = __dqn_loss(self.critic, batch)
         updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
         new_critic = eqx.apply_updates(self.critic, updates)
 
@@ -273,10 +273,10 @@ class PQN(RLAlgorithm):
         return return_this_step, return_this_step
 
     def _update_agent_state(
-        self, key, current_agent: PQNAgent, train_data: Transition
+        self, key, current_agent: PQNAgent, trajectory_batch: Transition
     ) -> PQNAgent:
         def scan_epoch_update(current_agent: PQNAgent, key):
-            minibatches = train_data.make_minibatches(
+            minibatches = train_batch.make_minibatches(
                 key, self.num_minibatches, n_batch_axis=2
             )
 
@@ -286,9 +286,11 @@ class PQN(RLAlgorithm):
             updated_agent, _ = jax.lax.scan(do_update, current_agent, minibatches)
             return updated_agent, None
 
-        train_data = replace(
-            train_data,
-            observation=current_agent.normalizer.normalize_obs(train_data.observation),
+        train_batch = replace(
+            trajectory_batch,
+            observation=current_agent.normalizer.normalize_obs(
+                trajectory_batch.observation
+            ),
         )
         update_keys = jax.random.split(key, self.num_epochs)
         updated_agent, _ = jax.lax.scan(

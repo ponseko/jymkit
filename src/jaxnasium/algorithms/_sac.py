@@ -97,6 +97,16 @@ class SACAgent(RLAgent):
             return action_dist.mode()
         return action_dist.sample(seed=key)
 
+    def update_normalizer(self, batch: Transition):
+        updated_normalizer = self.normalizer.update(batch)
+        return self.replace(normalizer=updated_normalizer)
+
+    def normalize_observation(self, observations: PyTree):
+        return self.normalizer.normalize_obs(observations)
+
+    def normalize_reward(self, rewards: PyTree):
+        return self.normalizer.normalize_reward(rewards)
+
     def _compute_soft_target(self, action_dist, q, action_log_prob):
         if isinstance(action_dist, distrax.Categorical):
             action_log_prob = jnp.log(action_dist.probs + 1e-8)
@@ -107,19 +117,19 @@ class SACAgent(RLAgent):
             return weighted_target
         return target
 
-    def update_actor_params(self, key, trajectory_batch: Transition, trainer: "SAC"):
+    def update_actor_params(self, key, batch: Transition, trainer: "SAC"):
         @eqx.filter_grad
-        def __sac_actor_loss(params, batch: Transition):
-            action_dist = jax.vmap(params)(batch.observation)
+        def __sac_actor_loss(params, train_batch: Transition):
+            action_dist = jax.vmap(params)(train_batch.observation)
             action, log_prob = action_dist.sample_and_log_prob(seed=key)
-            q = ensambled_vmap(self.critics, batch.observation, action)
+            q = ensambled_vmap(self.critics, train_batch.observation, action)
             target = jym.tree.map_distribution(
                 self._compute_soft_target, action_dist, q, log_prob
             )
             target = jym.tree.batch_sum(target)
             return -jym.tree.mean(target)
 
-        actor_grads = __sac_actor_loss(self.actor, trajectory_batch)
+        actor_grads = __sac_actor_loss(self.actor, batch)
 
         updates, optimizer_state = trainer.optimizer["actor"].update(
             actor_grads, self.optimizer_state["actor"]
@@ -128,31 +138,24 @@ class SACAgent(RLAgent):
         optimizer_state = {**self.optimizer_state, "actor": optimizer_state}
         return self.replace(actor=new_actor, optimizer_state=optimizer_state)
 
-    def update_critics_params(self, key, trajectory_batch: Transition, trainer: "SAC"):
+    def update_critics_params(self, key, batch: Transition, trainer: "SAC"):
         @eqx.filter_grad
-        def __sac_qnet_loss(params, batch: Transition):
-            q_out = jax.vmap(params)(batch.observation, batch.action)
-            q_taken = jym.tree.gather_actions(q_out, batch.action)
+        def __sac_qnet_loss(params, train_batch: Transition):
+            q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
+            q_taken = jym.tree.gather_actions(q_out, train_batch.action)
             q_taken = jym.tree.batch_sum(q_taken)
             q_loss = optax.losses.huber_loss(q_taken, q_target)
             return jym.tree.mean(q_loss)
 
-        action_dist = jax.vmap(self.actor)(trajectory_batch.next_observation)
+        action_dist = jax.vmap(self.actor)(batch.next_observation)
         action, log_prob = action_dist.sample_and_log_prob(seed=key)
-        q = ensambled_vmap(
-            self.critics_target, trajectory_batch.next_observation, action
-        )
+        q = ensambled_vmap(self.critics_target, batch.next_observation, action)
         target = jym.tree.map_distribution(
             self._compute_soft_target, action_dist, q, log_prob
         )
         target = jym.tree.batch_sum(target)
-        q_target = (
-            trajectory_batch.reward
-            + (1.0 - trajectory_batch.terminated) * trainer.gamma * target
-        )
-        grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(
-            self.critics, trajectory_batch
-        )
+        q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
+        grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
         updates, optimizer_state = trainer.optimizer["critics"].update(
             grads, self.optimizer_state["critics"]
         )
@@ -170,9 +173,9 @@ class SACAgent(RLAgent):
             optimizer_state=optimizer_state,
         )
 
-    def update_alpha_params(self, key, trajectory_batch: Transition, trainer: "SAC"):
+    def update_alpha_params(self, key, batch: Transition, trainer: "SAC"):
         @eqx.filter_grad
-        def __sac_alpha_loss(params: Alpha, batch: Transition):
+        def __sac_alpha_loss(params: Alpha, train_batch: Transition):
             def _compute_alpha_signal(action_dist):
                 target_entropy = trainer.target_entropy
                 if isinstance(action_dist, distrax.Categorical):
@@ -187,7 +190,7 @@ class SACAgent(RLAgent):
                 else:  # Continuous action space
                     _, log_probs = action_dist.sample_and_log_prob(seed=key)
                     if target_entropy is None:
-                        action_dim = jnp.prod(jnp.array(batch.action.shape[1:]))
+                        action_dim = jnp.prod(jnp.array(train_batch.action.shape[1:]))
                         target_entropy = target_entropy_scale * -action_dim
                     return log_probs + target_entropy
 
@@ -197,8 +200,8 @@ class SACAgent(RLAgent):
 
         count = jym.tree.get_first(self.optimizer_state["alpha"], "count")
         target_entropy_scale = trainer.target_entropy_scale_schedule(count)
-        action_dist = jax.vmap(self.actor)(trajectory_batch.observation)
-        alpha_grads = __sac_alpha_loss(self.alpha, trajectory_batch)
+        action_dist = jax.vmap(self.actor)(batch.observation)
+        alpha_grads = __sac_alpha_loss(self.alpha, batch)
 
         updates, optimizer_state = trainer.optimizer["alpha"].update(
             alpha_grads, self.optimizer_state["alpha"]
@@ -206,16 +209,6 @@ class SACAgent(RLAgent):
         new_alpha = eqx.apply_updates(self.alpha, updates)
         optimizer_state = {**self.optimizer_state, "alpha": optimizer_state}
         return self.replace(alpha=new_alpha, optimizer_state=optimizer_state)
-
-    def update_normalizer(self, trajectory_batch: Transition):
-        updated_normalizer = self.normalizer.update(trajectory_batch)
-        return self.replace(normalizer=updated_normalizer)
-
-    def normalize_observation(self, observations: PyTree):
-        return self.normalizer.normalize_obs(observations)
-
-    def normalize_reward(self, rewards: PyTree):
-        return self.normalizer.normalize_reward(rewards)
 
 
 class SAC(RLAlgorithm):

@@ -71,8 +71,8 @@ class PPOAgent(RLAgent):
         observation = self.normalizer.normalize_obs(observation)
         return self.critic(observation)
 
-    def update_normalizer(self, trajectory_batch: Transition):
-        updated_normalizer = self.normalizer.update(trajectory_batch)
+    def update_normalizer(self, batch: Transition):
+        updated_normalizer = self.normalizer.update(batch)
         return self.replace(normalizer=updated_normalizer)
 
     def normalize_observation(self, observations: PyTree):
@@ -81,7 +81,7 @@ class PPOAgent(RLAgent):
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
 
-    def update_params(self, trajectory_batch: Transition, trainer: "PPO"):
+    def update_params(self, batch: Transition, trainer: "PPO"):
         @eqx.filter_grad
         def __ppo_los_fn(
             params: Tuple[ActorNetwork, ValueNetwork],
@@ -137,7 +137,7 @@ class PPOAgent(RLAgent):
             return total_loss  # , (actor_loss, value_loss, entropy)
 
         actor, critic = self.actor, self.critic
-        grads = __ppo_los_fn((actor, critic), trajectory_batch)
+        grads = __ppo_los_fn((actor, critic), batch)
         updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
         new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
         return self.replace(
@@ -325,21 +325,21 @@ class PPO(RLAlgorithm):
         return gae, (gae, gae + transition.value)
 
     def _update_agent_state(
-        self, key, current_agent: PPOAgent, train_data: Transition
+        self, key, current_agent: PPOAgent, trajectory_batch: Transition
     ) -> PPOAgent:
         """Creates minibatches and performs updates for multiple epochs. Returns the updated agent."""
 
         # (num_steps * num_envs, ...) > (batch_size, ...)
-        train_data = jax.tree.map(
+        train_batch = jax.tree.map(
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
-            train_data,
+            trajectory_batch,
         )
-        train_data = replace(  # Normalization
-            train_data,
-            observation=current_agent.normalize_observation(train_data.observation),
+        train_batch = replace(  # Normalization
+            train_batch,
+            observation=current_agent.normalize_observation(train_batch.observation),
         )
         # Make minibatches
-        train_data = train_data.make_minibatches(
+        train_batch = train_batch.make_minibatches(
             key, self.num_minibatches, self.num_epochs
         )
 
@@ -348,6 +348,6 @@ class PPO(RLAlgorithm):
             return agent, None
 
         updated_agent, _ = jax.lax.scan(
-            scan_update, current_agent, train_data, unroll=4
+            scan_update, current_agent, train_batch, unroll=4
         )
         return updated_agent
