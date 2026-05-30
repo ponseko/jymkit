@@ -29,6 +29,10 @@ class Transition(eqx.Module):
     advantage: Optional[Float[Array, "..."]] = None
     target: Optional[Float[Array, " "]] = None
 
+    def replace(self, **updates):
+        keys, values = zip(*updates.items())
+        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
+
     @property
     def structure(self) -> PyTreeDef:  # pyright: ignore[reportInvalidTypeForm]
         """
