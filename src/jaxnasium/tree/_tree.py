@@ -139,39 +139,45 @@ def tree_get_first(tree: PyTree, key: str) -> Any:
     return found_values_with_path[0][1]
 
 
-def tree_batch_sum(values, num_batch_dimensions=1):
+def tree_batch_sum(values, batch_axes: int | tuple[int, ...] = 0):
     """
     Sum over all non-batch axes of each leaf in a pytree, then sum (reduce) across leaves.
-    The batch dimension(s) is/are assumed to be the leading dimensions.
+    The batch axes(s) is/are assumed to be the leading axes.
 
     This is essentially `jaxnasium.tree.sum` or `optax.tree.sum` but with a variable
     axis argument resulting in a sum over all non-batch axes.
 
     **Arguments**:
-        values:  Pytree of JAX arrays. Every leaf must have at least `num_batch_dimensions` leading dimensions.
-        num_batch_dimensions: Number of leading batch axes (> 0).
+        values:  Pytree of JAX arrays. Every leaf must have at least `len(batch_axes)` leading dimensions.
+        batch_axes: Leading axes to exclude from the sum.
 
     **Returns**:
         A JAX array with the same shape as the batch dimensions.
 
     **Notes**:
-       - If `num_batch_dimensions == 0`, this sums the entire tree to a scalar result.
+       - For a single leaf with only batch dimensions, this is a no-op.
 
     **Example**:
         >>> tree = {"a": jnp.array([[1, 2], [3, 4]]), "b": jnp.array([[5, 6], [7, 8]])}
-        >>> tree_batch_sum(tree, num_batch_dimensions=1)
+        >>> tree_batch_sum(tree, batch_axes=0)
         Array([14, 22])
 
         >>> tree2 = {"x": jnp.ones((2, 3, 4)), "y": jnp.ones((2, 3, 4))}
-        >>> tree_batch_sum(tree2, num_batch_dimensions=2).shape
-        (2, 3)
-
-        >>> tree_batch_sum(tree2, num_batch_dimensions=0)
-        Array(48, dtype=int32)
+        >>> tree_batch_sum(tree2, batch_axes=(0, 1))
+        Array([[8., 8., 8.], [8., 8., 8.]])
 
     """
+
+    batch_axes = (batch_axes,) if isinstance(batch_axes, int) else tuple(batch_axes)
+    if batch_axes != tuple(range(len(batch_axes))):
+        raise ValueError(
+            f"batch_axes must be a leading prefix (0, 1, ..., k-1), got {batch_axes}"
+        )
+
+    num_batch_dimensions = len(batch_axes)
+
     assert all(x.ndim >= num_batch_dimensions for x in jax.tree.leaves(values)), (
-        f"Each array in the pytree must have at least `num_batch_dimensions` ({num_batch_dimensions}) dimensions, "
+        f"Each array in the pytree must have at least {num_batch_dimensions} leading batch dimensions, "
         f"but got {values}"
     )
     assert all(
