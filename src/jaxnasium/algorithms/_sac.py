@@ -109,7 +109,7 @@ class SACAgent(RLAgent):
 
     def _compute_soft_target(self, action_dist, q, action_log_prob):
         if isinstance(action_dist, distrax.Categorical):
-            action_log_prob = jnp.log(action_dist.probs + 1e-8)
+            action_log_prob = jax.nn.log_softmax(action_dist.logits)
         min_q = q.min(axis=0)
         target = min_q - self.alpha() * action_log_prob
         if isinstance(action_dist, distrax.Categorical):
@@ -180,7 +180,7 @@ class SACAgent(RLAgent):
                 target_entropy = trainer.target_entropy
                 if isinstance(action_dist, distrax.Categorical):
                     action_probs = action_dist.probs
-                    log_probs = jnp.log(action_probs + 1e-8)
+                    log_probs = jax.nn.log_softmax(action_dist.logits)
                     if target_entropy is None:
                         action_dim = jnp.prod(jnp.array(log_probs.shape[1:]))
                         target_entropy = (
