@@ -85,6 +85,10 @@ def tree_map_distribution(fn: Callable, tree, *rest):
     # any of *rest should also be converted:
     rest = tuple(r.distribution if isinstance(r, DistraxContainer) else r for r in rest)
 
+    if isinstance(tree, distrax.Joint):
+        tree = tree.distributions
+    rest = tuple(r.distributions if isinstance(r, distrax.Joint) else r for r in rest)
+
     return jax.tree.map(
         fn, tree, *rest, is_leaf=lambda x: isinstance(x, distrax.Distribution)
     )

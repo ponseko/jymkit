@@ -1,6 +1,7 @@
 from ._buffer import TransitionBuffer as TransitionBuffer
 from ._distributions import (
     DistraxContainer as DistraxContainer,
+    DistraxIndependentJoint as DistraxIndependentJoint,
     TanhNormalFactory as TanhNormalFactory,
 )
 from ._initialization import rl_initialization as rl_initialization
