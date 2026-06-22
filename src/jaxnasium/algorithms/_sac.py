@@ -107,24 +107,25 @@ class SACAgent(RLAgent):
     def normalize_reward(self, rewards: PyTree):
         return self.normalizer.normalize_reward(rewards)
 
-    def _compute_soft_target(self, action_dist, q, action_log_prob):
+    def _compute_soft_target(self, action_dist, q, action=None):
+        min_q = q.min(axis=0)
         if isinstance(action_dist, distrax.Categorical):
             action_log_prob = jax.nn.log_softmax(action_dist.logits)
-        min_q = q.min(axis=0)
-        target = min_q - self.alpha() * action_log_prob
-        if isinstance(action_dist, distrax.Categorical):
+            target = min_q - self.alpha() * action_log_prob
             weighted_target = (action_dist.probs * target).sum(axis=-1)
             return weighted_target
-        return target
+        assert action is not None
+        action_log_prob = action_dist.log_prob(action)
+        return min_q - self.alpha() * action_log_prob
 
     def update_actor_params(self, key, batch: Transition, trainer: "SAC"):
         @eqx.filter_grad
         def __sac_actor_loss(params, train_batch: Transition):
             action_dist = jax.vmap(params)(train_batch.observation)
-            action, log_prob = action_dist.sample_and_log_prob(seed=key)
+            action = action_dist.sample(seed=key)
             q = ensambled_vmap(self.critics, train_batch.observation, action)
             target = jym.tree.map_distribution(
-                self._compute_soft_target, action_dist, q, log_prob
+                self._compute_soft_target, action_dist, q, action
             )
             target = jym.tree.batch_sum(target)
             return -jym.tree.mean(target)
@@ -148,10 +149,10 @@ class SACAgent(RLAgent):
             return jym.tree.mean(q_loss)
 
         action_dist = jax.vmap(self.actor)(batch.next_observation)
-        action, log_prob = action_dist.sample_and_log_prob(seed=key)
+        action = action_dist.sample(seed=key)
         q = ensambled_vmap(self.critics_target, batch.next_observation, action)
         target = jym.tree.map_distribution(
-            self._compute_soft_target, action_dist, q, log_prob
+            self._compute_soft_target, action_dist, q, action
         )
         target = jym.tree.batch_sum(target)
         q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
@@ -190,7 +191,7 @@ class SACAgent(RLAgent):
                 else:  # Continuous action space
                     _, log_probs = action_dist.sample_and_log_prob(seed=key)
                     if target_entropy is None:
-                        action_dim = jnp.prod(jnp.array(train_batch.action.shape[1:]))
+                        action_dim = jnp.prod(jnp.array(log_probs.shape[1:]))
                         target_entropy = target_entropy_scale * -action_dim
                     return log_probs + target_entropy
 
@@ -258,7 +259,7 @@ class SAC(RLAlgorithm):
     gamma: float = 0.99
     max_grad_norm: float = 0.5
     num_steps: int = eqx.field(static=True, default=64)
-    replay_buffer_size: int = 500_000
+    replay_buffer_size: int = 50_000
     batch_size: int = 512
     init_alpha: float = 0.2
     learn_alpha: bool = eqx.field(static=True, default=True)
