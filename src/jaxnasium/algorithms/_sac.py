@@ -85,7 +85,7 @@ class SACAgent(RLAgent):
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
-            rew_shape=(trainer.num_steps, trainer.num_envs),
+            rew_shape=(trainer.rollout_length, trainer.num_envs),
         )
 
     def get_action(
@@ -258,7 +258,7 @@ class SAC(RLAlgorithm):
 
     gamma: float = 0.99
     max_grad_norm: float = 0.5
-    num_steps: int = eqx.field(static=True, default=64)
+    update_every: int = eqx.field(static=True, default=512)
     replay_buffer_size: int = 50_000
     batch_size: int = 512
     init_alpha: float = 0.2
@@ -293,11 +293,11 @@ class SAC(RLAlgorithm):
 
     @property
     def num_iterations(self):
-        return int(self.total_timesteps // self.num_steps // self.num_envs)
+        return int(self.total_timesteps // self.rollout_length // self.num_envs)
 
     @property
-    def update_every(self):
-        return int(self.num_steps * self.num_envs)
+    def rollout_length(self):
+        return int(self.update_every // self.num_envs)
 
     @property
     def num_training_updates_actor(self):
@@ -395,7 +395,7 @@ class SAC(RLAlgorithm):
             )
 
             # Build a single transition. Jax.lax.scan will build the batch
-            # returning num_steps transitions.
+            # returning rollout_length transitions.
             transition = Transition(
                 observation=last_obs,
                 action=action,
@@ -410,7 +410,7 @@ class SAC(RLAlgorithm):
             return rollout_state, transition
 
         if length is None:
-            length = self.num_steps
+            length = self.rollout_length
 
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(

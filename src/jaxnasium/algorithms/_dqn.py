@@ -51,7 +51,7 @@ class DQNAgent(RLAgent):
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
-            rew_shape=(trainer.num_steps, trainer.num_envs),
+            rew_shape=(trainer.rollout_length, trainer.num_envs),
         )
 
     def get_action(
@@ -165,7 +165,7 @@ class DQN(RLAlgorithm):
         return int(self.total_timesteps // self.update_every)
 
     @property
-    def num_steps(self):  # rollout length
+    def rollout_length(self):
         return int(self.update_every // self.num_envs)
 
     @property
@@ -272,7 +272,7 @@ class DQN(RLAlgorithm):
             return rollout_state, transition
 
         if length is None:
-            length = self.num_steps
+            length = self.rollout_length
 
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
