@@ -11,7 +11,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 import jaxnasium.tree
-from jaxnasium.algorithms.utils import DistraxIndependentJoint, TanhNormalFactory
+from jaxnasium.algorithms.utils import TanhNormalFactory
 
 from ._architectures import CNN, Identity
 
@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 def _is_callable_module(x) -> bool:
     """Check if x is a callable eqx.Module."""
     return isinstance(x, eqx.Module) and callable(x)
+
+
+def _is_distribution(x: Any) -> bool:
+    return isinstance(x, distrax.Distribution)
+
+
+def _make_independent(dist: distrax.Distribution) -> distrax.Distribution:
+    """Wraps a distrax distribution in an Independent distribution if the
+    output space is multi-dimensional and sets the event shape accordingly."""
+    ndims = len(dist.batch_shape)
+    if ndims == 0:
+        return dist  # Discrete, MultiDiscrete([n]), scalar Box
+    return distrax.Independent(dist, reinterpreted_batch_ndims=ndims)
 
 
 class AutoAgentObservationNet(eqx.Module):
@@ -126,6 +139,7 @@ class AutoAgentOutputNet(eqx.Module):
 
     networks: PyTree[eqx.Module]
     num_action_spaces: int = eqx.field(static=True)
+    assume_independent: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -135,6 +149,7 @@ class AutoAgentOutputNet(eqx.Module):
         *,
         discrete_output_dist: Literal["categorical",] | None = "categorical",
         continuous_output_dist: Literal["normal", "tanhnormal"] | None = "normal",
+        assume_independent: bool = True,
         **kwargs,
     ):
         def create_output_network(key: PRNGKeyArray, output_space: jym.Space):
@@ -157,6 +172,7 @@ class AutoAgentOutputNet(eqx.Module):
                 raise ValueError(f"Unsupported action space: {output_space}")
 
         self.num_action_spaces = len(jax.tree.leaves(output_space))
+        self.assume_independent = assume_independent
         keys = optax.tree.split_key_like(key, output_space)
         self.networks = jax.tree.map(
             lambda a, k: create_output_network(k, a), output_space, keys
@@ -177,13 +193,15 @@ class AutoAgentOutputNet(eqx.Module):
             is_leaf=_is_callable_module,
         )
 
-        # If outputs is a pytree of distributions, make it a Joint
-        output_dists = jax.tree.leaves(
-            outputs, is_leaf=lambda x: isinstance(x, distrax.Distribution)
-        )
-        if all(isinstance(o, distrax.Distribution) for o in output_dists):
-            if len(output_dists) != 1:
-                return DistraxIndependentJoint(outputs)
+        # Check if outputs are distributions (e.g. not true for Q networks)
+        dist_list = jax.tree.leaves(outputs, is_leaf=_is_distribution)
+        if all(_is_distribution(o) for o in dist_list):
+            if self.assume_independent:
+                outputs = jax.tree.map(
+                    _make_independent, outputs, is_leaf=_is_distribution
+                )
+                if len(dist_list) > 1:
+                    return distrax.Joint(outputs)
 
         return outputs
 

@@ -99,10 +99,6 @@ class PPOAgent(RLAgent):
             value = jax.vmap(critic)(train_batch.observation)
             init_log_prob = train_batch.log_prob
 
-            log_prob = jym.tree.batch_sum(log_prob)
-            init_log_prob = jym.tree.batch_sum(init_log_prob)
-            entropy = jym.tree.batch_sum(entropy)
-
             ratio = jnp.exp(log_prob - init_log_prob)
             _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
                 train_batch.advantage.std() + 1e-8

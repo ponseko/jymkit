@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 @eqx.filter_vmap(in_axes=(eqx.if_array(0), None, None))
 def ensambled_vmap(model, *x):
+    """Vmap the ensamble of critics."""
     return jax.vmap(model)(*x)
 
 
@@ -116,7 +117,9 @@ class SACAgent(RLAgent):
             return weighted_target
         assert action is not None
         action_log_prob = action_dist.log_prob(action)
-        return min_q - self.alpha() * action_log_prob
+        min_q = jym.tree.batch_sum(min_q)
+        target = min_q - self.alpha() * action_log_prob
+        return target
 
     def update_actor_params(self, key, batch: Transition, trainer: "SAC"):
         @eqx.filter_grad
