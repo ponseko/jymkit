@@ -230,6 +230,42 @@ class SAC(RLAlgorithm):
     learning_rate_alpha_start: float = 3e-3
     learning_rate_alpha_end: float | None = eqx.field(static=True, default=None)
 
+    target_entropy: float | None = eqx.field(static=True, default=None)
+    target_entropy_scale_start: float = 1.0
+    target_entropy_scale_end: float | None = eqx.field(static=True, default=None)
+    init_alpha: float = 0.2
+    learn_alpha: bool = eqx.field(static=True, default=True)
+
+    gamma: float = 0.99
+    max_grad_norm: float = 0.5
+    update_every: int = eqx.field(static=True, default=512)
+    replay_buffer_size: int = 50_000
+    batch_size: int = 512
+    tau: float = 0.95
+
+    actor_num_epochs: int = eqx.field(static=True, default=1)
+    actor_num_minibatches: int = eqx.field(static=True, default=1)
+    critics_num_epochs: int = eqx.field(static=True, default=8)
+    critics_num_minibatches: int = eqx.field(static=True, default=1)
+    alpha_num_epochs: int = eqx.field(static=True, default=1)
+    alpha_num_minibatches: int = eqx.field(static=True, default=1)
+    total_timesteps: int = eqx.field(static=True, default=int(1e6))
+    num_envs: int = eqx.field(static=True, default=8)
+
+    normalize_observations: bool = eqx.field(static=True, default=True)
+    normalize_rewards: bool = eqx.field(static=True, default=True)
+    actor_kwargs: dict[str, Any] = eqx.field(
+        static=True, default_factory=lambda: {"continuous_output_dist": "tanhNormal"}
+    )
+
+    @property
+    def target_entropy_scale_schedule(self):
+        return Schedule(
+            self.target_entropy_scale_start,
+            self.target_entropy_scale_end,
+            self.num_training_updates_alpha,
+        )
+
     @property
     def optimizer(self):
         def _create_optimizer(lr_schedule: Schedule):
@@ -258,41 +294,6 @@ class SAC(RLAlgorithm):
             "critics": _create_optimizer(critics_schedule),
             "alpha": _create_optimizer(alpha_schedule),
         }
-
-    gamma: float = 0.99
-    max_grad_norm: float = 0.5
-    update_every: int = eqx.field(static=True, default=512)
-    replay_buffer_size: int = 50_000
-    batch_size: int = 512
-    init_alpha: float = 0.2
-    learn_alpha: bool = eqx.field(static=True, default=True)
-    target_entropy: float | None = eqx.field(static=True, default=None)
-    target_entropy_scale_start: float = 1.0
-    target_entropy_scale_end: float | None = eqx.field(static=True, default=None)
-    tau: float = 0.95
-
-    actor_num_epochs: int = eqx.field(static=True, default=1)
-    actor_num_minibatches: int = eqx.field(static=True, default=1)
-    critics_num_epochs: int = eqx.field(static=True, default=8)
-    critics_num_minibatches: int = eqx.field(static=True, default=1)
-    alpha_num_epochs: int = eqx.field(static=True, default=1)
-    alpha_num_minibatches: int = eqx.field(static=True, default=1)
-    total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=8)
-
-    normalize_observations: bool = eqx.field(static=True, default=False)
-    normalize_rewards: bool = eqx.field(static=True, default=False)
-    actor_kwargs: dict[str, Any] = eqx.field(
-        static=True, default_factory=lambda: {"continuous_output_dist": "tanhNormal"}
-    )
-
-    @property
-    def target_entropy_scale_schedule(self):
-        return Schedule(
-            self.target_entropy_scale_start,
-            self.target_entropy_scale_end,
-            self.num_training_updates_alpha,
-        )
 
     @property
     def num_iterations(self):

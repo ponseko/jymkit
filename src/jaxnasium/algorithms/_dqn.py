@@ -14,7 +14,6 @@ from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.utils import (
-    DistraxContainer,
     Normalizer,
     Schedule,
     Transition,
@@ -65,7 +64,7 @@ class DQNAgent(RLAgent):
             assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
-        action_dist = DistraxContainer(
+        action_dist = distrax.Joint(  # support pytrees of output distributions
             jax.tree.map(lambda x: distrax.EpsilonGreedy(x, epsilon=epsilon), q_values)
         )
         return action_dist.sample(seed=key)
@@ -128,30 +127,32 @@ class DQN(RLAlgorithm):
     agent: DQNAgent = eqx.field(default=None)
     "State of the DQN agent, containing the networks, optimizer state and optional normalization running statistics."
 
-    learning_rate_start: float = 2.5e-4
-    learning_rate_end: float | None = eqx.field(static=True, default=0.0)
+    learning_rate_start: float = 2.5e-3
+    learning_rate_end: float | None = eqx.field(static=True, default=None)
+    epsilon_start: float = 0.1
+    epsilon_end: float | None = eqx.field(static=True, default=None)
     gamma: float = 0.99
     max_grad_norm: float = 1.0
     update_every: int = eqx.field(static=True, default=int(2e2))
     replay_buffer_size: int = int(1e4)
     batch_size: int = 64
-    epsilon_start: float = 0.1
-    epsilon_end: float | None = eqx.field(static=True, default=None)
     tau: float = 0.95
+
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=4)
-    normalize_observations: bool = eqx.field(static=True, default=False)
-    normalize_rewards: bool = eqx.field(static=True, default=False)
 
-    @property
-    def epsilon_schedule(self) -> Schedule:
-        return Schedule(self.epsilon_start, self.epsilon_end, self.num_training_updates)
+    normalize_observations: bool = eqx.field(static=True, default=True)
+    normalize_rewards: bool = eqx.field(static=True, default=True)
 
     @property
     def learning_rate_schedule(self) -> Schedule:
         return Schedule(
             self.learning_rate_start, self.learning_rate_end, self.num_training_updates
         )
+
+    @property
+    def epsilon_schedule(self) -> Schedule:
+        return Schedule(self.epsilon_start, self.epsilon_end, self.num_training_updates)
 
     @property
     def optimizer(self):
