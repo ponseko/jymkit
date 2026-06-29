@@ -14,7 +14,6 @@ from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.utils import (
-    DistraxContainer,
     Normalizer,
     Schedule,
     Transition,
@@ -62,7 +61,7 @@ class PQNAgent(RLAgent):
             assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
-        action_dist = DistraxContainer(
+        action_dist = distrax.Joint(
             jax.tree.map(lambda x: distrax.EpsilonGreedy(x, epsilon=epsilon), q_values)
         )
         return action_dist.sample(seed=key)
@@ -103,7 +102,7 @@ class PQN(RLAlgorithm):
     agent: PQNAgent = eqx.field(default=None)
 
     learning_rate_start: float = 2.5e-4
-    learning_rate_end: float | None = eqx.field(static=True, default=0.0)
+    learning_rate_end: float | None = eqx.field(static=True, default=None)
     epsilon_start: float = 0.1
     epsilon_end: float | None = eqx.field(static=True, default=None)
     gamma: float = 0.99
@@ -117,7 +116,7 @@ class PQN(RLAlgorithm):
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
 
     normalize_observations: bool = eqx.field(static=True, default=True)
-    normalize_rewards: bool = eqx.field(static=True, default=False)
+    normalize_rewards: bool = eqx.field(static=True, default=True)
 
     @property
     def learning_rate_schedule(self):
@@ -218,7 +217,7 @@ class PQN(RLAlgorithm):
         updated_self = runner_state[0]
         return updated_self
 
-    def _collect_rollout(self, rollout_state, env: Environment):
+    def _collect_rollout(self, rollout_state, env: Environment, length=None):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
@@ -255,9 +254,12 @@ class PQN(RLAlgorithm):
             rollout_state = (env_state, obsv, rng)
             return rollout_state, transition
 
+        if length is None:
+            length = self.num_steps
+
         # Do rollout
         rollout_state, trajectory_batch = jax.lax.scan(
-            env_step, rollout_state, None, self.num_steps
+            env_step, rollout_state, None, length
         )
 
         return rollout_state, trajectory_batch
