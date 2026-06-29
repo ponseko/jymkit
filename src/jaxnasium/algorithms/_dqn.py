@@ -12,16 +12,17 @@ from jaxtyping import PRNGKeyArray, PyTree
 import jaxnasium as jym
 from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
-from jaxnasium.algorithms import RLAgent, RLAlgorithm
-from jaxnasium.algorithms.utils import (
+from jaxnasium.algorithms import (
     Normalizer,
+    RLAgent,
+    RLAlgorithm,
     Schedule,
     Transition,
     TransitionBuffer,
     scan_callback,
 )
 
-from .networks import QValueNetwork
+from .agent_networks import QValueNetwork
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,5 @@
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 import equinox as eqx
@@ -8,6 +9,7 @@ from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
 
 if TYPE_CHECKING:
     from ._normalization import Normalizer
+
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,12 @@ class Transition(eqx.Module):
             ``(final_carry, outputs)`` where in multi-agent mode every output
             has been merged back into the original per-agent pytree structure.
         """
+
+        warnings.warn(
+            "Transition.scan is deprecated.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         structure = self.structure
 

@@ -6,10 +6,12 @@ import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium.algorithms.utils import rl_initialization
-
-from ._architectures import MLP
-from ._input_output import AutoAgentObservationNet, AutoAgentOutputNet
+from jaxnasium.algorithms import (
+    MLP,
+    AutoAgentObservationNet,
+    AutoAgentOutputNet,
+    rl_initialization,
+)
 
 logger = logging.getLogger(__name__)
 

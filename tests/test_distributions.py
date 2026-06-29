@@ -4,7 +4,7 @@ import distrax
 import jax
 import jax.numpy as jnp
 
-from jaxnasium.algorithms.utils._distributions import (
+from jaxnasium.algorithms._core._distributions import (
     DistraxContainer,
     _transpose_tree_of_tuples,
 )
