@@ -33,6 +33,7 @@ class Transition(eqx.Module):
     return_: Optional[Float[Array, " "]] = None
     advantage: Optional[Float[Array, "..."]] = None
     target: Optional[Float[Array, " "]] = None
+    PER_weight: Optional[Float[Array, " "]] = None
 
     def replace(self, **updates):
         keys, values = zip(*updates.items())

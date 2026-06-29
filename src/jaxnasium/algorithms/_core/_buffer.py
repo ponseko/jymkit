@@ -286,7 +286,7 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
     def sample(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, key: PRNGKeyArray, with_replacement: bool = False
-    ) -> tuple[Transition, Array, Array]:
+    ) -> tuple[Transition, Array]:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
         of length ``n_steps`` when ``n_steps > 1``, otherwise a batch of single transitions.
@@ -297,9 +297,9 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
         When `vectorized_env` is True, the vectorized environment axis is collapsed into
         the batch dimension of the returned transitions.
 
-        Alongside the Transition batch, this PER returns the importance-sampling weights
-        and the flat buffer indices of the sampled sequence starts as
-        ``(Transition, weights, indices)``.
+        Alongside the Transition batch, this PER adds the PER_weights
+        to the Transition batch and returns the indices of the sampled sequence starts as
+        ``(Transition, flat_indices)``.
         """
         flat_valid_start_indices = self._get_flat_valid_start_indices()
         flat_priorities = self.priorities.reshape(-1)
@@ -326,7 +326,9 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         batch = self._gather_batch(flat_indices)
 
-        return batch, weights, flat_indices
+        batch = batch.replace(PER_weight=weights)
+
+        return batch, flat_indices
 
     def update_priorities(self, indices: Array, td_errors: Array) -> Self:
         """
@@ -348,4 +350,9 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         buffer = eqx.tree_at(lambda b: b.priorities, self, new_priorities)
         buffer = eqx.tree_at(lambda b: b.max_priority, buffer, max_priority)
+        return buffer
+
+    def update_beta(self, beta: float) -> Self:
+        """Update the beta parameter of the buffer."""
+        buffer = eqx.tree_at(lambda b: b.beta, self, beta)
         return buffer
