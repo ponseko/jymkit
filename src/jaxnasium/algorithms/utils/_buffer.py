@@ -4,7 +4,7 @@ import warnings
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 from typing_extensions import Self
 
 from ._transition import Transition
@@ -145,18 +145,26 @@ class TransitionBuffer(eqx.Module):
         the batch dimension of the returned transitions.
         """
 
-        valid_start_indices = self._get_valid_start_indices()
+        flat_valid_start_indices = self._get_flat_valid_start_indices()
 
-        flat_indices = self._sample_flat_indices(
-            key, valid_start_indices, with_replacement
-        )
+        if with_replacement:
+            probs = flat_valid_start_indices.astype(jnp.float32) / jnp.maximum(
+                flat_valid_start_indices.sum(), 1
+            )
+            flat_indices = jax.random.choice(
+                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
+            )
+        else:
+            id_probs = jax.random.uniform(key, (self.max_size,))
+            id_probs = jnp.where(flat_valid_start_indices, id_probs, -jnp.inf)
+            flat_indices = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
 
         batch = self._gather_batch(flat_indices)
 
         return batch
 
-    def _get_valid_start_indices(self) -> jnp.ndarray:
-        """Boolean mask over per-env time indices that can start a valid sequence."""
+    def _get_flat_valid_start_indices(self) -> jnp.ndarray:
+        """Boolean mask over time indices that can start a valid sequence."""
         start_indices = jnp.arange(self.max_size_per_env)
         if self.n_steps == 1:
             # All sequences are valid as long as the data is written to (index < size)
@@ -180,42 +188,18 @@ class TransitionBuffer(eqx.Module):
 
             valid_indices = jax.lax.select(not_full, valid_not_full, valid_full)
 
-        # Broadcast valid indices to each environment stream.
+        # Broadcast valid indices to each environment stream and flatten
         valid_indices = jnp.broadcast_to(
             valid_indices[:, None], (self.max_size_per_env, self.num_vec_envs or 1)
         ).reshape(-1)
 
         return valid_indices
 
-    def _sample_flat_indices(
-        self,
-        key: PRNGKeyArray,
-        valid_start_indices: Array,
-        with_replacement: bool,
-    ) -> Array:
-        if with_replacement:
-            probs = valid_start_indices.astype(jnp.float32) / jnp.maximum(
-                valid_start_indices.sum(), 1
-            )
-            flat_indices = jax.random.choice(
-                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
-            )
-        else:
-            id_probs = jax.random.uniform(key, (self.max_size,))
-            id_probs = jnp.where(valid_start_indices, id_probs, -jnp.inf)
-            flat_indices = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
-
-        return flat_indices
-
     def _gather_batch(self, flat_indices: Array) -> Transition:
-        # Decode flat (time, env) indices (row-major over the grid above).
-        num_vec_envs = self.num_vec_envs or 1
-
-        start_indices = flat_indices // num_vec_envs
-        env_indices = flat_indices % num_vec_envs
+        step_indices, env_indices = self._flat_to_step_and_env_indices(flat_indices)
 
         window_idx = (
-            start_indices[:, None] + jnp.arange(self.n_steps)[None, :]
+            step_indices[:, None] + jnp.arange(self.n_steps)[None, :]
         ) % self.max_size_per_env
 
         if self.vectorized_env:
@@ -230,3 +214,138 @@ class TransitionBuffer(eqx.Module):
             batch = jax.tree.map(lambda x: x[:, 0], batch)
 
         return batch
+
+    def _flat_to_step_and_env_indices(self, flat_indices: Array) -> tuple[Array, Array]:
+        num_vec_envs = self.num_vec_envs or 1
+        step_indices = flat_indices // num_vec_envs
+        env_indices = flat_indices % num_vec_envs
+        return step_indices, env_indices
+
+
+class PrioritizedTransitionBuffer(TransitionBuffer):
+    """
+    A circular buffer with Prioritized Experience Replay
+
+    **Additional arguments**:
+        `alpha`: Exponent controlling how strongly priorities bias sampling.
+            `0` recovers uniform sampling, `1` samples fully proportionally.
+        `beta`: Exponent for the importance-sampling correction. May be annealed externally.
+        `eps`: Small constant added to `|TD-error|` so no transition ever
+            gets a zero probability of being sampled.
+    """
+
+    priorities: Array
+    max_priority: Float[Array, " "]
+    alpha: float
+    beta: float
+    eps: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        max_size: int,
+        sample_batch_size: int,
+        data_sample: Transition,
+        vectorized_env: bool = True,
+        n_steps: int = 1,
+        alpha: float = 0.6,
+        beta: float = 0.4,
+        eps: float = 1e-6,
+        **kwargs,
+    ):
+        super().__init__(
+            max_size=max_size,
+            sample_batch_size=sample_batch_size,
+            data_sample=data_sample,
+            vectorized_env=vectorized_env,
+            n_steps=n_steps,
+            **kwargs,
+        )
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+        if self.vectorized_env:
+            self.priorities = jnp.zeros(
+                (self.max_size_per_env, self.num_vec_envs), dtype=jnp.float32
+            )
+        else:
+            self.priorities = jnp.zeros((self.max_size_per_env,), dtype=jnp.float32)
+        self.max_priority = jnp.array(1.0, dtype=jnp.float32)
+
+    def insert(self, transition: Transition) -> Self:
+        """
+        Insert a transition into the buffer.
+        Maximum priority is assigned to the new insertion such that it is sampled at least once.
+        """
+        idx = self._destination_indices(transition)
+        buffer = super().insert(transition)
+
+        new_priorities = buffer.priorities.at[idx].set(self.max_priority)
+        buffer = eqx.tree_at(lambda b: b.priorities, buffer, new_priorities)
+
+        return buffer
+
+    def sample(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, key: PRNGKeyArray, with_replacement: bool = False
+    ) -> tuple[Transition, Array, Array]:
+        """
+        Sample a batch of transitions from the buffer. Samples a batch of sequences
+        of length ``n_steps`` when ``n_steps > 1``, otherwise a batch of single transitions.
+
+        When `n_steps=1`, returns shape `(sample_batch_size, ...)`.
+        When `n_steps > 1`, returns shape `(sample_batch_size, n_steps, ...)`.
+
+        When `vectorized_env` is True, the vectorized environment axis is collapsed into
+        the batch dimension of the returned transitions.
+
+        Alongside the Transition batch, this PER returns the importance-sampling weights
+        and the flat buffer indices of the sampled sequence starts as
+        ``(Transition, weights, indices)``.
+        """
+        flat_valid_start_indices = self._get_flat_valid_start_indices()
+        flat_priorities = self.priorities.reshape(-1)
+        scaled_priorities = jnp.where(
+            flat_valid_start_indices, flat_priorities**self.alpha, 0.0
+        )
+        probs = scaled_priorities / jnp.maximum(scaled_priorities.sum(), 1e-8)
+
+        if with_replacement:
+            flat_indices = jax.random.choice(
+                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
+            )
+        else:
+            gumbel = jax.random.gumbel(key, (self.max_size,))
+            keys_ = jnp.where(
+                flat_valid_start_indices, jnp.log(probs + 1e-12) + gumbel, -jnp.inf
+            )
+            flat_indices = jax.lax.top_k(keys_, self.sample_batch_size)[1]
+
+        num_valid = flat_valid_start_indices.sum()
+        sample_probs = probs[flat_indices]
+        weights = (num_valid * sample_probs) ** (-self.beta)
+        weights = weights / jnp.maximum(weights.max(), 1e-8)
+
+        batch = self._gather_batch(flat_indices)
+
+        return batch, weights, flat_indices
+
+    def update_priorities(self, indices: Array, td_errors: Array) -> Self:
+        """
+        Refresh the priorities of the given buffer indices from new TD errors.
+
+        **Arguments**:
+            `indices`: Flat buffer start indices to update, i.e. the `indices` returned by `sample`.
+            `td_errors`: TD errors (or any priority signal) for those indices.
+        """
+        priorities = jnp.abs(td_errors) + self.eps
+        step_indices, env_indices = self._flat_to_step_and_env_indices(indices)
+        if self.vectorized_env:
+            new_priorities = self.priorities.at[step_indices, env_indices].set(
+                priorities
+            )
+        else:
+            new_priorities = self.priorities.at[step_indices].set(priorities)
+        max_priority = jnp.maximum(self.max_priority, priorities.max())
+
+        buffer = eqx.tree_at(lambda b: b.priorities, self, new_priorities)
+        buffer = eqx.tree_at(lambda b: b.max_priority, buffer, max_priority)
+        return buffer
