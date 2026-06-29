@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import pytest
 
 from jaxnasium.algorithms.utils import Transition, TransitionBuffer
+from jaxnasium.algorithms.utils._buffer import PrioritizedTransitionBuffer
 
 AGENTS = ("agent0", "agent1")
 
@@ -228,7 +229,7 @@ def test_sequence_sample_does_not_cross_write_seam():
     buffer = buffer.insert(first)
     buffer = buffer.insert(second)
 
-    valid = buffer._get_valid_start_indices()
+    valid = buffer._get_flat_valid_start_indices()
     assert valid.shape == (buffer.max_size,)
     assert valid.tolist() == [True, False, True, True]
 
@@ -397,3 +398,182 @@ def test_insert_and_sample_are_jittable(multi_agent):
 
     batch = step(buffer, make_rollout(), jax.random.PRNGKey(8))
     assert leaf(batch).shape == expected_shape
+
+
+def test_per_priority_storage_shape():
+    vec_data = _make_single_agent_transition(1, num_envs=3)
+    vec_buffer = PrioritizedTransitionBuffer(
+        max_size=12,
+        sample_batch_size=2,
+        data_sample=vec_data,
+    )
+    assert vec_buffer.priorities.shape == (4, 3)
+
+    non_vec_data = Transition(
+        observation=jnp.zeros((1, 3)),
+        action=jnp.zeros((1,)),
+        reward=jnp.zeros((1,)),
+        terminated=jnp.zeros((1,), dtype=bool),
+        truncated=jnp.zeros((1,), dtype=bool),
+    )
+    non_vec_buffer = PrioritizedTransitionBuffer(
+        max_size=6,
+        sample_batch_size=2,
+        data_sample=non_vec_data,
+        vectorized_env=False,
+    )
+    assert non_vec_buffer.priorities.shape == (6,)
+
+
+def test_per_insert_sets_max_priority_on_written_slots():
+    num_envs = 3
+    buffer = PrioritizedTransitionBuffer(
+        max_size=12,
+        sample_batch_size=2,
+        data_sample=_make_single_agent_transition(1, num_envs=num_envs),
+    )
+    buffer = buffer.insert(_make_single_agent_transition(2, num_envs=num_envs))
+
+    assert jnp.allclose(buffer.priorities[0], buffer.max_priority)
+    assert jnp.allclose(buffer.priorities[1], buffer.max_priority)
+    assert buffer.priorities[2:].sum() == 0.0
+
+
+@pytest.mark.parametrize("num_envs", [1, 3])
+@pytest.mark.parametrize("n_steps", [1, 2])
+@pytest.mark.parametrize("with_replacement", [False, True])
+def test_per_sample_shapes(num_envs, n_steps, with_replacement):
+    max_size = 24 if num_envs > 1 else 8
+    sample_batch_size = min(4, num_envs * (max_size // num_envs - n_steps + 1))
+    data_sample = _make_single_agent_transition(1, num_envs)
+
+    buffer = PrioritizedTransitionBuffer(
+        max_size=max_size,
+        sample_batch_size=sample_batch_size,
+        data_sample=data_sample,
+        n_steps=n_steps,
+    )
+    buffer = buffer.insert(_make_single_agent_transition(8, num_envs))
+
+    batch, weights, flat_indices = buffer.sample(
+        jax.random.PRNGKey(0), with_replacement=with_replacement
+    )
+
+    _assert_sample_batch_shapes(
+        batch, sample_batch_size=sample_batch_size, n_steps=n_steps
+    )
+    assert weights.shape == (sample_batch_size,)
+    assert flat_indices.shape == (sample_batch_size,)
+
+
+def test_per_weights_are_max_normalized():
+    buffer = PrioritizedTransitionBuffer(
+        max_size=8,
+        sample_batch_size=4,
+        data_sample=_make_single_agent_transition(1),
+        alpha=0.6,
+        beta=0.4,
+    )
+    buffer = buffer.insert(_make_single_agent_transition(8))
+
+    _, weights, _ = buffer.sample(jax.random.PRNGKey(1), with_replacement=False)
+    assert float(weights.max()) == pytest.approx(1.0)
+    assert jnp.all(weights > 0)
+
+
+def test_per_update_priorities_decodes_flat_indices():
+    num_envs = 2
+    buffer = PrioritizedTransitionBuffer(
+        max_size=8,
+        sample_batch_size=1,
+        data_sample=_make_single_agent_transition(1, num_envs=num_envs),
+        eps=1e-6,
+    )
+    buffer = buffer.insert(_make_single_agent_transition(4, num_envs))
+
+    flat_index = jnp.array([5])  # step 2, env 1
+    td_error = jnp.array([2.5])
+    buffer = buffer.update_priorities(flat_index, td_error)
+
+    assert buffer.priorities[2, 1] == pytest.approx(2.5 + 1e-6)
+    assert buffer.priorities[2, 0] == pytest.approx(1.0)
+
+
+def test_per_update_priorities_increases_max_priority():
+    buffer = PrioritizedTransitionBuffer(
+        max_size=4,
+        sample_batch_size=1,
+        data_sample=_make_single_agent_transition(1),
+    )
+    buffer = buffer.insert(_make_single_agent_transition(4))
+    assert float(buffer.max_priority) == pytest.approx(1.0)
+
+    buffer = buffer.update_priorities(jnp.array([0]), jnp.array([10.0]))
+    assert float(buffer.max_priority) == pytest.approx(10.0)
+
+
+def test_per_high_priority_indices_are_sampled_more():
+    buffer = PrioritizedTransitionBuffer(
+        max_size=8,
+        sample_batch_size=1,
+        data_sample=_make_single_agent_transition(1),
+        alpha=1.0,
+        beta=0.0,
+    )
+    buffer = buffer.insert(_make_single_agent_transition(8))
+
+    flat_indices = jnp.arange(8)
+    td_errors = jnp.zeros(8).at[3].set(100.0)
+    buffer = buffer.update_priorities(flat_indices, td_errors)
+
+    keys = jax.random.split(jax.random.PRNGKey(2), 64)
+    sampled = []
+    for key in keys:
+        _, _, idx = buffer.sample(key, with_replacement=True)
+        sampled.append(int(idx[0]))
+
+    assert all(i == 3 for i in sampled)
+
+
+def test_per_n_step_multi_env_windows_stay_within_env():
+    num_envs = 3
+    buffer = PrioritizedTransitionBuffer(
+        max_size=30,
+        sample_batch_size=6,
+        data_sample=_make_multi_agent_transition(1, num_envs),
+        n_steps=3,
+        alpha=0.6,
+        beta=0.4,
+    )
+    buffer = buffer.insert(_make_multi_agent_transition(10, num_envs, encode=True))
+
+    for key in jax.random.split(jax.random.PRNGKey(3), 16):
+        batch, _, _ = buffer.sample(key, with_replacement=False)
+        for agent in ("agent0", "agent1"):
+            _assert_encoded_windows_are_contiguous(
+                batch.observation[agent][..., 0], num_envs, n_steps=3
+            )
+
+
+def test_per_insert_sample_update_are_jittable():
+    buffer = PrioritizedTransitionBuffer(
+        max_size=8,
+        sample_batch_size=2,
+        data_sample=_make_single_agent_transition(1, num_envs=2),
+        n_steps=1,
+    )
+
+    @eqx.filter_jit
+    def step(buf, transition, key):
+        buf = buf.insert(transition)
+        batch, weights, indices = buf.sample(key, with_replacement=True)
+        buf = buf.update_priorities(indices, jnp.ones(indices.shape[0]))
+        return batch, weights
+
+    batch, weights = step(
+        buffer,
+        _make_single_agent_transition(4, num_envs=2),
+        jax.random.PRNGKey(4),
+    )
+    assert batch.observation.shape == (2, 3)
+    assert weights.shape == (2,)
