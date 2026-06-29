@@ -31,6 +31,8 @@ class DistraxContainer(eqx.Module):
         warnings.warn(
             "DistraxContainer is deprecated in favor of "
             "distrax.Joints combined with distrax.Independent.",
+            DeprecationWarning,
+            stacklevel=2,
         )
 
     def __getattr__(self, name):

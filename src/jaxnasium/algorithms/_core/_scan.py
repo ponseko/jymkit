@@ -1,11 +1,10 @@
+import warnings
 from typing import Callable, TypeVar
 
 import jax
 from jaxtyping import PRNGKeyArray
 
 from ._transition import Transition
-
-jax.lax.scan
 
 Carry = TypeVar("Carry")
 Y = TypeVar("Y")
@@ -38,6 +37,13 @@ def scan_transitions(
     Returns:
         A tuple of (final carry, stacked outputs)
     """
+
+    warnings.warn(
+        "scan_transitions is deprecated.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     assert num_epochs >= 1, "num_epochs must be at least 1"
     assert num_minibatches >= 1, "num_minibatches must be at least 1"
     if num_epochs == 1 and num_minibatches == 1:

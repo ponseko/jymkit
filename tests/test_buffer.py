@@ -3,8 +3,11 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jaxnasium.algorithms.utils import Transition, TransitionBuffer
-from jaxnasium.algorithms.utils._buffer import PrioritizedTransitionBuffer
+from jaxnasium.algorithms import (
+    PrioritizedTransitionBuffer,
+    Transition,
+    TransitionBuffer,
+)
 
 AGENTS = ("agent0", "agent1")
 
