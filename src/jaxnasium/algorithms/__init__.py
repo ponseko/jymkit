@@ -18,6 +18,7 @@ try:
         Transition as Transition,
         TransitionBuffer as TransitionBuffer,
         pretty_print_network as pretty_print_network,
+        rl_initialization as rl_initialization,
         scan_callback as scan_callback,
     )
     from ._dqn import DQN as DQN

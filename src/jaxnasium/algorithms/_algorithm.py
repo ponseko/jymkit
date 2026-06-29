@@ -226,7 +226,7 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
 
         auto_upgrade_multi_agent = getattr(trainer, "auto_upgrade_multi_agent", False)
         if getattr(env, "multi_agent", False) and auto_upgrade_multi_agent:
-            from .utils._multi_agent import (
+            from ._core._multi_agent import (
                 MultiAgentWrapper,
                 map_multi_agent,
                 to_per_agent,
