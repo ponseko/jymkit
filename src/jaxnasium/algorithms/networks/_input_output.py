@@ -11,7 +11,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 import jaxnasium.tree
-from jaxnasium.algorithms.utils import TanhNormalFactory
+from jaxnasium.algorithms.utils import DistraxIndependentJoint, TanhNormalFactory
 
 from ._architectures import CNN, Identity
 
@@ -170,12 +170,22 @@ class AutoAgentOutputNet(eqx.Module):
                 is_leaf=_is_callable_module,
             )
 
-        return jax.tree.map(
+        outputs = jax.tree.map(
             lambda layer, mask: layer(x, mask),
             self.networks,
             action_mask,
             is_leaf=_is_callable_module,
         )
+
+        # If outputs is a pytree of distributions, make it a Joint
+        output_dists = jax.tree.leaves(
+            outputs, is_leaf=lambda x: isinstance(x, distrax.Distribution)
+        )
+        if all(isinstance(o, distrax.Distribution) for o in output_dists):
+            if len(output_dists) != 1:
+                return DistraxIndependentJoint(outputs)
+
+        return outputs
 
 
 class DiscreteOutputNetwork(eqx.Module):
@@ -309,7 +319,7 @@ class ContinuousOutputNetwork(eqx.Module):
 
         mean = logits[..., 0]
         log_std = logits[..., 1]
-        log_std = jnp.clip(log_std, -20, 2)
-        std = jax.nn.softplus(log_std)
+        log_std = jnp.clip(logits[..., 1], -5, 2)
+        std = jnp.exp(log_std)
 
         return self.distribution(mean, std)

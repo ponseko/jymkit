@@ -1,13 +1,12 @@
 import logging
 
-import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium.algorithms.utils import DistraxContainer, rl_initialization
+from jaxnasium.algorithms.utils import rl_initialization
 
 from ._architectures import MLP
 from ._input_output import AutoAgentObservationNet, AutoAgentOutputNet
@@ -70,12 +69,7 @@ class ActorNetwork(eqx.Module):
 
         x = self.obs_processor(x)
         x = self.mlp(x)
-        action_dists = self.output_layers(x, action_mask)
-        if isinstance(action_dists, distrax.Distribution):
-            return action_dists  # Single distribution
-
-        # Else return a grouped container of distributions
-        return DistraxContainer(action_dists)
+        return self.output_layers(x, action_mask)
 
 
 class ValueNetwork(eqx.Module):
@@ -158,7 +152,7 @@ class QValueNetwork(eqx.Module):
         self.mlp = rl_initialization(key_mlp, self.mlp)
         self.output_layers = rl_initialization(key_out, self.output_layers)
 
-    def __call__(self, x, action=None):
+    def __call__(self, x, action=None) -> Array | PyTree[Array]:
         action_mask = None
         if isinstance(x, jym.AgentObservation):
             action_mask = x.action_mask

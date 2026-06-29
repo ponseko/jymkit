@@ -171,8 +171,9 @@ class Normalizer(eqx.Module):
 
     def __init__(
         self,
-        dummy_obs: PyTree | None,
+        dummy_obs: PyTree | None = None,
         *,
+        obs_space: PyTree[jym.Space] | None = None,
         normalize_obs: bool = True,
         normalize_rew: bool = True,
         gamma: float | None = 0.99,
@@ -182,9 +183,13 @@ class Normalizer(eqx.Module):
         self.reward = None
 
         if normalize_obs:
-            assert dummy_obs is not None, (
-                "When normalizing observations, a dummy observation must be provided."
+            assert dummy_obs is not None or obs_space is not None, (
+                "When normalizing observations, a dummy observation or observation space must be provided."
             )
+            if dummy_obs is None:
+                dummy_obs = jax.tree.map(
+                    lambda space: space.sample(jax.random.PRNGKey(0)), obs_space
+                )
             if isinstance(dummy_obs, jym.AgentObservation):
                 dummy_obs = dummy_obs.observation
             self.obs = RunningStatisticsState(dummy_obs)

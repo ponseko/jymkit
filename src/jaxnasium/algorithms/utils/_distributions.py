@@ -1,3 +1,4 @@
+import warnings
 from functools import partial
 from typing import Callable
 
@@ -21,10 +22,51 @@ def _transpose_tree_of_tuples(r, outer_treedef):
     return jax.tree.transpose(outer_treedef, inner_treedef, r)
 
 
+class DistraxIndependentJoint(distrax.Joint):
+    """A (joint) distribution that assumes all inner distributions are independent
+    when computing entropies and log probabilities
+    """
+
+    def _wrap_each_w_independent(self) -> "DistraxIndependentJoint":
+        def _wrap_distributions(dists):
+            if isinstance(dists, distrax.Joint):
+                return DistraxIndependentJoint(_wrap_distributions(dists.distributions))
+            if isinstance(dists, distrax.Independent):
+                return dists
+            if isinstance(dists, distrax.Distribution):
+                return distrax.Independent(dists)
+            return jax.tree.map(
+                _wrap_distributions,
+                dists,
+                is_leaf=lambda x: isinstance(x, distrax.Distribution),
+            )
+
+        return DistraxIndependentJoint(_wrap_distributions(self.distributions))
+
+    def entropy(self):
+        wrapped = self._wrap_each_w_independent()
+        return super(self.__class__, wrapped).entropy()
+
+    def log_prob(self, value):
+        wrapped = self._wrap_each_w_independent()
+        return super(self.__class__, wrapped).log_prob(value)
+
+    def sample_and_log_prob(self, *, seed, sample_shape=()):
+        wrapped = self._wrap_each_w_independent()
+        return super(self.__class__, wrapped).sample_and_log_prob(
+            seed=seed, sample_shape=sample_shape
+        )
+
+
 class DistraxContainer(eqx.Module):
     """Container for (possibly nested as PyTrees) distrax distributions."""
 
     distribution: distrax.Distribution | PyTree[distrax.Distribution]
+
+    def __check_init__(self):
+        warnings.warn(
+            "DistraxContainer is deprecated. Please use DistraxIndependentJoint instead."
+        )
 
     def __getattr__(self, name):
         if isinstance(self.distribution, distrax.Distribution):
@@ -101,12 +143,21 @@ class DistraxContainer(eqx.Module):
         )
 
 
+class Tanh(distrax.Tanh):
+    # https://github.com/google-deepmind/distrax/issues/216
+    def inverse_and_log_det(self, y):
+        # tanh.log_prob may fail due to machine precision
+        eps = jnp.finfo(y.dtype).eps
+        y = jnp.clip(y, -1 + eps, 1 - eps)
+        return super().inverse_and_log_det(y)
+
+
 class TanhNormal(distrax.Transformed):
     def __init__(self, mean, std, shift=0.0, scale=1.0):
         dist = distrax.Normal(loc=mean, scale=std)
-        tanh = distrax.Tanh()
+        tanh = Tanh()
         scaler = distrax.ScalarAffine(shift=shift, scale=scale)
-        super().__init__(dist, distrax.Chain([tanh, scaler]))
+        super().__init__(dist, distrax.Chain([scaler, tanh]))
         self._mean = mean
         self._std = std
         self._shift = shift
