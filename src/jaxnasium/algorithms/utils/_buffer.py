@@ -1,38 +1,60 @@
+import logging
+import warnings
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
-from jaxtyping import PRNGKeyArray
+from jaxtyping import Array, PRNGKeyArray
+from typing_extensions import Self
 
 from ._transition import Transition
+
+logger = logging.getLogger(__name__)
 
 
 class TransitionBuffer(eqx.Module):
     """
-    A buffer for storing transitions. Samples uniformly from the buffer.
-    The buffer is implemented as a circular buffer, where the oldest transitions are overwritten
-    when the buffer is full.
+    A buffer for storing transitions and sampling contiguous sequences from them
+    (or single transitions in the case of ``n_steps=1``).
+    Samples uniformly from valid sequence start positions in the buffer.
+    The buffer is implemented as a circular buffer, where the oldest transitions are
+    overwritten when the buffer is full.
 
     **Arguments**:
-        `max_size`: The maximum size of the buffer.
-        `sample_batch_size`: The number of transitions to sample from the buffer.
+        `max_size`: The maximum number of transitions the buffer can hold (across all envs).
+        `sample_batch_size`: The number of sequences to sample from the buffer.
         `data_sample`: A sample `Transition` to initialize the buffer structure.
-        `num_batch_axes`: The number of batch axes in the transition data. Defaults to 2, which expects the first two axes
-            to be batch dimensions (e.g, (`rollout_length`, `num_envs`, ...))
+        `vectorized_env`: Whether the inserted transitions are vectorized environment rollouts.
+            If True, inserted transitions are assumed to be of shape (insert_batch_size, num_envs, ...).
+            data is stored as is, but at sampling time, the num_envs axis is collapsed into the batch dimension.
+        `n_steps`: Length of each sampled sequence. ``1`` reproduces single-transition
+            sampling with output shape ``(sample_batch_size, ...)``. For ``n_steps > 1``,
+            output shape is ``(sample_batch_size, n_steps, ...)``.
     """
 
     data: Transition
     insert_position: int
     size: int
     max_size: int = eqx.field(static=True)
+    max_size_per_env: int = eqx.field(static=True)
     sample_batch_size: int = eqx.field(static=True)
-    num_batch_axes: int = eqx.field(static=True, default=2)
+    vectorized_env: bool = eqx.field(static=True)
+    num_vec_envs: int | None = eqx.field(static=True)
+    n_steps: int = eqx.field(static=True)
 
     def __check_init__(self):
         assert self.sample_batch_size > 0, "sample_batch_size must be greater than 0"
         assert self.max_size > 0, "max_size must be greater than 0"
-        assert self.sample_batch_size <= self.max_size, (
-            "sample_batch_size must be less than or equal to max_size"
+        assert self.n_steps >= 1, "n_steps must be at least 1"
+        assert self.n_steps <= self.max_size_per_env, (
+            "n_steps must be less than or equal to max_size_per_env (max_size // num_vec_envs)"
+        )
+        assert self.max_size_per_env > 0, "max_size_per_env must be greater than 0"
+        assert self.sample_batch_size <= (self.num_vec_envs or 1) * (
+            self.max_size_per_env - self.n_steps + 1
+        ), (
+            "sample_batch_size must not exceed the number of valid sequence start "
+            "positions: num_vec_envs * (max_size_per_env - n_steps + 1)"
         )
 
     def __init__(
@@ -40,65 +62,171 @@ class TransitionBuffer(eqx.Module):
         max_size: int,
         sample_batch_size: int,
         data_sample: Transition,
-        num_batch_axes: int = 2,
+        vectorized_env: bool = True,
+        n_steps: int = 1,
+        **kwargs,
     ):
         self.insert_position = 0
         self.max_size = max_size
         self.sample_batch_size = sample_batch_size
         self.size = 0
-        self.num_batch_axes = num_batch_axes
+        self.vectorized_env = vectorized_env
+        self.n_steps = n_steps
+        if kwargs.get("num_batch_axes", False):
+            warnings.warn(
+                "num_batch_axes no longer has an effect. "
+                "Insertions are always assumed to be batches. "
+                "control vectorized environment behaviour by setting `vectorized_env`."
+            )
+
+        if self.vectorized_env:
+            num_vec_envs = jax.tree.leaves(data_sample)[0].shape[1]
+            self.num_vec_envs = num_vec_envs
+            self.max_size_per_env = self.max_size // num_vec_envs
+            effective_max_size = self.max_size_per_env * num_vec_envs
+            if effective_max_size != self.max_size:
+                logger.warning(
+                    f"max_size {self.max_size} is not divisible by the number of vectorized environments {num_vec_envs}. "
+                    f"Setting max_size to {effective_max_size}."
+                )
+                self.max_size = effective_max_size
+        else:
+            self.num_vec_envs = None
+            self.max_size_per_env = self.max_size
 
         self.data = jax.tree.map(
-            lambda x: jnp.zeros(
-                (self.max_size,) + x.shape[self.num_batch_axes :], dtype=x.dtype
-            ),
+            lambda x: jnp.zeros((self.max_size_per_env,) + x.shape[1:], dtype=x.dtype),
             data_sample,
         )
 
-    def insert(self, transition: Transition) -> "TransitionBuffer":
+    def _destination_indices(self, transition: Transition) -> jnp.ndarray:
+        """Time-axis slot indices that `transition` will be written to based on the current insert position."""
+        data_len = jax.tree.leaves(transition)[0].shape[0]
+        assert data_len <= self.max_size_per_env, (
+            "Transition length exceeds per-env buffer size. "
+            f"Transition length: {data_len}, Per-env buffer size: {self.max_size_per_env} (max_size // num_vec_envs)"
+        )
+        return (jnp.arange(data_len) + self.insert_position) % self.max_size_per_env
+
+    def insert(self, transition: Transition) -> Self:
         """
-        Insert a transition into the buffer.
+        Insert a batch of transitions into the buffer.
+
+        Possible vectorized environments are stored as is (to preserve sequences)
+        but flattened into a single batch dimension at sampling time.
         """
         data = self.data
-        data_len = np.prod(jax.tree.leaves(transition)[0].shape[: self.num_batch_axes])
-        insert_position = self.insert_position
+        idx = self._destination_indices(transition)
+        data_len = idx.shape[0]
 
-        assert data_len <= self.max_size, (
-            "Transition length exceeds buffer size. "
-            f"Transition length: {data_len}, Buffer size: {self.max_size}"
-        )
-
-        idx = (jnp.arange(data_len) + insert_position) % self.max_size
         data = jax.tree.map(
-            lambda x, y: x.at[idx].set(
-                y.reshape(-1, *y.shape[self.num_batch_axes :]),
-                unique_indices=True,
-            ),
+            lambda x, y: x.at[idx].set(y, unique_indices=True),
             data,
             transition,
         )
 
-        insert_position = (insert_position + data_len) % self.max_size
-        size = jnp.minimum(self.size + data_len, self.max_size)
+        insert_position = (self.insert_position + data_len) % self.max_size_per_env
+        size = jnp.minimum(self.size + data_len, self.max_size_per_env)
         buffer = self
         buffer = eqx.tree_at(lambda x: x.data, buffer, data)
         buffer = eqx.tree_at(lambda x: x.insert_position, buffer, insert_position)
         buffer = eqx.tree_at(lambda x: x.size, buffer, size)
         return buffer
 
-    def sample(self, key: PRNGKeyArray, with_replacement: bool = False) -> Transition:
+    def sample(self, key: PRNGKeyArray, with_replacement: bool = True) -> Transition:
         """
-        Sample a batch of transitions from the buffer.
+        Sample a batch of transitions from the buffer. Samples a batch of sequences
+        of length `n_steps` when `n_steps > 1`, otherwise a batch of single transitions.
+
+        When `n_steps=1`, returns shape `(sample_batch_size, ...)`.
+        When `n_steps > 1`, returns shape `(sample_batch_size, n_steps, ...)`.
+
+        When `vectorized_env` is True, the vectorized environment axis is collapsed into
+        the batch dimension of the returned transitions.
         """
+
+        valid_start_indices = self._get_valid_start_indices()
+
+        flat_indices = self._sample_flat_indices(
+            key, valid_start_indices, with_replacement
+        )
+
+        batch = self._gather_batch(flat_indices)
+
+        return batch
+
+    def _get_valid_start_indices(self) -> jnp.ndarray:
+        """Boolean mask over per-env time indices that can start a valid sequence."""
+        start_indices = jnp.arange(self.max_size_per_env)
+        if self.n_steps == 1:
+            # All sequences are valid as long as the data is written to (index < size)
+            valid_indices = start_indices < self.size
+
+        else:  # Else, we need to check for valid start indices
+            # While the buffer is not full, data is valid until the end of the so far written buffer.
+            not_full = self.size < self.max_size_per_env
+            valid_not_full = start_indices + self.n_steps <= self.size
+
+            # When full, exclude windows that cross the circular write seam.
+            # This is the data that we are about to write to (and is therefor from another rollout)
+            window_idx = (
+                start_indices[:, None] + jnp.arange(self.n_steps)
+            ) % self.max_size_per_env
+            prev_idx = (self.insert_position - 1) % self.max_size_per_env
+            crosses_seam = jnp.any(window_idx == prev_idx, axis=1) & jnp.any(
+                window_idx == self.insert_position, axis=1
+            )
+            valid_full = ~crosses_seam
+
+            valid_indices = jax.lax.select(not_full, valid_not_full, valid_full)
+
+        # Broadcast valid indices to each environment stream.
+        valid_indices = jnp.broadcast_to(
+            valid_indices[:, None], (self.max_size_per_env, self.num_vec_envs or 1)
+        ).reshape(-1)
+
+        return valid_indices
+
+    def _sample_flat_indices(
+        self,
+        key: PRNGKeyArray,
+        valid_start_indices: Array,
+        with_replacement: bool,
+    ) -> Array:
         if with_replacement:
-            idx = jax.random.randint(
-                key, (self.sample_batch_size,), minval=0, maxval=self.size
+            probs = valid_start_indices.astype(jnp.float32) / jnp.maximum(
+                valid_start_indices.sum(), 1
+            )
+            flat_indices = jax.random.choice(
+                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
             )
         else:
-            valid_samples = jnp.arange(self.max_size) < self.size
             id_probs = jax.random.uniform(key, (self.max_size,))
-            id_probs = jnp.where(valid_samples, id_probs, -jnp.inf)
-            idx = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
+            id_probs = jnp.where(valid_start_indices, id_probs, -jnp.inf)
+            flat_indices = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
 
-        batch: Transition = jax.tree.map(lambda x: jnp.take(x, idx, axis=0), self.data)
+        return flat_indices
+
+    def _gather_batch(self, flat_indices: Array) -> Transition:
+        # Decode flat (time, env) indices (row-major over the grid above).
+        num_vec_envs = self.num_vec_envs or 1
+
+        start_indices = flat_indices // num_vec_envs
+        env_indices = flat_indices % num_vec_envs
+
+        window_idx = (
+            start_indices[:, None] + jnp.arange(self.n_steps)[None, :]
+        ) % self.max_size_per_env
+
+        if self.vectorized_env:
+            batch: Transition = jax.tree.map(
+                lambda x: x[window_idx, env_indices[:, None]],
+                self.data,
+            )
+        else:
+            batch = jax.tree.map(lambda x: x[window_idx], self.data)
+
+        if self.n_steps == 1:
+            batch = jax.tree.map(lambda x: x[:, 0], batch)
+
         return batch
