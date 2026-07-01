@@ -1,0 +1,48 @@
+import logging
+from typing import Callable, List, Sequence
+
+import equinox as eqx
+import jax
+from jaxtyping import PRNGKeyArray
+
+logger = logging.getLogger(__name__)
+
+
+class MLP(eqx.Module):
+    """Simple MLP architecture."""
+
+    layers: List[eqx.nn.Linear]
+    in_features: int = eqx.field(static=True)
+    out_features: int = eqx.field(static=True)
+    hidden_sizes: Sequence[int] = eqx.field(static=True)
+    activation: Callable = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        in_features: int,
+        hidden_sizes: Sequence[int] = (128, 128),
+        activation: Callable = jax.nn.relu,
+        **kwargs,
+    ):
+        depth = len(hidden_sizes) + 1
+        keys = jax.random.split(key, depth + 1)
+        self.in_features = in_features
+        self.hidden_sizes = hidden_sizes
+        self.out_features = hidden_sizes[-1]
+        self.activation = activation
+
+        self.layers = []
+        for i, hidden_dim in enumerate(hidden_sizes):
+            self.layers.append(
+                eqx.nn.Linear(
+                    in_features=in_features, out_features=hidden_dim, key=keys[i]
+                )
+            )
+            in_features = hidden_dim
+
+    def __call__(self, x):
+        for layer in self.layers[:-1]:
+            x = self.activation(layer(x))
+        x = self.layers[-1](x)
+        return x

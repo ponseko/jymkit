@@ -1,17 +1,14 @@
 try:
-    # Weird import for proper copy from the CLI
-    from jaxnasium.algorithms._algorithm import (
-        RLAgent as RLAgent,
-        RLAlgorithm as RLAlgorithm,
-    )  # noqa: I001
-
-    from ._core import (
+    from ._algorithm import RLAgent as RLAgent, RLAlgorithm as RLAlgorithm
+    from ._architectures import (
         CNN as CNN,
         MLP as MLP,
-        AutoAgentObservationNet as AutoAgentObservationNet,
-        AutoAgentOutputNet as AutoAgentOutputNet,
         BroNet as BroNet,
         Identity as Identity,
+    )
+    from ._core import (
+        AutoAgentObservationNet as AutoAgentObservationNet,
+        AutoAgentOutputNet as AutoAgentOutputNet,
         Normalizer as Normalizer,
         PrioritizedTransitionBuffer as PrioritizedTransitionBuffer,
         Schedule as Schedule,
