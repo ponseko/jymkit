@@ -209,7 +209,7 @@ class PPO(RLAlgorithm):
 
     @property
     def num_training_updates(self):
-        return self.num_iterations * self.num_epochs
+        return self.num_iterations * self.num_epochs * self.num_minibatches
 
     def init_agent(self, key: PRNGKeyArray, env: Environment) -> "PPO":
         return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
