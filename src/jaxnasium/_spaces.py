@@ -83,12 +83,12 @@ class Box(Space):
         if jnp.isdtype(self.dtype, "real floating"):
             return jax.random.uniform(
                 rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
-            ).squeeze()
+            )
         if jnp.isdtype(self.dtype, "bool"):
             self.dtype = jnp.int8
         return jax.random.randint(
             rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
-        ).squeeze()
+        )
 
 
 @dataclass
