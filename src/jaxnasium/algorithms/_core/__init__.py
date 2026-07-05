@@ -1,9 +1,3 @@
-from ._architectures import (
-    CNN as CNN,
-    MLP as MLP,
-    BroNet as BroNet,
-    Identity as Identity,
-)
 from ._buffer import (
     PrioritizedTransitionBuffer as PrioritizedTransitionBuffer,
     TransitionBuffer as TransitionBuffer,
@@ -25,4 +19,7 @@ from ._multi_agent import MultiAgentWrapper as MultiAgentWrapper
 from ._normalization import Normalizer as Normalizer
 from ._scan import scan_transitions as scan_transitions
 from ._schedule import Schedule as Schedule
-from ._transition import Transition as Transition
+from ._transition import (
+    Transition as Transition,
+    n_step_to_cumulative_single_step as n_step_to_cumulative_single_step,
+)

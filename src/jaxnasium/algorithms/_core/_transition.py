@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, Bool, Float, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray, PyTree, PyTreeDef
 
 if TYPE_CHECKING:
     from ._normalization import Normalizer
@@ -33,11 +33,20 @@ class Transition(eqx.Module):
     return_: Optional[Float[Array, " "]] = None
     advantage: Optional[Float[Array, "..."]] = None
     target: Optional[Float[Array, " "]] = None
+
+    # PER stores the values here so they are easily tracked and updated after reshuffling.
     PER_weight: Optional[Float[Array, " "]] = None
+    PER_index: Optional[Int[Array, " "]] = None
+    PER_priority: Optional[Float[Array, " "]] = None
 
     def replace(self, **updates):
         keys, values = zip(*updates.items())
-        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
+        return eqx.tree_at(
+            lambda c: [c.__dict__[key] for key in keys],
+            self,
+            values,
+            is_leaf=lambda x: x is None,
+        )
 
     @property
     def structure(self) -> PyTreeDef:  # pyright: ignore[reportInvalidTypeForm]
@@ -274,3 +283,55 @@ class Transition(eqx.Module):
         )
 
         return minibatches
+
+
+def n_step_to_cumulative_single_step(
+    transition: Transition, n_step: int, gamma: float
+) -> Transition:
+    """Converts an n-step transition into a single step transition with the cumulative reward.
+    terminated, truncated, and next_observation are set to the boundary index of
+    the first terminated or truncated step.
+
+    n_step_axis is assumed to be the leading axis of the transition.
+
+    Operates on single transitions, use `jax.vmap` to apply to a batch of transitions.
+    """
+    if n_step <= 1:
+        return transition
+
+    proxy = jax.tree.leaves(transition)[0]
+    assert proxy.shape[0] == n_step, (
+        f"Leading axis length {proxy.shape[0]} does not match n_step {n_step}"
+    )
+
+    def _collapse(t: Transition) -> Transition:
+        """Collapse a (single-agent) n-step transition into one step."""
+        done = jnp.logical_or(t.terminated, t.truncated)
+
+        # 1's up to and including the first done step, 0's afterwards
+        trace_still_active = jnp.cumprod(
+            jnp.concatenate([jnp.ones(1), jnp.logical_not(done)[:-1]])
+        )
+        discounts = gamma ** jnp.arange(n_step)
+        cum_reward = jnp.sum(t.reward * discounts * trace_still_active)
+
+        boundary_idx = jnp.where(jnp.any(done), jnp.argmax(done), n_step - 1)
+
+        return t.replace(
+            observation=jax.tree.map(lambda x: x[0], t.observation),
+            action=jax.tree.map(lambda x: x[0], t.action),
+            reward=cum_reward,
+            terminated=t.terminated[boundary_idx],
+            truncated=t.truncated[boundary_idx],
+            next_observation=jax.tree.map(
+                lambda x: x[boundary_idx], t.next_observation
+            ),
+        )
+
+    # In the multi-agent case, we tranpose to per-agent and process each agent, then merge back.
+    # No-op in the single-agent case.
+    per_agent = transition.view_transposed
+    collapsed = jax.tree.map(
+        _collapse, per_agent, is_leaf=lambda x: isinstance(x, Transition)
+    )
+    return Transition.from_transposed(collapsed)

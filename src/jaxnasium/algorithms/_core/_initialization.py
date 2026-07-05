@@ -1,12 +1,12 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray
+from jaxtyping import PRNGKeyArray, PyTree
 
 
-def rl_initialization(
+def set_initialization(
     key: PRNGKeyArray,
-    network: eqx.Module,
+    network: PyTree[eqx.Module],
     weight_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
     bias_init=0.0,
 ):
@@ -35,7 +35,10 @@ def rl_initialization(
         )
         if is_layer(layer)
         else layer
-        for layer in layers
+        for layer in new_layers
     ]
 
     return jax.tree.unflatten(network_structure, new_layers)
+
+
+rl_initialization = set_initialization

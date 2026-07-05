@@ -284,9 +284,7 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         return buffer
 
-    def sample(  # pyright: ignore[reportIncompatibleMethodOverride]
-        self, key: PRNGKeyArray, with_replacement: bool = False
-    ) -> tuple[Transition, Array]:
+    def sample(self, key: PRNGKeyArray, with_replacement: bool = False) -> Transition:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
         of length ``n_steps`` when ``n_steps > 1``, otherwise a batch of single transitions.
@@ -326,9 +324,9 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         batch = self._gather_batch(flat_indices)
 
-        batch = batch.replace(PER_weight=weights)
+        batch = batch.replace(PER_weight=weights, PER_index=flat_indices)
 
-        return batch, flat_indices
+        return batch
 
     def update_priorities(self, indices: Array, td_errors: Array) -> Self:
         """
