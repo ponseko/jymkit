@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, List, Literal, Tuple
+from typing import Any, Callable, List, Literal, Protocol, Sequence
 
 import distrax
 import equinox as eqx
@@ -7,15 +7,43 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
-import jaxnasium as jym
 import jaxnasium.tree
 
 from .._architectures import CNN, Identity
 from ._distributions import TanhNormalFactory
 
 logger = logging.getLogger(__name__)
+
+
+class SpaceLike(Protocol):
+    shape: tuple[int, ...]
+    sample: Callable[[PRNGKeyArray], Array]
+
+
+class DiscreteSpaceLike(SpaceLike, Protocol):
+    n: int | None = None
+    nvec: Sequence[int] | None = None
+
+
+class ContinuousSpaceLike(SpaceLike, Protocol):
+    low: Array
+    high: Array
+
+
+class Network(Protocol):
+    """Any module with a __call__ defined"""
+
+    def __call__(self, *args, **kwargs) -> Any: ...
+
+
+def _is_space_discrete(space: SpaceLike) -> bool:
+    return hasattr(space, "n") or hasattr(space, "nvec")
+
+
+def _is_space_continuous(space: SpaceLike) -> bool:
+    return hasattr(space, "low") and hasattr(space, "high")
 
 
 def _is_callable_module(x) -> bool:
@@ -36,15 +64,58 @@ def _make_independent(dist: distrax.Distribution) -> distrax.Distribution:
     return distrax.Independent(dist, reinterpreted_batch_ndims=ndims)
 
 
-class AutoAgentObservationNet(eqx.Module):
-    """Input network for **single and multi** observation space environments.
+def _assert_homogeneous_output_space(num_outputs: List[int]):
+    assert len(set(num_outputs)) == 1, (
+        "Only homogeneous multi-dimensional output spaces supported to be supported for vmap."
+        f" (all nvec elements must be the same, got {num_outputs}) "
+        "For heterogeneous spaces, use a composite of spaces instead."
+        "E.g. {'action1': (Discrete(n), 'action2': Discrete(m), ...}"
+    )
 
-    Builds a separate input network for each observation space. Automatically
-    builds a 1d architecture for 1d observation spaces (default=None/Identity) and
-    a 2d architecture for 2d observation spaces (default=NatureCNN-like).
 
-    During a forward call this network simply returns a jax.tree.map over all input spaces
-    and concatenates the outputs of all input networks as a single 1d vector.
+def _apply_action_mask(logits: Array, action_mask: Array) -> Array:
+    """Mask out invalid actions by pushing their logits/values to -inf.
+
+    NOTE: This requires a (multi-)discrete output space.
+    NOTE: The mask is assumed to be a PyTree of the same structure as the
+        output space. Masking dependent on another action is not supported.
+    """
+    BIG_NEGATIVE = -1e9
+    return jax.tree.map(
+        lambda a, mask: a + (BIG_NEGATIVE * (1 - mask)),
+        logits,
+        action_mask,
+    )
+
+
+def _resolve_discrete_distribution(
+    distribution: Literal["categorical"],
+) -> Callable[..., distrax.Distribution]:
+    if distribution == "categorical":
+        return distrax.Categorical
+    raise ValueError(f"Unsupported discrete distribution: {distribution}")
+
+
+def _resolve_continuous_distribution(
+    distribution: Literal["normal", "tanhnormal"],
+    low: np.ndarray,
+    high: np.ndarray,
+) -> Callable[..., distrax.Distribution]:
+    if distribution == "normal":
+        return distrax.Normal
+    if distribution == "tanhnormal":
+        return TanhNormalFactory(low=low, high=high)
+    raise ValueError(f"Unsupported continuous distribution: {distribution}")
+
+
+class PyTreeObsSpaceNetwork(eqx.Module):
+    """Builds a separate observation network for each observation space.
+
+    Automatically builds a given 1d architecture for 1d observation spaces
+    and a given 2d architecture for 2d observation spaces.
+
+    During a forward call this network simply returns a jax.tree.map over all observation spaces
+    and concatenates the outputs of all observation networks as a single 1d vector.
     """
 
     networks: PyTree[eqx.Module]
@@ -53,12 +124,33 @@ class AutoAgentObservationNet(eqx.Module):
     input_structure: Any = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
 
-    def __init__(self, key: PRNGKeyArray, obs_space: PyTree[jym.Space], **kwargs):
-        def create_obs_processor(key: PRNGKeyArray, obs_space: jym.Space, **kwargs):
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        obs_space: PyTree[SpaceLike],
+        architecture_1d: Callable[..., Network] = Identity,
+        architecture_2d: Callable[..., Network] = CNN.with_params(
+            hidden_sizes=(32, 64, 64),
+            kernel_sizes=(3, 3, 2),
+            strides=(1, 1, 1),
+            padding=(0, 0, 0),
+        ),
+        **kwargs,
+    ):
+        def create_obs_processor(key: PRNGKeyArray, obs_space: SpaceLike, **kwargs):
             if obs_space.shape == () or len(obs_space.shape) == 1:
-                return self._create_1d_obs_processor(key, obs_space, **kwargs)
-            elif len(obs_space.shape) == 3 or len(obs_space.shape) == 2:
-                return self._create_2d_obs_processor(key, obs_space, **kwargs)
+                return self._create_1d_obs_processor(
+                    key, obs_space, architecture_1d, **kwargs
+                )
+            elif len(obs_space.shape) == 3:
+                return self._create_2d_obs_processor(
+                    key, obs_space, architecture_2d, **kwargs
+                )
+            elif len(obs_space.shape) == 2:
+                logger.error(
+                    f"2D observation space shape without a channel axis ({obs_space.shape}) detected. "
+                    "Either add a channel axis or use a FlattenObservationWrapper."
+                )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
@@ -77,7 +169,6 @@ class AutoAgentObservationNet(eqx.Module):
         self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
     def __call__(self, x):
-        # Convert non-float inputs to float32
         x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
 
         outputs = jax.tree.map(
@@ -91,253 +182,335 @@ class AutoAgentObservationNet(eqx.Module):
     def _create_1d_obs_processor(
         self,
         key: PRNGKeyArray,
-        obs_space: jym.Space,
-        architecture_1d: Literal["identity"] = "identity",
+        obs_space: SpaceLike,
+        architecture: Callable[..., Network],
         **kwargs,
     ):
-        if architecture_1d.lower() in ["identity"]:
-            return Identity()
-
-        # elif architecture == "broNet":
-
-        raise ValueError(f"Unsupported 1d architecture: {architecture_1d}")
+        try:
+            if obs_space.shape == ():
+                in_features = 1
+            elif len(obs_space.shape) == 1:
+                in_features = obs_space.shape[0]
+            else:
+                raise ValueError(
+                    f"Unsupported observation space shape: {obs_space.shape}"
+                )
+            return architecture(key, in_features, **kwargs)
+        except AttributeError:
+            raise ValueError(f"Unsupported observation space {obs_space}")
 
     def _create_2d_obs_processor(
         self,
         key: PRNGKeyArray,
-        obs_space: jym.Space,
-        architecture_2d: Literal["cnn"] = "cnn",
-        cnn_hidden_sizes: Tuple[int, ...] = (32, 64, 64),
-        cnn_kernel_sizes: Tuple[int, ...] = (3, 3, 2),
-        cnn_strides: Tuple[int, ...] = (1, 1, 1),
-        cnn_padding: Tuple[int, ...] = (0, 0, 0),
+        obs_space: SpaceLike,
+        architecture: Callable[..., Network],
         **kwargs,
     ):
-        if architecture_2d.lower() in ["cnn", "naturecnn"]:
-            return CNN(
-                key,
-                obs_space,
-                cnn_hidden_sizes,
-                cnn_kernel_sizes,
-                cnn_strides,
-                cnn_padding,
+        try:
+            if len(obs_space.shape) == 3:
+                self.channels_axis = self._infer_channels_axis(obs_space)
+                return architecture(
+                    key, obs_space, channels_axis=self.channels_axis, **kwargs
+                )
+            raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
+        except AttributeError:
+            raise ValueError(f"Unsupported observation space {obs_space}")
+
+    def _infer_channels_axis(self, obs_space: SpaceLike):
+        """
+        Attempts to infer the channels axis from the observation space shape.
+        By checking for the smallest dimension and assuming it to be the channels dimension.
+        """
+        if len(obs_space.shape) != 3:
+            raise ValueError(
+                "`infer_channels_axis` requires a (C, H, W) or (H, W, C) observation space."
             )
-        # elif architecture == "hadamax":
-        #     pass
+        c0, c1, c2 = obs_space.shape
+        is_chw = c0 < min(c1, c2)
+        is_hwc = c2 < min(c0, c1)
+        if is_chw and not is_hwc:
+            return "first"
+        if is_hwc and not is_chw:
+            return "last"
+        raise ValueError(
+            f"Cannot infer channel axis from shape {obs_space.shape}. "
+            "Pass `channels_axis` explicitly  ('first' or 'last')."
+        )
 
-        raise ValueError(f"Unsupported 2d architecture: {architecture_2d}")
 
+class DiscreteHead(eqx.Module):
+    """Latent -> Categorical distribution or raw Q-values over a (multi-)discrete space.
 
-class AutoAgentOutputNet(eqx.Module):
-    """Output network for **single and multi** action space environments.
+    Produces one set of logits per output dimension and optionally applies an
+    action mask.
 
-    Will build an individual output head for each action space and inner individual
-    output heads in multidimensional spaces. During a forward call this network
-    simply returns a jax.tree.map over all output spaces.
-    Inner multidimensional spaces are vmapped, and are expected to be 1d and homogeneous.
+    `distribution`="categorical": Produces a categorical distribution.
+    `distribution=None`: Produces raw logits (e.g. for Q values).
     """
 
-    networks: PyTree[eqx.Module]
-    num_action_spaces: int = eqx.field(static=True)
+    layers: List[Network]
+    distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        in_features: int,
+        output_space: DiscreteSpaceLike,
+        *,
+        distribution: Literal["categorical"] | None = "categorical",
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        **kwargs,
+    ):
+        # Obtain the number of outputs per dimension: [n] (Discrete) or [n, n, ...] (MultiDiscrete)
+        num_outputs = getattr(output_space, "n", getattr(output_space, "nvec", None))
+        if num_outputs is None:
+            raise ValueError(f"Unsupported discrete output space: {output_space}")
+        num_outputs = np.atleast_1d(num_outputs).tolist()
+        _assert_homogeneous_output_space(num_outputs)
+
+        keys = optax.tree.split_key_like(key, num_outputs)
+        self.layers = jax.tree.map(  # Create a (homegenuous) head per output dimension
+            lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
+        )
+
+        self.distribution = (
+            None
+            if distribution is None
+            else _resolve_discrete_distribution(distribution)
+        )
+
+    def __call__(self, x, action_mask=None):
+        if len(self.layers) == 1:  # single-dimensional output space
+            logits = self.layers[0](x)
+        else:
+            stacked_layers = jaxnasium.tree.stack(self.layers)
+            logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
+
+        if action_mask is not None:
+            logits = _apply_action_mask(logits, action_mask)
+        if self.distribution is None:
+            return logits  # raw Q-values
+        return self.distribution(logits=logits)
+
+
+class ContinuousHead(eqx.Module):
+    """Latent -> Distribution over a continuous (`Box`-like) space.
+
+    Per dimension, produces a mean and (log) std and returns a continuous
+    distribution (`normal` or `tanhnormal`).
+    """
+
+    layers: List[Network]
+    distribution: Callable[..., distrax.Distribution] = eqx.field(static=True)
+    log_std_min: float = eqx.field(static=True)
+    log_std_max: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        in_features: int,
+        output_space: ContinuousSpaceLike,
+        *,
+        distribution: Literal["normal", "tanhnormal"] = "normal",
+        log_std_min: float = -5.0,
+        log_std_max: float = 2.0,
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        **kwargs,
+    ):
+        low = np.array(output_space.low, dtype=float)
+        high = np.array(output_space.high, dtype=float)
+        self.distribution = _resolve_continuous_distribution(distribution, low, high)
+        self.log_std_min = log_std_min
+        self.log_std_max = log_std_max
+
+        # Two outputs (mean, std) per dimension of the (homogeneous) space.
+        num_outputs = np.atleast_1d(np.ones(output_space.shape, dtype=int) * 2).tolist()
+        _assert_homogeneous_output_space(num_outputs)
+
+        # Create a (homegenuous) head per output dimension
+        keys = optax.tree.split_key_like(key, num_outputs)
+        self.layers = jax.tree.map(
+            lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
+        )
+
+    def __call__(self, x, action_mask=None):
+        if action_mask is not None:
+            logger.debug("Action mask provided for continuous space, ignoring.")
+
+        if len(self.layers) == 1:  # single-dimensional output space
+            out = self.layers[0](x)
+        else:
+            stacked_layers = jaxnasium.tree.stack(self.layers)
+            out = jax.vmap(lambda layer: layer(x))(stacked_layers)
+
+        mean = out[..., 0]
+        log_std = jnp.clip(out[..., 1], self.log_std_min, self.log_std_max)
+        std = jnp.exp(log_std)
+
+        return self.distribution(mean, std)
+
+
+class QHead(eqx.Module):
+    """Convenience wrapper for Latent -> Q-values
+
+    - `mode="discrete"`: wraps a `DiscreteHead` with `distribution=None`
+      (one Q-value per action).
+    - `mode="continuous"`: maps the input to a single scalar Q(s, a).
+    Mode is inferred from the output space.
+    """
+
+    layer: Network
+    mode: Literal["discrete", "continuous"] = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        in_features: int,
+        output_space: SpaceLike,
+        *,
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        **kwargs,
+    ):
+        if _is_space_discrete(output_space):
+            self.mode = "discrete"
+            self.layer = DiscreteHead(
+                key,
+                in_features,
+                output_space,  # type: ignore[arg-type]
+                distribution=None,
+                layer_type=layer_type,
+            )
+        elif _is_space_continuous(output_space):
+            self.mode = "continuous"
+            self.layer = layer_type(in_features, 1, key=key)  # Scalar output layer
+        else:
+            raise ValueError(f"Unsupported output space: {output_space}")
+
+    def __call__(self, x, action_mask=None):
+        if self.mode == "discrete":
+            return self.layer(x, action_mask=action_mask)
+        if action_mask is not None:
+            logger.debug("Action mask provided for continuous space, ignoring.")
+        return self.layer(x).squeeze()
+
+
+class PyTreeOutputNetwork(eqx.Module):
+    """Output network for a (single or PyTree of) output space(s).
+
+    Builds one head per output-space leaf, selecting a discrete or continuous
+    head automatically from the space. Heads either output a distribution or
+    raw values (e.g. for Q-values) when `distribution` is None.
+
+    A single head may itself be multi-dimensional (homogeneous),
+    in which case its sub-layers are stacked and vmapped in the forward call.
+
+    During a forward call this maps over all output spaces. When every head
+    returns a distribution and `assume_independent` is set, per-space
+    distributions are wrapped in `Independent` and, for multiple spaces,
+    combined into a `distrax.Joint`. Otherwise the raw PyTree of outputs is
+    returned unchanged.
+    """
+
+    heads: PyTree[Network]
+
+    num_output_spaces: int = eqx.field(static=True)
+    output_structure: Any = eqx.field(static=True)
     assume_independent: bool = eqx.field(static=True)
 
     def __init__(
         self,
         key: PRNGKeyArray,
         in_features: int,
-        output_space: PyTree[jym.Space],
+        output_space: PyTree[SpaceLike],
         *,
-        discrete_output_dist: Literal["categorical",] | None = "categorical",
-        continuous_output_dist: Literal["normal", "tanhnormal"] | None = "normal",
+        discrete_distribution: Literal["categorical"] | None = "categorical",
+        continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
         assume_independent: bool = True,
         **kwargs,
     ):
-        def create_output_network(key: PRNGKeyArray, output_space: jym.Space):
-            is_discrete = hasattr(output_space, "n") or hasattr(output_space, "nvec")
-            if is_discrete:
-                return DiscreteOutputNetwork(
-                    key, in_features, output_space, distribution=discrete_output_dist
-                )
-
-            is_continu = hasattr(output_space, "low") and hasattr(output_space, "high")
-            if is_continu:
-                return ContinuousOutputNetwork(
+        def create_head(key: PRNGKeyArray, space: SpaceLike):
+            if _is_space_discrete(space):
+                if discrete_distribution is None:
+                    return QHead(
+                        key,
+                        in_features,
+                        space,
+                        layer_type=layer_type,
+                    )
+                return DiscreteHead(
                     key,
                     in_features,
-                    output_space,  # type: ignore
-                    distribution=continuous_output_dist,
+                    space,  # type: ignore[arg-type]
+                    distribution=discrete_distribution,
+                    layer_type=layer_type,
                 )
+            elif _is_space_continuous(space):
+                if continuous_distribution is None:
+                    return QHead(
+                        key,
+                        in_features,
+                        space,
+                        mode="continuous",
+                        layer_type=layer_type,
+                    )
+                return ContinuousHead(
+                    key,
+                    in_features,
+                    space,  # type: ignore[arg-type]
+                    distribution=continuous_distribution,
+                    layer_type=layer_type,
+                )
+            raise ValueError(f"Unsupported output space: {space}")
 
-            else:
-                raise ValueError(f"Unsupported action space: {output_space}")
+        self.num_output_spaces = len(jax.tree.leaves(output_space))
+        self.output_structure = jax.tree.structure(output_space)
 
-        self.num_action_spaces = len(jax.tree.leaves(output_space))
-        self.assume_independent = assume_independent
         keys = optax.tree.split_key_like(key, output_space)
-        self.networks = jax.tree.map(
-            lambda a, k: create_output_network(k, a), output_space, keys
-        )
+        self.heads = jax.tree.map(lambda o, k: create_head(k, o), output_space, keys)
+        self.assume_independent = assume_independent
 
-    def __call__(self, x, action_mask):
+    @property
+    def include_action_in_input(self) -> bool:
+        """In case a we output a continuous Q-value, the action
+        is required to be fed into the network as input."""
+
+        output_heads = jax.tree.leaves(self.heads, is_leaf=_is_callable_module)
+        has_continuous_q_head = any(
+            isinstance(head, QHead) and head.mode == "continuous"
+            for head in output_heads
+        )
+        only_continuous_q_heads = all(
+            isinstance(head, QHead) and head.mode == "continuous"
+            for head in output_heads
+        )
+        if has_continuous_q_head and not only_continuous_q_heads:
+            logger.warning(
+                "Mixed continuous and discrete Q-heads. This may have adverse training effects."
+            )
+        return has_continuous_q_head
+
+    def __call__(self, x, action_mask=None):
         if action_mask is None:  # Dummy action mask if not provided
             action_mask = jax.tree.map(
-                lambda _: None,
-                self.networks,
-                is_leaf=_is_callable_module,
+                lambda _: None, self.heads, is_leaf=_is_callable_module
             )
 
         outputs = jax.tree.map(
-            lambda layer, mask: layer(x, mask),
-            self.networks,
+            lambda head, mask: head(x, action_mask=mask),
+            self.heads,
             action_mask,
             is_leaf=_is_callable_module,
         )
 
-        # Check if outputs are distributions (e.g. not true for Q networks)
+        # Policy heads return distributions; Q/value heads return raw arrays.
         dist_list = jax.tree.leaves(outputs, is_leaf=_is_distribution)
-        if all(_is_distribution(o) for o in dist_list):
+        if dist_list and all(_is_distribution(o) for o in dist_list):
             if self.assume_independent:
                 outputs = jax.tree.map(
                     _make_independent, outputs, is_leaf=_is_distribution
                 )
-                if len(dist_list) > 1:
-                    return distrax.Joint(outputs)
+            if len(dist_list) > 1:
+                return distrax.Joint(outputs)
 
         return outputs
-
-
-class DiscreteOutputNetwork(eqx.Module):
-    layers: List[eqx.nn.Linear]
-    distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
-
-    def __init__(
-        self,
-        key: PRNGKeyArray,
-        in_features: int,
-        output_space: jym.Space,
-        distribution: Literal["categorical"] | None,
-    ):
-        if distribution is None:
-            self.distribution = None
-        elif distribution == "categorical":
-            self.distribution = distrax.Categorical
-        else:
-            raise ValueError(f"Unsupported discrete distribution: {distribution}")
-
-        # Get n (Discrete) or nvec (MultiDiscrete)
-        num_outputs = getattr(output_space, "n", getattr(output_space, "nvec", None))
-        if num_outputs is None:
-            raise ValueError(f"Unsupported action space: {output_space}")
-
-        # We create a list of outputs: [n] for Discrete, [n,n,...] for MultiDiscrete
-        num_outputs = np.atleast_1d(num_outputs).tolist()
-        assert len(set(num_outputs)) == 1, (
-            "Only homogeneous MultiDiscrete spaces supported to be supported for vmap."
-            f" (all nvec elements must be the same, got {num_outputs}) "
-            "For heterogeneous spaces, use a composite of spaces instead."
-        )
-
-        # Then we create an output head per element (1 for Discrete)
-        # These heads can be stacked + vmapped in the forward call
-        keys = optax.tree.split_key_like(key, num_outputs)
-        self.layers = jax.tree.map(
-            lambda o, k: eqx.nn.Linear(in_features, o, key=k), num_outputs, keys
-        )
-
-    def __call__(self, x, action_mask):
-        if len(self.layers) == 1:  # single dimensional output
-            logits = self.layers[0](x)
-        else:
-            stacked_layers = jaxnasium.tree.stack(self.layers)
-            logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
-
-        if action_mask is not None:
-            logits = self._apply_action_mask(logits, action_mask)
-
-        if self.distribution is not None:
-            return self.distribution(logits=logits)
-        return logits
-
-    def _apply_action_mask(self, logits, action_mask):
-        """Apply the action mask to the output of the network.
-
-        NOTE: This requires a (multi-)discrete action space.
-        NOTE: Currently, action mask is assumed to be a PyTree of the same structure as the action space.
-            Therefore, masking is not supported when the mask is dependent on another action.
-        """
-
-        BIG_NEGATIVE = -1e9
-        masked_logits = jax.tree.map(
-            lambda a, mask: ((jnp.ones_like(a) * BIG_NEGATIVE) * (1 - mask)) + a,
-            logits,
-            action_mask,
-        )
-        return masked_logits
-
-
-class ContinuousOutputNetwork(eqx.Module):
-    layers: List[eqx.nn.Linear]
-    distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
-
-    def __init__(
-        self,
-        key: PRNGKeyArray,
-        in_features: int,
-        output_space: jym.Box,
-        distribution: Literal["normal", "tanhnormal"] | None,
-    ):
-        assert hasattr(output_space, "low") and hasattr(output_space, "high"), (
-            "Continuous action space is assumed to be a `Box`-like and "
-            "must have 'low' and 'high' and `shape` attributes."
-        )
-
-        low = np.array(output_space.low, dtype=float)
-        high = np.array(output_space.high, dtype=float)
-        if distribution is None:
-            self.distribution = None
-        elif distribution.lower() == "normal":
-            self.distribution = distrax.Normal
-        elif distribution.lower() == "tanhnormal":
-            self.distribution = TanhNormalFactory(low=low, high=high)
-        else:
-            raise ValueError(f"Unsupported continuous distribution: {distribution}")
-
-        num_outputs = np.ones(output_space.shape, dtype=int)
-        if distribution is not None:
-            num_outputs = num_outputs * 2  # mean, std
-            # NOTE: this assumes Normal / TanhNormal distribution with 2 outputs
-
-        # We create a list of output heads per dimension
-        # These heads can be stacked + vmapped in the forward call
-        num_outputs = num_outputs.tolist()
-
-        assert len(set(num_outputs)) == 1, (
-            "Only homogeneous Box spaces supported to be supported for vmap."
-            f" (all shape elements must be the same, got {num_outputs}) "
-            "For heterogeneous spaces, use a composite of spaces instead."
-        )
-
-        keys = optax.tree.split_key_like(key, num_outputs)
-        self.layers = jax.tree.map(
-            lambda o, k: eqx.nn.Linear(in_features, o, key=k), num_outputs, keys
-        )
-
-    def __call__(self, x, action_mask):
-        if action_mask is not None:
-            logging.debug("Action mask provided for continuous action space, ignoring.")
-
-        if len(self.layers) == 1:  # single dimensional output
-            logits = self.layers[0](x)
-        else:
-            stacked_layers = jaxnasium.tree.stack(self.layers)
-            logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
-
-        if self.distribution is None:
-            return logits.squeeze()
-
-        mean = logits[..., 0]
-        log_std = logits[..., 1]
-        log_std = jnp.clip(logits[..., 1], -5, 2)
-        std = jnp.exp(log_std)
-
-        return self.distribution(mean, std)

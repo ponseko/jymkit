@@ -6,10 +6,10 @@ from ._distributions import (
     DistraxContainer as DistraxContainer,
     TanhNormalFactory as TanhNormalFactory,
 )
-from ._initialization import rl_initialization as rl_initialization
+from ._initialization import set_weight_bias as set_weight_bias
 from ._input_output import (
-    AutoAgentObservationNet as AutoAgentObservationNet,
-    AutoAgentOutputNet as AutoAgentOutputNet,
+    PyTreeObsSpaceNetwork as PyTreeObsSpaceNetwork,
+    PyTreeOutputNetwork as PyTreeOutputNetwork,
 )
 from ._logging import (
     pretty_print_network as pretty_print_network,

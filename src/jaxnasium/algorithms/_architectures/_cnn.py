@@ -1,12 +1,11 @@
 import logging
-from typing import List, Sequence
+from functools import partial
+from typing import Callable, List, Literal, Sequence
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
-
-from jaxnasium import Space
 
 logger = logging.getLogger(__name__)
 
@@ -16,51 +15,47 @@ class CNN(eqx.Module):
 
     Operates on 2D inputs.
     Assumes channels first format (C, H, W).
+
+    Flattens the output of the CNN into a 1d vector.
     """
 
     layers: List[eqx.nn.Conv2d]
     in_channels: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
-    channels_axis: int | None = eqx.field(static=True)
+    channels_axis: Literal["first", "last"] = eqx.field(static=True)
+    activation: Callable = eqx.field(static=True)
 
     def __init__(
         self,
         key: PRNGKeyArray,
-        obs_space: Space,
         hidden_sizes: Sequence[int],
         kernel_sizes: Sequence[int],
         strides: Sequence[int],
         padding: Sequence[int],
+        input_shape: tuple[int, int, int],
+        channels_axis: Literal["first", "last"] = "first",
+        activation: Callable = jax.nn.relu,
         **kwargs,
     ):
         assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
 
-        if len(obs_space.shape) == 2:
-            logger.warning(
-                "2D input without channels, adding leading channels in __call__()"
-                "In case the observation should be treated as 1d, use a FlattenObservationWrapper."
-            )
-            self.channels_axis = None
-            in_channels = 1
-        elif (
-            obs_space.shape[0] == obs_space.shape[1]
-            and obs_space.shape[2] != obs_space.shape[0]
-        ):
+        if channels_axis == "last":
             logger.warning(
                 "2D input is in channels last format, moving channels to first dimension"
                 "Prefer providing channels first observations (C, H, W)."
             )
-            self.channels_axis = -1
-            in_channels = obs_space.shape[self.channels_axis]
-        else:  # channels first
-            self.channels_axis = 0
-            in_channels = obs_space.shape[self.channels_axis]
 
-        self.in_channels = in_channels
+        if self.channels_axis == "first":
+            in_channels = input_shape[0]
+        elif self.channels_axis == "last":
+            in_channels = input_shape[-1]
+        else:
+            raise ValueError(f"Invalid channels axis: {self.channels_axis}")
+
+        self.activation = activation
 
         self.layers = []
         keys = jax.random.split(key, len(hidden_sizes))
-
         for i, hidden_size in enumerate(hidden_sizes):
             self.layers.append(
                 eqx.nn.Conv2d(
@@ -75,7 +70,7 @@ class CNN(eqx.Module):
             in_channels = hidden_size
 
         out_shape = jax.eval_shape(
-            lambda x: self(x), jnp.zeros(obs_space.shape, dtype=jnp.float32)
+            lambda x: self(x), jnp.zeros(input_shape, dtype=jnp.float32)
         ).shape
         assert len(out_shape) == 1 and out_shape[0] > 0, (
             f"Invalid CNN output (after flattening): {out_shape}. "
@@ -84,12 +79,30 @@ class CNN(eqx.Module):
         self.out_features = out_shape[0]
 
     def __call__(self, x):
-        if self.channels_axis is None:
-            x = jnp.expand_dims(x, axis=0)
-        elif self.channels_axis == -1:
+        if self.channels_axis == "last":
             x = jnp.moveaxis(x, -1, 0)
 
         for layer in self.layers:
-            x = jax.nn.relu(layer(x))
+            x = self.activation(layer(x))
         x = jnp.reshape(x, -1)
         return x
+
+    @classmethod
+    def with_params(
+        cls,
+        hidden_sizes=(32, 64, 64),
+        kernel_sizes=(3, 3, 2),
+        strides=(1, 1, 1),
+        padding=(0, 0, 0),
+        activation=jax.nn.relu,
+        **kwargs,
+    ):
+        return partial(
+            cls,
+            hidden_sizes=hidden_sizes,
+            kernel_sizes=kernel_sizes,
+            strides=strides,
+            padding=padding,
+            activation=activation,
+            **kwargs,
+        )
