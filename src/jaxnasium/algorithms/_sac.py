@@ -54,17 +54,17 @@ class SACAgent(RLAgent):
     def __init__(self, key, env: Environment, trainer: "SAC"):
         actor_key, critics_key = jax.random.split(key, 2)
         self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
             key=actor_key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
             **trainer.actor_kwargs,
         )
         ensamble_critics_keys = jax.random.split(critics_key, 2)  # 2 critics
         self.critics = jax.vmap(
             lambda key: QValueNetwork(
+                env.observation_space,
+                env.action_space,
                 key=key,
-                obs_space=env.observation_space,
-                output_space=env.action_space,
                 **trainer.critic_kwargs,
             )
         )(ensamble_critics_keys)

@@ -35,10 +35,7 @@ class DQNAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "DQN"):
         self.critic = QValueNetwork(
-            key=key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
-            **trainer.critic_kwargs,
+            env.observation_space, env.action_space, key=key, **trainer.critic_kwargs
         )
         self.critic_target = jax.tree.map(lambda x: x, self.critic)
 

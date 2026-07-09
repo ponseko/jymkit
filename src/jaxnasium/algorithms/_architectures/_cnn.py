@@ -27,21 +27,25 @@ class CNN(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
-        hidden_sizes: Sequence[int],
-        kernel_sizes: Sequence[int],
-        strides: Sequence[int],
-        padding: Sequence[int],
         input_shape: tuple[int, int, int],
+        *,
+        key: PRNGKeyArray,
+        hidden_sizes: Sequence[int] = (32, 64, 64),
+        kernel_sizes: Sequence[int] = (3, 3, 2),
+        strides: Sequence[int] = (1, 1, 1),
+        padding: Sequence[int] = (0, 0, 0),
         channels_axis: Literal["first", "last"] = "first",
         activation: Callable = jax.nn.relu,
         **kwargs,
     ):
         assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
 
+        self.channels_axis = channels_axis
+        self.activation = activation
+
         if channels_axis == "last":
             logger.warning(
-                "2D input is in channels last format, moving channels to first dimension"
+                "2D input is in channels last format, moving channels to first dimension. "
                 "Prefer providing channels first observations (C, H, W)."
             )
 
@@ -52,7 +56,7 @@ class CNN(eqx.Module):
         else:
             raise ValueError(f"Invalid channels axis: {self.channels_axis}")
 
-        self.activation = activation
+        self.in_channels = in_channels
 
         self.layers = []
         keys = jax.random.split(key, len(hidden_sizes))
@@ -90,6 +94,7 @@ class CNN(eqx.Module):
     @classmethod
     def with_params(
         cls,
+        *,
         hidden_sizes=(32, 64, 64),
         kernel_sizes=(3, 3, 2),
         strides=(1, 1, 1),

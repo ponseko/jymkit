@@ -118,7 +118,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
     and concatenates the outputs of all observation networks as a single 1d vector.
     """
 
-    networks: PyTree[eqx.Module]
+    networks: PyTree[Network]
 
     num_observation_spaces: int = eqx.field(static=True)
     input_structure: Any = eqx.field(static=True)
@@ -126,8 +126,9 @@ class PyTreeObsSpaceNetwork(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         obs_space: PyTree[SpaceLike],
+        *,
+        key: PRNGKeyArray,
         architecture_1d: Callable[..., Network] = Identity,
         architecture_2d: Callable[..., Network] = CNN.with_params(
             hidden_sizes=(32, 64, 64),
@@ -195,7 +196,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                 raise ValueError(
                     f"Unsupported observation space shape: {obs_space.shape}"
                 )
-            return architecture(key, in_features, **kwargs)
+            return architecture(in_features, key=key, **kwargs)
         except AttributeError:
             raise ValueError(f"Unsupported observation space {obs_space}")
 
@@ -208,9 +209,12 @@ class PyTreeObsSpaceNetwork(eqx.Module):
     ):
         try:
             if len(obs_space.shape) == 3:
-                self.channels_axis = self._infer_channels_axis(obs_space)
+                channels_axis = self._infer_channels_axis(obs_space)
                 return architecture(
-                    key, obs_space, channels_axis=self.channels_axis, **kwargs
+                    obs_space.shape,
+                    key=key,
+                    channels_axis=channels_axis,
+                    **kwargs,
                 )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
         except AttributeError:
@@ -253,10 +257,10 @@ class DiscreteHead(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
         output_space: DiscreteSpaceLike,
         *,
+        key: PRNGKeyArray,
         distribution: Literal["categorical"] | None = "categorical",
         layer_type: Callable[..., Network] = eqx.nn.Linear,
         **kwargs,
@@ -307,10 +311,10 @@ class ContinuousHead(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
         output_space: ContinuousSpaceLike,
         *,
+        key: PRNGKeyArray,
         distribution: Literal["normal", "tanhnormal"] = "normal",
         log_std_min: float = -5.0,
         log_std_max: float = 2.0,
@@ -364,19 +368,19 @@ class QHead(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
         output_space: SpaceLike,
         *,
+        key: PRNGKeyArray,
         layer_type: Callable[..., Network] = eqx.nn.Linear,
         **kwargs,
     ):
         if _is_space_discrete(output_space):
             self.mode = "discrete"
             self.layer = DiscreteHead(
-                key,
                 in_features,
                 output_space,  # type: ignore[arg-type]
+                key=key,
                 distribution=None,
                 layer_type=layer_type,
             )
@@ -419,10 +423,10 @@ class PyTreeOutputNetwork(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
         output_space: PyTree[SpaceLike],
         *,
+        key: PRNGKeyArray,
         discrete_distribution: Literal["categorical"] | None = "categorical",
         continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
         layer_type: Callable[..., Network] = eqx.nn.Linear,
@@ -433,31 +437,30 @@ class PyTreeOutputNetwork(eqx.Module):
             if _is_space_discrete(space):
                 if discrete_distribution is None:
                     return QHead(
-                        key,
                         in_features,
                         space,
+                        key=key,
                         layer_type=layer_type,
                     )
                 return DiscreteHead(
-                    key,
                     in_features,
                     space,  # type: ignore[arg-type]
+                    key=key,
                     distribution=discrete_distribution,
                     layer_type=layer_type,
                 )
             elif _is_space_continuous(space):
                 if continuous_distribution is None:
                     return QHead(
-                        key,
                         in_features,
                         space,
-                        mode="continuous",
+                        key=key,
                         layer_type=layer_type,
                     )
                 return ContinuousHead(
-                    key,
                     in_features,
                     space,  # type: ignore[arg-type]
+                    key=key,
                     distribution=continuous_distribution,
                     layer_type=layer_type,
                 )

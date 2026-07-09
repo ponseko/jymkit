@@ -21,8 +21,9 @@ class MLP(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
+        *,
+        key: PRNGKeyArray,
         hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.relu,
         **kwargs,

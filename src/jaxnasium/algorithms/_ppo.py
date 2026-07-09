@@ -35,15 +35,13 @@ class PPOAgent(RLAgent):
     def __init__(self, key, env: Environment, trainer: "PPO"):
         actor_key, critic_key = jax.random.split(key)
         self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
             key=actor_key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
             **trainer.actor_kwargs,
         )
         self.critic = ValueNetwork(
-            key=critic_key,
-            obs_space=env.observation_space,
-            **trainer.critic_kwargs,
+            env.observation_space, key=critic_key, **trainer.critic_kwargs
         )
         self.optimizer_state = trainer.optimizer.init(
             eqx.filter((self.actor, self.critic), eqx.is_inexact_array)

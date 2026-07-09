@@ -33,10 +33,7 @@ class PQNAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "PQN"):
         self.critic = QValueNetwork(
-            key=key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
-            **trainer.critic_kwargs,
+            env.observation_space, env.action_space, key=key, **trainer.critic_kwargs
         )
 
         self.optimizer_state = trainer.optimizer.init(
@@ -247,7 +244,6 @@ class PQN(RLAlgorithm):
                 reward=reward,
                 terminated=terminated,
                 truncated=truncated,
-                # next_observation=info[ORIGINAL_OBSERVATION_KEY],
                 info=info,
                 next_value=next_q_value,
             )

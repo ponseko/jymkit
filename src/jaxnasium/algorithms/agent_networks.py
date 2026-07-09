@@ -3,7 +3,7 @@ from typing import Any, Callable, Protocol
 
 import equinox as eqx
 import jax
-from jaxtyping import PRNGKeyArray, PyTree
+from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium.algorithms import (
@@ -52,10 +52,10 @@ class ActorNetwork(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
-        *,
-        output_space: PyTree[jym.Space],
         obs_space: PyTree[jym.Space],
+        output_space: PyTree[jym.Space],
+        *,
+        key: PRNGKeyArray,
         obs_processor: Callable[..., OutSizedNetwork] = PyTreeObsSpaceNetwork,
         body: Callable[..., OutSizedNetwork] = MLP,
         output_layers: Callable[..., PyTreeOutputNetwork] = PyTreeOutputNetwork,
@@ -64,10 +64,13 @@ class ActorNetwork(eqx.Module):
         **kwargs,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_key, obs_space, **kwargs)
-        self.body = body(body_key, self.obs_processor.out_features, **kwargs)
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
+        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
         self.output_layers = output_layers(
-            output_key, self.body.out_features, output_space, **kwargs
+            self.body.out_features,
+            output_space,
+            key=output_key,
+            **kwargs,
         )
 
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
@@ -95,9 +98,9 @@ class ValueNetwork(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
-        *,
         obs_space: PyTree[jym.Space],
+        *,
+        key: PRNGKeyArray,
         obs_processor: Callable[..., OutSizedNetwork] = PyTreeObsSpaceNetwork,
         body: Callable[..., OutSizedNetwork] = MLP,
         output_layers: Callable[..., Network] = eqx.nn.Linear,
@@ -106,8 +109,8 @@ class ValueNetwork(eqx.Module):
         **kwargs,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_key, obs_space, **kwargs)
-        self.body = body(body_key, self.obs_processor.out_features, **kwargs)
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
+        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
         self.output_layers = output_layers(
             key=output_key, in_features=self.body.out_features, out_features=1, **kwargs
         )
@@ -137,10 +140,10 @@ class QValueNetwork(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
-        *,
         obs_space: PyTree[jym.Space],
         output_space: PyTree[jym.Space],
+        *,
+        key: PRNGKeyArray,
         obs_processor: Callable[..., OutSizedNetwork] = PyTreeObsSpaceNetwork,
         body: Callable[..., OutSizedNetwork] = MLP,
         output_layers: Callable[..., PyTreeOutputNetwork] = PyTreeOutputNetwork,
@@ -152,11 +155,15 @@ class QValueNetwork(eqx.Module):
         if any(is_continuous):
             self.include_action_in_input = True
             obs_space = {"_OBSERVATION": obs_space, "_ACTION": output_space}
+        else:
+            self.include_action_in_input = False
 
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_key, obs_space, **kwargs)
-        self.body = body(body_key, self.obs_processor.out_features, **kwargs)
-        self.output_layers = output_layers(output_key, self.body.out_features, **kwargs)
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
+        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
+        self.output_layers = output_layers(
+            self.body.out_features, output_space, key=output_key, **kwargs
+        )
 
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
             key=wb_key,
@@ -165,7 +172,7 @@ class QValueNetwork(eqx.Module):
             bias_init=bias_init,
         )
 
-    def __call__(self, x, action=None):
+    def __call__(self, x, action=None) -> Array | PyTree[Array]:
         action_mask = None
         if isinstance(x, jym.AgentObservation):
             action_mask = x.action_mask
