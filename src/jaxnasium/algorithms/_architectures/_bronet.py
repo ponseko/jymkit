@@ -1,13 +1,16 @@
 import logging
+from functools import partial
+from typing import Callable
 
 import equinox as eqx
 import jax
 from jaxtyping import PRNGKeyArray
+from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
 
-class BroNetBlock(eqx.Module):
+class _BroNetBlock(eqx.Module):
     layers: list
     in_features: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
@@ -67,7 +70,7 @@ class BroNet(eqx.Module):
             eqx.nn.LayerNorm(width_size),
         ]
         for i in range(1, depth + 1):
-            self.layers.append(BroNetBlock(width_size, key=keys[i]))
+            self.layers.append(_BroNetBlock(width_size, key=keys[i]))
 
     def __call__(self, x):
         x = self.layers[0](x)  # dense
@@ -77,3 +80,13 @@ class BroNet(eqx.Module):
         for block in self.layers[2:]:
             x = block(x)
         return x
+
+    @classmethod
+    def with_params(
+        cls,
+        *,
+        depth: int,
+        width_size: int,
+        **kwargs,
+    ) -> Callable[..., Self]:
+        return partial(cls, depth=depth, width_size=width_size, **kwargs)

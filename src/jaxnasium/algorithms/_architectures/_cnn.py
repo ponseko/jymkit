@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
+from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,11 @@ class CNN(eqx.Module):
         activation: Callable = jax.nn.relu,
         **kwargs,
     ):
-        assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding)
+        assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding), (
+            f"Lengths of hidden_sizes, kernel_sizes, strides, and padding must match. "
+            f"Got {len(hidden_sizes)}, {len(kernel_sizes)}, {len(strides)}, and {len(padding)}."
+            f"This CNN implementation assumes _per layer_ ints for hidden_sizes, kernel_sizes, strides, and padding."
+        )
 
         self.channels_axis = channels_axis
         self.activation = activation
@@ -95,13 +100,13 @@ class CNN(eqx.Module):
     def with_params(
         cls,
         *,
-        hidden_sizes=(32, 64, 64),
-        kernel_sizes=(3, 3, 2),
-        strides=(1, 1, 1),
-        padding=(0, 0, 0),
-        activation=jax.nn.relu,
+        hidden_sizes: Sequence[int] = (32, 64, 64),
+        kernel_sizes: Sequence[int] = (3, 3, 2),
+        strides: Sequence[int] = (1, 1, 1),
+        padding: Sequence[int] = (0, 0, 0),
+        activation: Callable = jax.nn.relu,
         **kwargs,
-    ):
+    ) -> Callable[..., Self]:
         return partial(
             cls,
             hidden_sizes=hidden_sizes,
