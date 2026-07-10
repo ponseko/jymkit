@@ -136,16 +136,20 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             strides=(1, 1, 1),
             padding=(0, 0, 0),
         ),
-        **kwargs,
+        network_kwargs: dict[str, Any] | None = None,
     ):
-        def create_obs_processor(key: PRNGKeyArray, obs_space: SpaceLike, **kwargs):
+        network_kwargs = network_kwargs or {}
+        kwargs_1d = network_kwargs.get("1d", {})
+        kwargs_2d = network_kwargs.get("2d", {})
+
+        def create_obs_processor(key: PRNGKeyArray, obs_space: SpaceLike):
             if obs_space.shape == () or len(obs_space.shape) == 1:
                 return self._create_1d_obs_processor(
-                    key, obs_space, architecture_1d, **kwargs
+                    key, obs_space, architecture_1d, kwargs_1d
                 )
             elif len(obs_space.shape) == 3:
                 return self._create_2d_obs_processor(
-                    key, obs_space, architecture_2d, **kwargs
+                    key, obs_space, architecture_2d, kwargs_2d
                 )
             elif len(obs_space.shape) == 2:
                 logger.error(
@@ -159,7 +163,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
 
         keys = optax.tree.split_key_like(key, obs_space)
         self.networks = jax.tree.map(
-            lambda o, k: create_obs_processor(k, o, **kwargs),
+            lambda o, k: create_obs_processor(k, o),
             obs_space,
             keys,
         )
@@ -185,7 +189,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         key: PRNGKeyArray,
         obs_space: SpaceLike,
         architecture: Callable[..., Network],
-        **kwargs,
+        architecture_kwargs: dict[str, Any],
     ):
         try:
             if obs_space.shape == ():
@@ -196,7 +200,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                 raise ValueError(
                     f"Unsupported observation space shape: {obs_space.shape}"
                 )
-            return architecture(in_features, key=key, **kwargs)
+            return architecture(in_features, key=key, **architecture_kwargs)
         except AttributeError:
             raise ValueError(f"Unsupported observation space {obs_space}")
 
@@ -205,7 +209,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         key: PRNGKeyArray,
         obs_space: SpaceLike,
         architecture: Callable[..., Network],
-        **kwargs,
+        architecture_kwargs: dict[str, Any],
     ):
         try:
             if len(obs_space.shape) == 3:
@@ -214,7 +218,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                     obs_space.shape,
                     key=key,
                     channels_axis=channels_axis,
-                    **kwargs,
+                    **architecture_kwargs,
                 )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
         except AttributeError:
@@ -263,7 +267,6 @@ class DiscreteHead(eqx.Module):
         key: PRNGKeyArray,
         distribution: Literal["categorical"] | None = "categorical",
         layer_type: Callable[..., Network] = eqx.nn.Linear,
-        **kwargs,
     ):
         # Obtain the number of outputs per dimension: [n] (Discrete) or [n, n, ...] (MultiDiscrete)
         num_outputs = getattr(output_space, "n", getattr(output_space, "nvec", None))
@@ -319,7 +322,6 @@ class ContinuousHead(eqx.Module):
         log_std_min: float = -5.0,
         log_std_max: float = 2.0,
         layer_type: Callable[..., Network] = eqx.nn.Linear,
-        **kwargs,
     ):
         low = np.array(output_space.low, dtype=float)
         high = np.array(output_space.high, dtype=float)
@@ -373,7 +375,6 @@ class QHead(eqx.Module):
         *,
         key: PRNGKeyArray,
         layer_type: Callable[..., Network] = eqx.nn.Linear,
-        **kwargs,
     ):
         if _is_space_discrete(output_space):
             self.mode = "discrete"
@@ -431,7 +432,6 @@ class PyTreeOutputNetwork(eqx.Module):
         continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
         layer_type: Callable[..., Network] = eqx.nn.Linear,
         assume_independent: bool = True,
-        **kwargs,
     ):
         def create_head(key: PRNGKeyArray, space: SpaceLike):
             if _is_space_discrete(space):

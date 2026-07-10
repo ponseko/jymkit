@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from typing import Any, Callable, Protocol
 
 import equinox as eqx
@@ -15,21 +16,26 @@ from jaxnasium.algorithms import (
 
 logger = logging.getLogger(__name__)
 
+_QVALUE_OUTPUT_LAYERS = partial(
+    PyTreeOutputNetwork,
+    discrete_distribution=None,
+    continuous_distribution=None,
+)
+
 
 """
 The base Reinforcement Learning Network classes (actor, V-network, Q-network).
 Each of these consist of three components:
-    - An observation processor (AutoAgentObservationNet)
+    - An observation processor (PyTreeObsSpaceNetwork)
         This accepts a PyTree of observation spaces and builds a network per observation space.
-        In case of a single 1d observation space, this will simply be the Identity network.
-        In case of a 2d observation space, this will be a CNN.
+        1d observation spaces are processed via the configured ``architecture_1d`` network.
+        2d observation spaces are processed via the configured ``architecture_2d`` network.
         The output of each observation processor is concatenated into a single 1d vector.
-    - A MLP =
-        This is a simple MLP network that takes the output of the observation processor and passes it through a MLP.
-    - An output processor (AutoAgentOutputNet)
+    - A body (default MLP) = A shared body network that takes the output of the observation processor and processes it jointly.
+    - An output processor (PyTreeOutputNetwork)
         This accepts a PyTree of output spaces and builds a network per output space.
         Automtically builds a discrete or continuous output network based on the output space.
-        Returns the output of each output network in the same PyTree structure as the action space.
+        Returns the output of each output network in the same PyTree structure as the action space. 
 """
 
 
@@ -43,6 +49,17 @@ class OutSizedNetwork(Network, Protocol):
     """Any module with a __call__ defined and an out_features attribute"""
 
     out_features: int
+
+
+def _split_network_kwargs(
+    network_kwargs: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    network_kwargs = network_kwargs or {}
+    return (
+        network_kwargs.get("obs", {}),
+        network_kwargs.get("body", {}),
+        network_kwargs.get("output", {}),
+    )
 
 
 class ActorNetwork(eqx.Module):
@@ -61,16 +78,17 @@ class ActorNetwork(eqx.Module):
         output_layers: Callable[..., PyTreeOutputNetwork] = PyTreeOutputNetwork,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        **kwargs,
+        network_kwargs: dict[str, Any] | None = None,
     ):
+        obs_kwargs, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
+
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
-        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
+        self.obs_processor = obs_processor(
+            obs_space, key=obs_key, network_kwargs=obs_kwargs
+        )
+        self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
-            self.body.out_features,
-            output_space,
-            key=output_key,
-            **kwargs,
+            self.body.out_features, output_space, key=output_key, **output_kwargs
         )
 
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
@@ -106,13 +124,20 @@ class ValueNetwork(eqx.Module):
         output_layers: Callable[..., Network] = eqx.nn.Linear,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        **kwargs,
+        network_kwargs: dict[str, Any] | None = None,
     ):
+        obs_kwargs, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
+
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
-        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
+        self.obs_processor = obs_processor(
+            obs_space, key=obs_key, network_kwargs=obs_kwargs
+        )
+        self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
-            key=output_key, in_features=self.body.out_features, out_features=1, **kwargs
+            in_features=self.body.out_features,
+            out_features=1,
+            key=output_key,
+            **output_kwargs,
         )
 
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
@@ -146,10 +171,10 @@ class QValueNetwork(eqx.Module):
         key: PRNGKeyArray,
         obs_processor: Callable[..., OutSizedNetwork] = PyTreeObsSpaceNetwork,
         body: Callable[..., OutSizedNetwork] = MLP,
-        output_layers: Callable[..., PyTreeOutputNetwork] = PyTreeOutputNetwork,
+        output_layers: Callable[..., PyTreeOutputNetwork] = _QVALUE_OUTPUT_LAYERS,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        **kwargs,
+        network_kwargs: dict[str, Any] | None = None,
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
@@ -158,11 +183,18 @@ class QValueNetwork(eqx.Module):
         else:
             self.include_action_in_input = False
 
+        obs_section, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
+
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(obs_space, key=obs_key, **kwargs)
-        self.body = body(self.obs_processor.out_features, key=body_key, **kwargs)
+        self.obs_processor = obs_processor(
+            obs_space, key=obs_key, network_kwargs=obs_section
+        )
+        self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
-            self.body.out_features, output_space, key=output_key, **kwargs
+            self.body.out_features,
+            output_space,
+            key=output_key,
+            **output_kwargs,
         )
 
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(

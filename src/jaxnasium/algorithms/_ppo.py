@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Tuple
+from typing import Any, Tuple
 
 import equinox as eqx
 import jax
@@ -38,10 +38,12 @@ class PPOAgent(RLAgent):
             env.observation_space,
             env.action_space,
             key=actor_key,
-            **trainer.actor_kwargs,
+            network_kwargs=trainer.actor_kwargs,
         )
         self.critic = ValueNetwork(
-            env.observation_space, key=critic_key, **trainer.critic_kwargs
+            env.observation_space,
+            key=critic_key,
+            network_kwargs=trainer.critic_kwargs,
         )
         self.optimizer_state = trainer.optimizer.init(
             eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
@@ -169,6 +171,9 @@ class PPO(RLAlgorithm):
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
+
+    actor_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
+    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
 
     @property
     def learning_rate_schedule(self):

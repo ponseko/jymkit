@@ -37,7 +37,6 @@ class CNN(eqx.Module):
         padding: Sequence[int] = (0, 0, 0),
         channels_axis: Literal["first", "last"] = "first",
         activation: Callable = jax.nn.relu,
-        **kwargs,
     ):
         assert len(out_channels) == len(kernel_sizes) == len(strides) == len(padding), (
             f"Lengths of out_channels, kernel_sizes, strides, and padding must match. "
@@ -105,7 +104,6 @@ class CNN(eqx.Module):
         strides: Sequence[int] = (1, 1, 1),
         padding: Sequence[int] = (0, 0, 0),
         activation: Callable = jax.nn.relu,
-        **kwargs,
     ) -> Callable[..., Self]:
         return partial(
             cls,
@@ -114,5 +112,4 @@ class CNN(eqx.Module):
             strides=strides,
             padding=padding,
             activation=activation,
-            **kwargs,
         )

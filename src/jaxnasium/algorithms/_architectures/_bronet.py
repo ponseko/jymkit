@@ -56,7 +56,6 @@ class BroNet(eqx.Module):
         key: PRNGKeyArray,
         depth: int,
         width_size: int,
-        **kwargs,
     ):
         keys = jax.random.split(key, depth + 1)
         self.in_features = in_features
@@ -82,11 +81,5 @@ class BroNet(eqx.Module):
         return x
 
     @classmethod
-    def with_params(
-        cls,
-        *,
-        depth: int,
-        width_size: int,
-        **kwargs,
-    ) -> Callable[..., Self]:
-        return partial(cls, depth=depth, width_size=width_size, **kwargs)
+    def with_params(cls, *, depth: int, width_size: int) -> Callable[..., Self]:
+        return partial(cls, depth=depth, width_size=width_size)

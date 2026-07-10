@@ -2,7 +2,7 @@ import logging
 import warnings
 from abc import abstractmethod
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Literal, Optional, Tuple
+from typing import Callable, Literal, Optional, Tuple
 
 import equinox as eqx
 import jax
@@ -36,8 +36,6 @@ class RLAlgorithm(eqx.Module):
         agent_state: Abstract variable representing the algorithm's internal state (PyTree of modules)
         multi_agent: Whether this algorithm instance operates in multi-agent mode
         auto_upgrade_multi_agent: Whether to automatically upgrade single-agent methods to multi-agent
-        actor_kwargs: Additional keyword arguments for actor networks
-        critic_kwargs: Additional keyword arguments for critic networks
         log_function: Logging function to use ("simple", "tqdm", or custom callable)
         log_interval: Interval for logging (as fraction of total steps or absolute number)
 
@@ -48,8 +46,6 @@ class RLAlgorithm(eqx.Module):
 
     multi_agent: bool = eqx.field(static=True, default=False)
     auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
-    actor_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
-    critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
     log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
         static=True, default="simple"
     )

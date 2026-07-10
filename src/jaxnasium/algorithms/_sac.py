@@ -53,11 +53,19 @@ class SACAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "SAC"):
         actor_key, critics_key = jax.random.split(key, 2)
+
+        # If the continuous distribution is not specified, use "tanhnormal" for SAC
+        output_kwargs = trainer.actor_kwargs.get("output", {})
+        cont_dist_output = output_kwargs.get("continuous_distribution", "tanhnormal")
+        output_kwargs["continuous_distribution"] = cont_dist_output
+        actor_kwargs = trainer.actor_kwargs.copy()
+        actor_kwargs["output"] = output_kwargs
+
         self.actor = ActorNetwork(
             env.observation_space,
             env.action_space,
             key=actor_key,
-            **trainer.actor_kwargs,
+            network_kwargs=actor_kwargs,
         )
         ensamble_critics_keys = jax.random.split(critics_key, 2)  # 2 critics
         self.critics = jax.vmap(
@@ -65,7 +73,7 @@ class SACAgent(RLAgent):
                 env.observation_space,
                 env.action_space,
                 key=key,
-                **trainer.critic_kwargs,
+                network_kwargs=trainer.critic_kwargs,
             )
         )(ensamble_critics_keys)
 
@@ -255,9 +263,8 @@ class SAC(RLAlgorithm):
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
-    actor_kwargs: dict[str, Any] = eqx.field(
-        static=True, default_factory=lambda: {"continuous_output_dist": "tanhNormal"}
-    )
+    actor_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
 
     @property
     def target_entropy_scale_schedule(self):

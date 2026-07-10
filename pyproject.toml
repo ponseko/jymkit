@@ -43,6 +43,7 @@ dev = [
 
 [tool.ruff.format]
 docstring-code-format = true
+docstring-code-line-length = 20
 
 [tool.ruff.lint]
 extend-select = ["I"]

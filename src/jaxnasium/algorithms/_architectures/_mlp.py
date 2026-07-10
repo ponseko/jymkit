@@ -26,7 +26,6 @@ class MLP(eqx.Module):
         key: PRNGKeyArray,
         hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.relu,
-        **kwargs,
     ):
         depth = len(hidden_sizes) + 1
         keys = jax.random.split(key, depth + 1)
@@ -56,6 +55,5 @@ class MLP(eqx.Module):
         *,
         hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.relu,
-        **kwargs,
     ) -> Callable[..., Self]:
-        return partial(cls, hidden_sizes=hidden_sizes, activation=activation, **kwargs)
+        return partial(cls, hidden_sizes=hidden_sizes, activation=activation)
