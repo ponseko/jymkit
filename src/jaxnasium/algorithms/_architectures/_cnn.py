@@ -31,7 +31,7 @@ class CNN(eqx.Module):
         input_shape: tuple[int, int, int],
         *,
         key: PRNGKeyArray,
-        hidden_sizes: Sequence[int] = (32, 64, 64),
+        out_channels: Sequence[int] = (32, 64, 64),
         kernel_sizes: Sequence[int] = (3, 3, 2),
         strides: Sequence[int] = (1, 1, 1),
         padding: Sequence[int] = (0, 0, 0),
@@ -39,10 +39,10 @@ class CNN(eqx.Module):
         activation: Callable = jax.nn.relu,
         **kwargs,
     ):
-        assert len(hidden_sizes) == len(kernel_sizes) == len(strides) == len(padding), (
-            f"Lengths of hidden_sizes, kernel_sizes, strides, and padding must match. "
-            f"Got {len(hidden_sizes)}, {len(kernel_sizes)}, {len(strides)}, and {len(padding)}."
-            f"This CNN implementation assumes _per layer_ ints for hidden_sizes, kernel_sizes, strides, and padding."
+        assert len(out_channels) == len(kernel_sizes) == len(strides) == len(padding), (
+            f"Lengths of out_channels, kernel_sizes, strides, and padding must match. "
+            f"Got {len(out_channels)}, {len(kernel_sizes)}, {len(strides)}, and {len(padding)}."
+            f"This CNN implementation assumes _per layer_ ints for out_channels, kernel_sizes, strides, and padding."
         )
 
         self.channels_axis = channels_axis
@@ -64,19 +64,19 @@ class CNN(eqx.Module):
         self.in_channels = in_channels
 
         self.layers = []
-        keys = jax.random.split(key, len(hidden_sizes))
-        for i, hidden_size in enumerate(hidden_sizes):
+        keys = jax.random.split(key, len(out_channels))
+        for i, out_channel in enumerate(out_channels):
             self.layers.append(
                 eqx.nn.Conv2d(
                     in_channels,
-                    hidden_size,
+                    out_channel,
                     kernel_size=kernel_sizes[i],
                     stride=strides[i],
                     padding=padding[i],
                     key=keys[i],
                 )
             )
-            in_channels = hidden_size
+            in_channels = out_channel
 
         out_shape = jax.eval_shape(
             lambda x: self(x), jnp.zeros(input_shape, dtype=jnp.float32)
@@ -100,7 +100,7 @@ class CNN(eqx.Module):
     def with_params(
         cls,
         *,
-        hidden_sizes: Sequence[int] = (32, 64, 64),
+        out_channels: Sequence[int] = (32, 64, 64),
         kernel_sizes: Sequence[int] = (3, 3, 2),
         strides: Sequence[int] = (1, 1, 1),
         padding: Sequence[int] = (0, 0, 0),
@@ -109,7 +109,7 @@ class CNN(eqx.Module):
     ) -> Callable[..., Self]:
         return partial(
             cls,
-            hidden_sizes=hidden_sizes,
+            out_channels=out_channels,
             kernel_sizes=kernel_sizes,
             strides=strides,
             padding=padding,

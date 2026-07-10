@@ -131,7 +131,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         key: PRNGKeyArray,
         architecture_1d: Callable[..., Network] = Identity,
         architecture_2d: Callable[..., Network] = CNN.with_params(
-            hidden_sizes=(32, 64, 64),
+            out_channels=(32, 64, 64),
             kernel_sizes=(3, 3, 2),
             strides=(1, 1, 1),
             padding=(0, 0, 0),
