@@ -7,8 +7,8 @@ import jax
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium.algorithms import (
-    MLP,
+from jaxnasium.algorithms.architectures import MLP
+from jaxnasium.algorithms.core import (
     PyTreeObsSpaceNetwork,
     PyTreeOutputNetwork,
     set_weight_bias,

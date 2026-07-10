@@ -11,7 +11,7 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium.tree
 
-from .._architectures import CNN, Identity
+from ..architectures import CNN, Identity
 from ._distributions import TanhNormalFactory
 
 logger = logging.getLogger(__name__)

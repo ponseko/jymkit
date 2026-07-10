@@ -74,7 +74,7 @@ def tree_map_distribution(fn: Callable, tree, *rest):
     try:
         import distrax
 
-        from jaxnasium.algorithms._core import DistraxContainer
+        from jaxnasium.algorithms.utils import DistraxContainer
     except ImportError:
         raise ImportError(
             "jaxnasium.algorithms is required for `jaxnasium.tree.map_distributions()`. Please install  `pip install jaxnasium[algs]`."

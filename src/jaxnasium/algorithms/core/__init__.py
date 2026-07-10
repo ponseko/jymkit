@@ -2,10 +2,7 @@ from ._buffer import (
     PrioritizedTransitionBuffer as PrioritizedTransitionBuffer,
     TransitionBuffer as TransitionBuffer,
 )
-from ._distributions import (
-    DistraxContainer as DistraxContainer,
-    TanhNormalFactory as TanhNormalFactory,
-)
+from ._distributions import TanhNormalFactory as TanhNormalFactory
 from ._initialization import set_weight_bias as set_weight_bias
 from ._input_output import (
     PyTreeObsSpaceNetwork as PyTreeObsSpaceNetwork,

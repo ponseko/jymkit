@@ -12,10 +12,9 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 import jaxnasium as jym
 from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
-from jaxnasium.algorithms import (
+from jaxnasium.algorithms import RLAgent, RLAlgorithm
+from jaxnasium.algorithms.core import (
     Normalizer,
-    RLAgent,
-    RLAlgorithm,
     Schedule,
     Transition,
     scan_callback,
