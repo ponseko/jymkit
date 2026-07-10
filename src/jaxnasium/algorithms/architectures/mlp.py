@@ -1,15 +1,17 @@
 import logging
+from functools import partial
 from typing import Callable, List, Sequence
 
 import equinox as eqx
 import jax
 from jaxtyping import PRNGKeyArray
+from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
 
 class MLP(eqx.Module):
-    """Simple MLP architecture."""
+    """Simple MLP architecture. Final hidden size is the output features."""
 
     layers: List[eqx.nn.Linear]
     in_features: int = eqx.field(static=True)
@@ -19,11 +21,11 @@ class MLP(eqx.Module):
 
     def __init__(
         self,
-        key: PRNGKeyArray,
         in_features: int,
+        *,
+        key: PRNGKeyArray,
         hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.relu,
-        **kwargs,
     ):
         depth = len(hidden_sizes) + 1
         keys = jax.random.split(key, depth + 1)
@@ -46,3 +48,12 @@ class MLP(eqx.Module):
             x = self.activation(layer(x))
         x = self.layers[-1](x)
         return x
+
+    @classmethod
+    def with_params(
+        cls,
+        *,
+        hidden_sizes: Sequence[int] = (128, 128),
+        activation: Callable = jax.nn.relu,
+    ) -> Callable[..., Self]:
+        return partial(cls, hidden_sizes=hidden_sizes, activation=activation)

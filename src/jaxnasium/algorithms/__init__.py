@@ -1,33 +1,19 @@
 try:
+    print("importing jaxnasium.algorithms")
     from ._algorithm import RLAgent as RLAgent, RLAlgorithm as RLAlgorithm
-    from ._architectures import (
-        CNN as CNN,
-        MLP as MLP,
-        BroNet as BroNet,
-        Identity as Identity,
-    )
-    from ._core import (
-        AutoAgentObservationNet as AutoAgentObservationNet,
-        AutoAgentOutputNet as AutoAgentOutputNet,
-        Normalizer as Normalizer,
-        PrioritizedTransitionBuffer as PrioritizedTransitionBuffer,
-        Schedule as Schedule,
-        Transition as Transition,
-        TransitionBuffer as TransitionBuffer,
-        pretty_print_network as pretty_print_network,
-        rl_initialization as rl_initialization,
-        scan_callback as scan_callback,
-    )
-    from ._dqn import DQN as DQN
-    from ._ppo import PPO as PPO
-    from ._pqn import PQN as PQN
-    from ._sac import SAC as SAC
     from .agent_networks import (
         ActorNetwork as ActorNetwork,
-        AdvantageCriticNetwork as AdvantageCriticNetwork,
+        AdvantageNetwork as AdvantageNetwork,
         QValueNetwork as QValueNetwork,
         ValueNetwork as ValueNetwork,
     )
+    from .btr import BTR as BTR
+    from .dqn import DQN as DQN
+    from .ppo import PPO as PPO
+    from .pqn import PQN as PQN
+    from .sac import SAC as SAC
+
+    print("importing jaxnasium.algorithms")
 
 except ImportError:
     raise ImportError(

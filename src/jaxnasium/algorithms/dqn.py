@@ -1,6 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
+from typing import Any
 
 import distrax
 import equinox as eqx
@@ -12,10 +13,9 @@ from jaxtyping import PRNGKeyArray, PyTree
 import jaxnasium as jym
 from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
-from jaxnasium.algorithms import (
+from jaxnasium.algorithms import RLAgent, RLAlgorithm
+from jaxnasium.algorithms.core import (
     Normalizer,
-    RLAgent,
-    RLAlgorithm,
     Schedule,
     Transition,
     TransitionBuffer,
@@ -35,10 +35,10 @@ class DQNAgent(RLAgent):
 
     def __init__(self, key, env: Environment, trainer: "DQN"):
         self.critic = QValueNetwork(
+            env.observation_space,
+            env.action_space,
             key=key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
-            **trainer.critic_kwargs,
+            network_kwargs=trainer.critic_kwargs,
         )
         self.critic_target = jax.tree.map(lambda x: x, self.critic)
 
@@ -144,6 +144,8 @@ class DQN(RLAlgorithm):
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
+
+    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
 
     @property
     def learning_rate_schedule(self) -> Schedule:

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Tuple
+from typing import Any, Tuple
 
 import equinox as eqx
 import jax
@@ -12,10 +12,9 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 import jaxnasium as jym
 from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
-from jaxnasium.algorithms import (
+from jaxnasium.algorithms import RLAgent, RLAlgorithm
+from jaxnasium.algorithms.core import (
     Normalizer,
-    RLAgent,
-    RLAlgorithm,
     Schedule,
     Transition,
     scan_callback,
@@ -35,15 +34,15 @@ class PPOAgent(RLAgent):
     def __init__(self, key, env: Environment, trainer: "PPO"):
         actor_key, critic_key = jax.random.split(key)
         self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
             key=actor_key,
-            obs_space=env.observation_space,
-            output_space=env.action_space,
-            **trainer.actor_kwargs,
+            network_kwargs=trainer.actor_kwargs,
         )
         self.critic = ValueNetwork(
+            env.observation_space,
             key=critic_key,
-            obs_space=env.observation_space,
-            **trainer.critic_kwargs,
+            network_kwargs=trainer.critic_kwargs,
         )
         self.optimizer_state = trainer.optimizer.init(
             eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
@@ -171,6 +170,9 @@ class PPO(RLAlgorithm):
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
+
+    actor_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
+    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
 
     @property
     def learning_rate_schedule(self):
