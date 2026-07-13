@@ -48,6 +48,7 @@ class MountainCarContinuous(Environment[EnvState]):
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: Float[Array, ""]
     ) -> Tuple[TimeStep, EnvState]:
+        action = action[0]
         position = state.position
         velocity = state.velocity
 

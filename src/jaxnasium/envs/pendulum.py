@@ -4,7 +4,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, PRNGKeyArray
+from jaxtyping import Array, Float, PRNGKeyArray
 
 from jaxnasium._environment import Environment, TimeStep
 from jaxnasium._registry import registry
@@ -36,8 +36,9 @@ class Pendulum(Environment[EnvState]):
     max_episode_steps: int = 200
 
     def step_env(
-        self, key: PRNGKeyArray, state: EnvState, action: int
+        self, key: PRNGKeyArray, state: EnvState, action: Float[Array, ""]
     ) -> Tuple[TimeStep, EnvState]:
+        action = action[0]
         u = jnp.clip(action, -self.max_torque, self.max_torque)
         costs = (
             self.angle_normalize(state.theta) ** 2

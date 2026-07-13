@@ -311,6 +311,7 @@ class ContinuousHead(eqx.Module):
     distribution: Callable[..., distrax.Distribution] = eqx.field(static=True)
     log_std_min: float = eqx.field(static=True)
     log_std_max: float = eqx.field(static=True)
+    output_shape: tuple[int, ...] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -328,10 +329,14 @@ class ContinuousHead(eqx.Module):
         self.distribution = _resolve_continuous_distribution(distribution, low, high)
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
+        self.output_shape = output_space.shape
 
-        # Two outputs (mean, std) per dimension of the (homogeneous) space.
-        num_outputs = np.atleast_1d(np.ones(output_space.shape, dtype=int) * 2).tolist()
-        _assert_homogeneous_output_space(num_outputs)
+        if len(self.output_shape) == ():
+            num_action_dims = 1
+        else:
+            num_action_dims = np.prod(self.output_shape)
+
+        num_outputs = [2] * num_action_dims  # [mean, std] per dimension
 
         # Create a (homegenuous) head per output dimension
         keys = optax.tree.split_key_like(key, num_outputs)
@@ -343,8 +348,8 @@ class ContinuousHead(eqx.Module):
         if action_mask is not None:
             logger.debug("Action mask provided for continuous space, ignoring.")
 
-        if len(self.layers) == 1:  # single-dimensional output space
-            out = self.layers[0](x)
+        if self.output_shape == ():
+            out = self.layers[0](x)  # scalar output
         else:
             stacked_layers = jaxnasium.tree.stack(self.layers)
             out = jax.vmap(lambda layer: layer(x))(stacked_layers)
