@@ -1,0 +1,97 @@
+from typing import Any, Dict, Tuple
+
+import jax
+import jax.numpy as jnp
+from jaxtyping import PRNGKeyArray
+
+from jaxnasium._environment import AgentObservation, TEnvState, TimeStep, TObservation
+from jaxnasium._spaces import Space
+
+from ._util import gymnasium_to_jaxnasium_space
+from ._wrappers import Wrapper
+
+
+class JaxMARLWrapper(Wrapper):
+    """
+    Wrapper for JaxMARL environments to transform them into the Jaxnasium environment interface.
+
+    **Arguments:**
+
+    - `_env`: JaxMARL environment.
+    """
+
+    _env: Any
+    _multi_agent: bool = True
+    remove_world_state: bool = True
+    """ Removes the world_state that is present in some environments from the observation. Required in Jaxnasium algorithms """
+
+    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, state = self._env.reset(key)
+        if "world_state" in obs and self.remove_world_state:
+            obs.pop("world_state")
+
+        try:  # Some environments have an action mask
+            action_masks = self._env.get_avail_actions(state)
+            obs = {k: AgentObservation(v, action_masks[k]) for k, v in obs.items()}
+        except Exception:
+            pass
+
+        return obs, state  # pyright: ignore
+
+    def step(
+        self, key: PRNGKeyArray, state: Any, action: int | float
+    ) -> Tuple[TimeStep, Any]:
+        obs, state_step, reward, done, info = self._env.step(key, state, action)
+
+        terminated = done  # No truncation in JaxMARL (?)
+        # remove the __all__ key from the done dict
+        info["JAXMARL_ORIG_DONE"] = done
+        done.pop("__all__")
+        if "__all__" in reward:
+            reward.pop("__all__")
+        truncated = jax.tree.map(lambda x: jnp.full_like(x, False), done)
+
+        if "world_state" in obs and self.remove_world_state:
+            obs.pop("world_state")
+
+        try:  # Some environments have an action mask
+            action_masks = self._env.get_avail_actions(state)
+            obs = {k: AgentObservation(v, action_masks[k]) for k, v in obs.items()}
+        except Exception:
+            pass
+
+        timestep_step = TimeStep(
+            observation=obs,
+            reward=reward,
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
+        )
+        timestep, state = self.auto_reset(key, timestep_step, state_step)
+        return timestep, state
+
+    @property
+    def observation_space(self) -> Dict[str, Space]:
+        # Extract the observation space for each agent and return it as a dictionary
+        agents = self._env.agents
+        try:
+            obs_spaces = {str(a): self._env.observation_space(a) for a in agents}
+        except TypeError:
+            # space does not accept an agent argument
+            # in those cases, JaxMARL uses the same space for all agents
+            obs_space = self._env.observation_space()
+            obs_spaces = {str(a): obs_space for a in agents}
+        return gymnasium_to_jaxnasium_space(obs_spaces)  # type: ignore[reportGeneralTypeIssues]
+
+    @property
+    def action_space(self) -> Dict[str, Space]:
+        # Extract the action space for each agent and return it as a dictionary
+        agents = self._env.agents
+        try:
+            spaces = {str(a): self._env.action_space(a) for a in agents}
+        except TypeError:
+            # space does not accept an agent argument
+            # in those cases, JaxMARL uses the same space for all agents
+            action_space = self._env.action_space()
+            spaces = {str(a): action_space for a in agents}
+        return gymnasium_to_jaxnasium_space(spaces)  # type: ignore[reportGeneralTypeIssues]

@@ -10,90 +10,18 @@ import numpy as np
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 
 import jaxnasium as jym
-
-from ._environment import (
+from jaxnasium._environment import (
     ORIGINAL_OBSERVATION_KEY,
-    AgentObservation,
     Environment,
     TEnvState,
     TimeStep,
     TObservation,
 )
-from ._spaces import Discrete, MultiDiscrete, Space
+from jaxnasium._spaces import Discrete, MultiDiscrete, Space
+
+from ._util import partition_obs_and_masks
 
 logger = logging.getLogger(__name__)
-
-
-def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
-    """
-    Check if the environment is wrapped with a specific wrapper class.
-    """
-    current_env = wrapped_env
-    while isinstance(current_env, Wrapper):
-        if isinstance(wrapper_class, str):  # Handle string class names
-            if current_env.__class__.__name__ == wrapper_class:
-                return True
-        else:  # Handle class type inputs
-            if isinstance(current_env, wrapper_class):
-                return True
-        current_env = current_env._env
-    return False
-
-
-def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
-    """
-    Remove a specific wrapper class from the environment.
-    """
-    current_env = wrapped_env
-    while isinstance(current_env, Wrapper):
-        if isinstance(current_env, wrapper_class):
-            return current_env._env
-        current_env = current_env._env
-    return wrapped_env
-
-
-def _partition_obs_and_masks(
-    observation_tree: PyTree[TObservation], multi_agent: bool
-) -> Tuple[PyTree, PyTree]:
-    """
-    Seperates a PyTree of observations of type `AgentObservation` into two trees:
-    one with the observations and one with the masks.
-    If the observation is not of type `AgentObservation`, the second tree will only
-    contain `None` values.
-    This is used such that wrappers can act on the observations only when action masks
-    are present.
-
-    Useage:
-    ```python
-    (observation, ...), env_state = self._env.step/reset(...)
-    obs, masks = self.partition_obs_and_masks(observation)
-    obs = ... # do something with obs ...
-    observation = eqx.combine(obs, masks)
-    ```
-
-    **Arguments:**
-
-    - `observation_tree`: (PyTree of) observations to be partitioned.
-    - `multi_agent`: Whether the environment is multi-agent or not.
-
-    """
-    observations = [observation_tree]
-    if multi_agent:
-        observations, _ = eqx.tree_flatten_one_level(observation_tree)
-    if all(not isinstance(o, AgentObservation) for o in observations):
-        filter_spec = True
-    elif all(isinstance(o, AgentObservation) for o in observations):
-        filter_spec = AgentObservation(observation=True, action_mask=False)
-        filter_spec = jax.tree.map(
-            lambda _: filter_spec,
-            observation_tree,
-            is_leaf=lambda x: isinstance(x, AgentObservation),
-        )
-    else:
-        raise ValueError(
-            "Observations for all agents must be either AgentObservation or not."
-        )
-    return eqx.partition(observation_tree, filter_spec=filter_spec)
 
 
 class Wrapper(Environment):
@@ -131,6 +59,34 @@ class Wrapper(Environment):
 
     def __getattr__(self, name):
         return getattr(self._env, name)
+
+
+def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
+    """
+    Check if the environment is wrapped with a specific wrapper class.
+    """
+    current_env = wrapped_env
+    while isinstance(current_env, Wrapper):
+        if isinstance(wrapper_class, str):  # Handle string class names
+            if current_env.__class__.__name__ == wrapper_class:
+                return True
+        else:  # Handle class type inputs
+            if isinstance(current_env, wrapper_class):
+                return True
+        current_env = current_env._env
+    return False
+
+
+def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
+    """
+    Remove a specific wrapper class from the environment.
+    """
+    current_env = wrapped_env
+    while isinstance(current_env, Wrapper):
+        if isinstance(current_env, wrapper_class):
+            return current_env._env
+        current_env = current_env._env
+    return wrapped_env
 
 
 class VecEnvWrapper(Wrapper):
@@ -219,7 +175,7 @@ class LogWrapper(Wrapper):
         done = jax.tree.map(jnp.logical_or, terminated, truncated)
         done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
         new_episode_return = jax.tree.map(
-            lambda _r, r: (_r + r), state.episode_returns, timestep.reward
+            lambda _r, r: _r + r, state.episode_returns, timestep.reward
         )
         new_episode_length = state.episode_lengths + 1
         state = LogEnvState(
@@ -289,9 +245,9 @@ class NormalizeVecObsWrapper(Wrapper):
         m_a = jax.tree.map(lambda v: v * state.count, state.var)
         m_b = jax.tree.map(lambda v: v * batch_count, batch_var)
         M2 = jax.tree.map(
-            lambda a, b, d: a
-            + b
-            + jnp.square(d) * state.count * batch_count / tot_count,
+            lambda a, b, d: (
+                a + b + jnp.square(d) * state.count * batch_count / tot_count
+            ),
             m_a,
             m_b,
             delta,
@@ -309,7 +265,7 @@ class NormalizeVecObsWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecObsState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
         state = NormalizeVecObsState(
             env_state=env_state,
             mean=jax.tree.map(jnp.zeros_like, obs),
@@ -328,7 +284,7 @@ class NormalizeVecObsWrapper(Wrapper):
     ) -> Tuple[TimeStep, NormalizeVecObsState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
         obs = timestep.observation
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
         state = replace(state, env_state=env_state)
         normalized_obs, state = self.update_state_and_get_obs(obs, state)
         normalized_obs = eqx.combine(normalized_obs, masks)
@@ -439,7 +395,7 @@ class FlattenObservationWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
         obs = eqx.combine(obs, masks)
         return obs, env_state
@@ -448,7 +404,7 @@ class FlattenObservationWrapper(Wrapper):
         self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, TEnvState]:
         timestep, env_state = self._env.step(key, state, action)
-        obs, masks = _partition_obs_and_masks(
+        obs, masks = partition_obs_and_masks(
             timestep.observation, self._env.multi_agent
         )
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
