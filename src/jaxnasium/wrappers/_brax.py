@@ -48,7 +48,7 @@ class BraxWrapper(Wrapper):
         )
         truncated = state_step.timestep >= self.max_episode_steps
         terminated = brax_env_state.done
-        info = brax_env_state.info
+        info = dict(brax_env_state.info)
 
         timestep_step = TimeStep(
             observation=brax_env_state.obs,
