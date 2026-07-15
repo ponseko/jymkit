@@ -1,6 +1,9 @@
+from dataclasses import asdict, is_dataclass
 from typing import Any, Tuple
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import (
@@ -10,6 +13,7 @@ from jaxnasium._environment import (
     TimeStep,
     TObservation,
 )
+from jaxnasium._spaces import Discrete, MultiDiscrete
 
 from ._util import gymnasium_to_jaxnasium_space
 from ._wrappers import Wrapper
@@ -32,15 +36,30 @@ class JumanjiWrapper(Wrapper):
         self._env = AutoResetWrapper(env, next_obs_in_extras=True)
 
     def _convert_jumanji_obs(self, obs: Any) -> TObservation:  # pyright: ignore[reportInvalidTypeVarUse]
+        def convert_jumanji_obs_to_dict(obs: Any) -> Any:
+            """Recursively convert Jumanji observations to regular dicts."""
+            if isinstance(obs, tuple) and hasattr(obs, "_asdict"):  # NamedTuple
+                return {
+                    key: convert_jumanji_obs_to_dict(value)
+                    for key, value in obs._asdict().items()  # pyright: ignore[reportAttributeAccessIssue]
+                }
+            elif is_dataclass(obs):
+                return {
+                    key: convert_jumanji_obs_to_dict(value)
+                    for key, value in asdict(obs).items()  # pyright: ignore
+                }
+            return obs
+
         if isinstance(obs, tuple) and hasattr(obs, "_asdict"):  # NamedTuple
             # Convert it to a dict and collect the action mask
             action_mask = getattr(obs, "action_mask", None)
             obs = {
-                key: value
+                key: convert_jumanji_obs_to_dict(value)
                 for key, value in obs._asdict().items()  # pyright: ignore[reportAttributeAccessIssue]
                 if key != "action_mask"
             }
-            obs = AgentObservation(observation=obs, action_mask=action_mask)
+            if action_mask is not None:
+                obs = AgentObservation(observation=obs, action_mask=action_mask)
         return obs  # type: ignore[reportGeneralTypeIssues]
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
@@ -80,9 +99,22 @@ class JumanjiWrapper(Wrapper):
             return {
                 k: self.__convert_gymnasium_space_to_dict(v)
                 for k, v in space.spaces.items()
-                if k != "action_mask"
             }
         return space
+
+    def __convert_gymnasium_int_box_to_discrete(self, space: Any) -> Any:
+        """Converts a gymnasium Box space with integer dtypes to a (multi-)discrete space."""
+        if space.__class__.__name__ != "Box" or not jnp.isdtype(
+            space.dtype, "integral"
+        ):
+            return space
+        assert np.all(np.asarray(space.low) == 0), (
+            "Cannot convert Box space with non-zero low to Discrete space"
+        )
+        high = np.broadcast_to(np.asarray(space.high), space.shape).astype(int)
+        if space.shape in ((), (1,)):
+            return Discrete(int(high.reshape(-1)[0]))
+        return MultiDiscrete(high)
 
     @property
     def observation_space(self) -> Any:
@@ -91,8 +123,11 @@ class JumanjiWrapper(Wrapper):
         space = self._env.observation_spec
         space = jumanji_specs_to_gym_spaces(space)
         space = self.__convert_gymnasium_space_to_dict(space)
-        return gymnasium_to_jaxnasium_space(space)
-        return self.__convert_gymnasium_space_to_dict(space)
+        space = gymnasium_to_jaxnasium_space(space)
+        action_mask_space = space.pop("action_mask", None)  # pyright: ignore[reportAttributeAccessIssue]
+        if action_mask_space is not None:
+            space = AgentObservation(observation=space, action_mask=action_mask_space)
+        return space
 
     @property
     def action_space(self) -> Any:
@@ -100,6 +135,6 @@ class JumanjiWrapper(Wrapper):
 
         space = self._env.action_spec
         space = jumanji_specs_to_gym_spaces(space)
+        space = jax.tree.map(self.__convert_gymnasium_int_box_to_discrete, space)
         space = self.__convert_gymnasium_space_to_dict(space)
         return gymnasium_to_jaxnasium_space(space)
-        return self.__convert_gymnasium_space_to_dict(space)
