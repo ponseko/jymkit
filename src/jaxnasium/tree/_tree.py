@@ -115,10 +115,25 @@ def tree_concatenate(trees: PyTree) -> Array:
     return jnp.concatenate(leaves)
 
 
+def _key_entry_name(key_entry: Any) -> str | None:
+    """Return the string name of a JAX/optax pytree key entry, if available."""
+    if isinstance(key_entry, jax.tree_util.GetAttrKey):
+        return key_entry.name
+    if isinstance(key_entry, jax.tree_util.DictKey):
+        dict_key = key_entry.key
+        return dict_key if isinstance(dict_key, str) else None
+    try:
+        from optax.tree_utils._state_utils import NamedTupleKey
+
+        if isinstance(key_entry, NamedTupleKey):
+            return key_entry.name
+    except ImportError:
+        pass
+    return None
+
+
 def tree_get_first(tree: PyTree, key: str) -> Any:
     """Get the first value from a pytree with the given key.
-    Like `optax.tree.get()` but returns the first value found in case
-    of multiple matches instead of raising an error.
 
     **Arguments**:
 
@@ -131,16 +146,12 @@ def tree_get_first(tree: PyTree, key: str) -> Any:
     **Raises**:
         KeyError: If the key is not found in the pytree.
     """
-    try:
-        import optax
-    except ImportError:
-        raise ImportError(
-            "optax is (for now) required for `jaxnasium.tree.get_first()`. Please install optax with `pip install optax`."
-        )
-    found_values_with_path = optax.tree.get_all_with_path(tree, key)
-    if not found_values_with_path:
-        raise KeyError(f"Key '{key}' not found in tree: {tree}.")
-    return found_values_with_path[0][1]
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        if not path:
+            continue
+        if _key_entry_name(path[-1]) == key:
+            return leaf
+    raise KeyError(f"Key '{key}' not found in tree: {tree}.")
 
 
 def tree_batch_sum(values, batch_axes: int | tuple[int, ...] = 0):
