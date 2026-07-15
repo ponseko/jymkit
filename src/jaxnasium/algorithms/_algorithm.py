@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
+from typing_extensions import Self
 
 import jaxnasium as jym
 from jaxnasium import Environment, Space, VecEnvWrapper, is_wrapped, remove_wrapper
@@ -59,7 +60,7 @@ class RLAlgorithm(eqx.Module):
         with open(file_path, "wb") as f:
             eqx.tree_serialise_leaves(f, self.agent)
 
-    def load_state(self, file_path: str) -> "RLAlgorithm":
+    def load_state(self, file_path: str) -> Self:
         with open(file_path, "rb") as f:
             agent = eqx.tree_deserialise_leaves(f, self.agent)
         algorithm = replace(self, agent=agent)
@@ -75,8 +76,10 @@ class RLAlgorithm(eqx.Module):
         return self.agent.get_action(key, observation, deterministic, **kwargs)
 
     @abstractmethod
-    def train(self, key: PRNGKeyArray, env: Environment) -> "RLAlgorithm":
-        pass
+    def train(self, key: PRNGKeyArray, env: Environment) -> Self: ...
+
+    @abstractmethod
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self: ...
 
     def evaluate(
         self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
@@ -230,8 +233,9 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
 
             # `map_multi_agent` infers the agent structure from the first non-key argument
             # As such, we create a per-agent environment (with each environment having the obs/action space of a single agent)
-            agent_structure = jax.tree.structure(env.observation_space)
-            obs_spaces = eqx.tree_flatten_one_level(env.observation_space)[0]
+            obs_spaces, agent_structure = eqx.tree_flatten_one_level(
+                env.observation_space
+            )
             action_spaces = eqx.tree_flatten_one_level(env.action_space)[0]
             envs = [
                 SingleAgentEnvView(env, a, o) for a, o in zip(action_spaces, obs_spaces)
