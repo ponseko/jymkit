@@ -121,6 +121,12 @@ class Tanh(distrax.Tanh):
 
 class TanhNormal(distrax.Transformed):
     def __init__(self, mean, std, shift=0.0, scale=1.0):
+        mean = jnp.asarray(mean)
+        std = jnp.asarray(std)
+        target_shape = jnp.shape(mean)
+        shift = jnp.broadcast_to(jnp.asarray(shift), target_shape)
+        scale = jnp.broadcast_to(jnp.asarray(scale), target_shape)
+
         dist = distrax.Normal(loc=mean, scale=std)
         tanh = Tanh()
         scaler = distrax.ScalarAffine(shift=shift, scale=scale)
@@ -129,6 +135,14 @@ class TanhNormal(distrax.Transformed):
         self._std = std
         self._shift = shift
         self._scale = scale
+
+    @property
+    def batch_shape(self):
+        return self.distribution.batch_shape
+
+    @property
+    def event_shape(self):
+        return self.distribution.event_shape
 
     def mode(self):
         return self._shift + self._scale * jnp.tanh(self._mean)
