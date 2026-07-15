@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, DTypeLike, PRNGKeyArray, PyTree, PyTreeDef
 
 """
 Convenience pytree functions used in the various RL algorithms which
@@ -315,6 +315,78 @@ def tree_split_key_like_structure(key: PRNGKeyArray, structure: PyTreeDef):  # p
     return jax.tree.unflatten(structure, keys)
 
 
+def tree_zeros_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
+    """
+    Creates an all-zeros PyTree with the same structure as `tree`.
+
+    **Arguments**:
+        `tree`: A pytree.
+        `dtype`: The dtype of the tree of zeros.
+    """
+    return jax.tree.map(lambda x: jnp.zeros_like(x, dtype=dtype), tree)
+
+
+def tree_ones_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
+    """
+    Creates an all-ones PyTree with the same structure as `tree`.
+
+    **Arguments**:
+        `tree`: A pytree.
+        `dtype`: The dtype of the tree of ones.
+    """
+    return jax.tree.map(lambda x: jnp.ones_like(x, dtype=dtype), tree)
+
+
+def tree_add(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+    """Add two pytrees or add a scalar, array, or prefix-pytree to each leaf of a pytree.
+
+    **Arguments**:
+        `tree_A`: First pytree.
+        `tree_B_or_prefix`: Second pytree or scalar, array, or prefix-pytree of tree_A.
+
+    **Example**:
+    ```python
+        >>> tree_A = [5, 6]
+        >>> tree_B = [10, 11]
+        >>> tree_add(tree_A, tree_B)
+        [Array(15, dtype=int32), Array(17, dtype=int32)]
+    ```
+    ```python
+        >>> tree_A = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
+        >>> tree_B = 1
+        >>> tree_add(tree_A, tree_B)
+        {'a': Array([2, 3], dtype=int32), 'b': Array(4, dtype=int32)}
+    ```
+    """
+    tree_B = jax.tree.broadcast(tree_B_or_prefix, tree_A)
+    return jax.tree.map(jnp.add, tree_A, tree_B)
+
+
+def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+    """Multiply two pytrees or multiply a scalar, array, or prefix-pytree to each leaf of a pytree.
+
+    **Arguments**:
+        `tree_A`: First pytree.
+        `tree_B_or_prefix`: Second pytree or scalar, array, or prefix-pytree of tree_A.
+
+    **Example**:
+    ```python
+    >>> tree_A = [5, 6]
+    >>> tree_B = [10, 11]
+    >>> tree_mul(tree_A, tree_B)
+    [Array(50, dtype=int32), Array(66, dtype=int32)]
+    ```
+    ```python
+    >>> tree_A = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
+    >>> tree_B = 2
+    >>> tree_mul(tree_A, tree_B)
+    {'a': Array([2, 4], dtype=int32), 'b': Array(6, dtype=int32)}
+    ```
+    """
+    tree_B = jax.tree.broadcast(tree_B_or_prefix, tree_A)
+    return jax.tree.map(jnp.multiply, tree_A, tree_B)
+
+
 batch_sum = tree_batch_sum
 get_first = tree_get_first
 gather_actions = tree_gather_actions
@@ -325,3 +397,7 @@ unstack = tree_unstack
 concatenate = tree_concatenate
 map_distribution = tree_map_distribution
 split_key_like_structure = tree_split_key_like_structure
+zeros_like = tree_zeros_like
+ones_like = tree_ones_like
+add = tree_add
+mul = tree_mul
