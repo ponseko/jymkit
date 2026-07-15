@@ -1,5 +1,4 @@
 try:
-    print("importing jaxnasium.algorithms")
     from ._algorithm import RLAgent as RLAgent, RLAlgorithm as RLAlgorithm
     from .agent_networks import (
         ActorNetwork as ActorNetwork,
@@ -12,8 +11,6 @@ try:
     from .ppo import PPO as PPO
     from .pqn import PQN as PQN
     from .sac import SAC as SAC
-
-    print("importing jaxnasium.algorithms")
 
 except ImportError:
     raise ImportError(

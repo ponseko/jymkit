@@ -209,7 +209,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         Infers this via the `_multi_agent` property. If not set, assumes single-agent.
         """
         if hasattr(self, "_multi_agent"):
-            return self._multi_agent
+            return self._multi_agent  # type: ignore
         return False
 
     @property
