@@ -2,14 +2,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import pytest
+from _proxy_test_envs import REPRESENTATIVE_ENVS, rollout
 
-from jaxnasium.algorithms import (
+from jaxnasium.algorithms.core import (
     PrioritizedTransitionBuffer,
     Transition,
     TransitionBuffer,
 )
 
 AGENTS = ("agent0", "agent1")
+SEED = jax.random.PRNGKey(0)
 
 
 def _make_single_agent_transition(
@@ -102,6 +104,47 @@ def _assert_encoded_windows_are_contiguous(
     assert bool(jnp.all(env_id == env_id[:, :1]))
     if n_steps > 1:
         assert bool(jnp.all(jnp.diff(time_id, axis=1) == 1))
+
+
+BUFFER_ENV_NAMES = [
+    "vector_discrete",
+    "dict_box",
+    "image_discrete",
+    "ma_dict_discrete",
+    "ma_heterogeneous_box",
+]
+
+
+@pytest.mark.parametrize("n_steps", [1, 3])
+@pytest.mark.parametrize("name", BUFFER_ENV_NAMES)
+def test_buffer_preserves_proxy_env_structure(name, n_steps):
+    """Insert/sample real proxy-env rollouts and check the obs/action pytree structure
+    (single- and multi-agent, various leaf shapes) survives a round trip."""
+    num_envs, rollout_len, sample_batch_size = 2, 8, 4
+    transition = rollout(
+        REPRESENTATIVE_ENVS[name], SEED, num_steps=rollout_len, num_envs=num_envs
+    )
+
+    buffer = TransitionBuffer(
+        max_size=rollout_len * num_envs,
+        sample_batch_size=sample_batch_size,
+        data_sample=jax.tree.map(lambda x: x[:1], transition),
+        n_steps=n_steps,
+    )
+    buffer = buffer.insert(transition)
+    batch = buffer.sample(jax.random.PRNGKey(1), with_replacement=True)
+
+    assert jax.tree.structure(batch.observation) == jax.tree.structure(
+        transition.observation
+    )
+    assert jax.tree.structure(batch.action) == jax.tree.structure(transition.action)
+
+    # Sampled leaves are (sample_batch_size[, n_steps], *feature_shape).
+    lead = (sample_batch_size,) if n_steps == 1 else (sample_batch_size, n_steps)
+    for stored, sampled in zip(
+        jax.tree.leaves(transition.observation), jax.tree.leaves(batch.observation)
+    ):
+        assert sampled.shape == lead + stored.shape[2:]
 
 
 @pytest.mark.parametrize("num_envs", [1, 3])
@@ -458,15 +501,14 @@ def test_per_sample_shapes(num_envs, n_steps, with_replacement):
     )
     buffer = buffer.insert(_make_single_agent_transition(8, num_envs))
 
-    batch, weights, flat_indices = buffer.sample(
-        jax.random.PRNGKey(0), with_replacement=with_replacement
-    )
+    batch = buffer.sample(jax.random.PRNGKey(0), with_replacement=with_replacement)
 
     _assert_sample_batch_shapes(
         batch, sample_batch_size=sample_batch_size, n_steps=n_steps
     )
-    assert weights.shape == (sample_batch_size,)
-    assert flat_indices.shape == (sample_batch_size,)
+    assert batch.PER_weight is not None and batch.PER_index is not None
+    assert batch.PER_weight.shape == (sample_batch_size,)
+    assert batch.PER_index.shape == (sample_batch_size,)
 
 
 def test_per_weights_are_max_normalized():
@@ -479,7 +521,8 @@ def test_per_weights_are_max_normalized():
     )
     buffer = buffer.insert(_make_single_agent_transition(8))
 
-    _, weights, _ = buffer.sample(jax.random.PRNGKey(1), with_replacement=False)
+    weights = buffer.sample(jax.random.PRNGKey(1), with_replacement=False).PER_weight
+    assert weights is not None
     assert float(weights.max()) == pytest.approx(1.0)
     assert jnp.all(weights > 0)
 
@@ -532,7 +575,8 @@ def test_per_high_priority_indices_are_sampled_more():
     keys = jax.random.split(jax.random.PRNGKey(2), 64)
     sampled = []
     for key in keys:
-        _, _, idx = buffer.sample(key, with_replacement=True)
+        idx = buffer.sample(key, with_replacement=True).PER_index
+        assert idx is not None
         sampled.append(int(idx[0]))
 
     assert all(i == 3 for i in sampled)
@@ -551,7 +595,7 @@ def test_per_n_step_multi_env_windows_stay_within_env():
     buffer = buffer.insert(_make_multi_agent_transition(10, num_envs, encode=True))
 
     for key in jax.random.split(jax.random.PRNGKey(3), 16):
-        batch, _, _ = buffer.sample(key, with_replacement=False)
+        batch = buffer.sample(key, with_replacement=False)
         for agent in ("agent0", "agent1"):
             _assert_encoded_windows_are_contiguous(
                 batch.observation[agent][..., 0], num_envs, n_steps=3
@@ -569,14 +613,16 @@ def test_per_insert_sample_update_are_jittable():
     @eqx.filter_jit
     def step(buf, transition, key):
         buf = buf.insert(transition)
-        batch, weights, indices = buf.sample(key, with_replacement=True)
-        buf = buf.update_priorities(indices, jnp.ones(indices.shape[0]))
-        return batch, weights
+        batch = buf.sample(key, with_replacement=True)
+        assert batch.PER_index is not None
+        buf = buf.update_priorities(batch.PER_index, jnp.ones(batch.PER_index.shape[0]))
+        return batch
 
-    batch, weights = step(
+    batch = step(
         buffer,
         _make_single_agent_transition(4, num_envs=2),
         jax.random.PRNGKey(4),
     )
+    assert batch.PER_weight is not None
     assert batch.observation.shape == (2, 3)
-    assert weights.shape == (2,)
+    assert batch.PER_weight.shape == (2,)

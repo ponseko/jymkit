@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 import jaxnasium as jym
-from jaxnasium.algorithms import SAC
 
 
 @pytest.mark.parametrize("alg", TEST_CONSTS.DISCRETE_ALGS)
@@ -34,10 +33,7 @@ def test_continuous_is_learning(alg):
     env = jym.make("Pendulum-v1")
     seed = jax.random.PRNGKey(0)
     seed1, seed2 = jax.random.split(seed)
-    if alg == SAC:
-        agent = alg(**TEST_CONSTS.SAC_CONTINUOUS_CONFIG)
-    else:
-        agent = alg(total_timesteps=500_000, log_function=None)
+    agent = alg(total_timesteps=500_000, log_function=None)
     agent = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)

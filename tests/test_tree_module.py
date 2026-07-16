@@ -1,5 +1,3 @@
-"""Tests for jaxnasium.tree utilities."""
-
 import jax
 import jax.numpy as jnp
 import optax
