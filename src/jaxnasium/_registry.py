@@ -23,7 +23,6 @@ def _wrap_env(
     env: Environment | Any, wrapper: Type[Wrapper], **wrapper_kwargs
 ) -> Environment:
     """Simply wraps an environment and outputs what happened to a logger"""
-    logger.info(f"Wrapping environment with {wrapper.__name__}")
     return wrapper(env, **wrapper_kwargs)
 
 

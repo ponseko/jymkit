@@ -179,7 +179,6 @@ class RLAlgorithm(eqx.Module):
                 "as it allows for easier checkpointing and resuming training."
             )
         if vectorized and not is_wrapped(env, VecEnvWrapper):
-            logger.info("Wrapping environment in VecEnvWrapper")
             env = VecEnvWrapper(env)
 
         return env
