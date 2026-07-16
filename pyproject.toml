@@ -42,6 +42,7 @@ dev = [
 ]
 external = [
     "brax>=0.14.2",
+    "gym>=0.26.2",
     "gymnax>=0.0.9",
     "jumanji>=1.1.1",
     "navix>=0.7.4",
