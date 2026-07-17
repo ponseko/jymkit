@@ -1,6 +1,9 @@
 import pytest
 from _test_utils import run_env_and_agent_env_test
 
+# Only run these in "external" mode
+pytestmark = pytest.mark.external
+
 pytest.importorskip("econojax")
 pytest.importorskip("rice_jax")
 pytest.importorskip("chargax")

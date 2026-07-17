@@ -6,6 +6,9 @@ import pytest
 
 import jaxnasium as jym
 
+# Only run these in "external" mode
+pytestmark = pytest.mark.learn
+
 
 @pytest.mark.parametrize("alg", TEST_CONSTS.DISCRETE_ALGS)
 def test_discrete_is_learning(alg):

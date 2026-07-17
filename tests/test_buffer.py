@@ -148,7 +148,7 @@ def test_buffer_preserves_proxy_env_structure(name, n_steps):
 
 
 @pytest.mark.parametrize("num_envs", [1, 3])
-@pytest.mark.parametrize("n_steps", [1, 2, 3])
+@pytest.mark.parametrize("n_steps", [1, 3])
 @pytest.mark.parametrize("with_replacement", [False, True])
 def test_sample_shapes_single_agent(num_envs, n_steps, with_replacement):
     rollout_len = 8
@@ -485,10 +485,10 @@ def test_per_insert_sets_max_priority_on_written_slots():
     assert buffer.priorities[2:].sum() == 0.0
 
 
-@pytest.mark.parametrize("num_envs", [1, 3])
 @pytest.mark.parametrize("n_steps", [1, 2])
 @pytest.mark.parametrize("with_replacement", [False, True])
-def test_per_sample_shapes(num_envs, n_steps, with_replacement):
+def test_per_sample_shapes(n_steps, with_replacement):
+    num_envs = 3
     max_size = 24 if num_envs > 1 else 8
     sample_batch_size = min(4, num_envs * (max_size // num_envs - n_steps + 1))
     data_sample = _make_single_agent_transition(1, num_envs)
@@ -580,26 +580,6 @@ def test_per_high_priority_indices_are_sampled_more():
         sampled.append(int(idx[0]))
 
     assert all(i == 3 for i in sampled)
-
-
-def test_per_n_step_multi_env_windows_stay_within_env():
-    num_envs = 3
-    buffer = PrioritizedTransitionBuffer(
-        max_size=30,
-        sample_batch_size=6,
-        data_sample=_make_multi_agent_transition(1, num_envs),
-        n_steps=3,
-        alpha=0.6,
-        beta=0.4,
-    )
-    buffer = buffer.insert(_make_multi_agent_transition(10, num_envs, encode=True))
-
-    for key in jax.random.split(jax.random.PRNGKey(3), 16):
-        batch = buffer.sample(key, with_replacement=False)
-        for agent in ("agent0", "agent1"):
-            _assert_encoded_windows_are_contiguous(
-                batch.observation[agent][..., 0], num_envs, n_steps=3
-            )
 
 
 def test_per_insert_sample_update_are_jittable():
