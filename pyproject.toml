@@ -66,3 +66,11 @@ venvPath = "."
 venv = ".venv"
 include = ["src", "tests"]
 exclude = ["src/jaxnasium/cli/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "learn: full algorithm training loops",
+    "external: smoke tests for third-party env packages",
+]
+testpaths = ["tests"]
+addopts = "-m 'not learn and not external'"
