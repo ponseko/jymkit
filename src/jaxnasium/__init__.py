@@ -16,27 +16,26 @@ from ._spaces import (
     Space as Space,
 )
 from ._types import AgentObservation as AgentObservation
-from ._wrappers import (
+from .wrappers import (
+    BraxWrapper as BraxWrapper,
     DiscreteActionWrapper as DiscreteActionWrapper,
     FlattenActionSpaceWrapper as FlattenActionSpaceWrapper,
     FlattenObservationWrapper as FlattenObservationWrapper,
+    GymnaxWrapper as GymnaxWrapper,
+    JaxMARLWrapper as JaxMARLWrapper,
+    JumanjiWrapper as JumanjiWrapper,
     LogWrapper as LogWrapper,
+    MetaParamsWrapper as MetaParamsWrapper,
+    NavixWrapper as NavixWrapper,
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
+    PgxWrapper as PgxWrapper,
     ScaleRewardWrapper as ScaleRewardWrapper,
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     Wrapper as Wrapper,
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,
-)
-from ._wrappers_ext import (
-    BraxWrapper as BraxWrapper,
-    GymnaxWrapper as GymnaxWrapper,
-    JaxMARLWrapper as JaxMARLWrapper,
-    JumanjiWrapper as JumanjiWrapper,
-    NavixWrapper as NavixWrapper,
-    PgxWrapper as PgxWrapper,
     xMinigridWrapper as xMinigridWrapper,
 )
 

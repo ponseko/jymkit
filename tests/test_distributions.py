@@ -1,11 +1,11 @@
-"""Tests for DistraxContainer and _transpose_tree_of_tuples."""
-
 import distrax
 import jax
 import jax.numpy as jnp
 
-from jaxnasium.algorithms._core._distributions import (
+from jaxnasium.algorithms.core import TanhNormalFactory
+from jaxnasium.algorithms.core._distributions import (
     DistraxContainer,
+    TanhNormal,
     _transpose_tree_of_tuples,
 )
 
@@ -155,7 +155,7 @@ class TestDistraxContainerNestedDict:
             "group2": jnp.array(2.0),
         }
         lp = self.container.log_prob(value)
-        assert isinstance(lp["group1"], dict)  # pyright: ignore[reportIndexIssue]
+        assert isinstance(lp["group1"], dict)  # type: ignore
 
 
 class TestDistraxContainerTupleStructure:
@@ -180,3 +180,57 @@ class TestDistraxContainerTupleStructure:
     def test_log_prob(self):
         lp = self.container.log_prob((jnp.array(0.0), jnp.array(1.0)))
         assert isinstance(lp, tuple) and len(lp) == 2
+
+
+def test_samples_within_default_bounds():
+    dist = TanhNormal(mean=jnp.zeros((4,)), std=jnp.ones((4,)))
+    samples = dist.sample(seed=SEED, sample_shape=(1000,))
+    assert samples.shape == (1000, 4)
+    # Default shift=0, scale=1 -> support is (-1, 1).
+    assert jnp.all(samples > -1.0)
+    assert jnp.all(samples < 1.0)
+
+
+def test_mode_matches_shifted_scaled_tanh():
+    mean = jnp.array([0.5, -1.0, 0.0])
+    dist = TanhNormal(mean=mean, std=jnp.ones((3,)), shift=1.0, scale=2.0)
+    assert jnp.allclose(dist.mode(), 1.0 + 2.0 * jnp.tanh(mean))
+
+
+def test_log_prob_is_finite_even_at_boundary():
+    dist = TanhNormal(mean=jnp.zeros((3,)), std=jnp.ones((3,)))
+    # Values exactly at the tanh boundary would blow up without clipping.
+    lp = dist.log_prob(jnp.array([-1.0, 0.0, 1.0]))
+    assert lp.shape == (3,)
+    assert jnp.all(jnp.isfinite(lp))
+
+
+def test_sample_and_log_prob_consistent_with_log_prob():
+    dist = TanhNormal(mean=jnp.zeros((5,)), std=jnp.ones((5,)))
+    sample, log_prob = dist.sample_and_log_prob(seed=SEED)
+    assert jnp.allclose(log_prob, dist.log_prob(sample), atol=1e-4)
+
+
+def test_batch_and_event_shape():
+    dist = TanhNormal(mean=jnp.zeros((4,)), std=jnp.ones((4,)))
+    assert dist.batch_shape == (4,)
+    assert dist.event_shape == ()
+
+
+def test_factory_sets_shift_and_scale_from_bounds():
+    low, high = -3.0, 5.0
+    factory = TanhNormalFactory(low, high)
+    dist = factory(mean=jnp.zeros((2,)), std=jnp.ones((2,)))
+    assert isinstance(dist, TanhNormal)
+    # scale = (high - low) / 2, shift = (high + low) / 2
+    assert jnp.allclose(dist._scale, 4.0)
+    assert jnp.allclose(dist._shift, 1.0)
+
+
+def test_factory_samples_within_bounds():
+    low, high = -3.0, 5.0
+    factory = TanhNormalFactory(low, high)
+    dist = factory(mean=jnp.zeros((3,)), std=jnp.ones((3,)))
+    samples = dist.sample(seed=SEED, sample_shape=(1000,))
+    assert jnp.all(samples > low)
+    assert jnp.all(samples < high)

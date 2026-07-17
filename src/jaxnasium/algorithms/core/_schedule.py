@@ -16,24 +16,25 @@ class Schedule(eqx.Module):
         if self.end is None:
             return self.start
 
+        def _linear_or_constant(start, end):
+            if end is None:
+                return optax.constant_schedule(start)
+            return optax.linear_schedule(
+                init_value=start,
+                end_value=end,
+                transition_steps=self.transition_steps,
+            )
+
         # If start is not per-agent, use end as the first argument of the tree.map:
         if jax.tree.structure(self.start) == jax.tree.structure(0):
             return jax.tree.map(
-                lambda end, start: optax.linear_schedule(
-                    init_value=start,
-                    end_value=end,
-                    transition_steps=self.transition_steps,
-                )(count),
+                lambda end, start: _linear_or_constant(start, end)(count),
                 self.end,
                 self.start,
             )
 
         return jax.tree.map(
-            lambda start, end: optax.linear_schedule(
-                init_value=start,
-                end_value=end,
-                transition_steps=self.transition_steps,
-            )(count),
+            lambda start, end: _linear_or_constant(start, end)(count),
             self.start,
             self.end,
         )

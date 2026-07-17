@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 from typing import Any, Callable, List, Literal, Protocol, Sequence
 
 import distrax
@@ -9,7 +10,7 @@ import numpy as np
 import optax
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
-import jaxnasium.tree
+import jaxnasium as jym
 
 from ..architectures import CNN, Identity
 from ._distributions import TanhNormalFactory
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 class SpaceLike(Protocol):
     shape: tuple[int, ...]
     sample: Callable[[PRNGKeyArray], Array]
+    dtype: jnp.dtype
 
 
 class DiscreteSpaceLike(SpaceLike, Protocol):
@@ -68,8 +70,10 @@ def _assert_homogeneous_output_space(num_outputs: List[int]):
     assert len(set(num_outputs)) == 1, (
         "Only homogeneous multi-dimensional output spaces supported to be supported for vmap."
         f" (all nvec elements must be the same, got {num_outputs}) "
-        "For heterogeneous spaces, use a composite of spaces instead."
-        "E.g. {'action1': (Discrete(n), 'action2': Discrete(m), ...}"
+        "For heterogeneous spaces, use a composite of spaces instead. "
+        "(E.g. {'action1': (Discrete(n), 'action2': Discrete(m), ...}) "
+        "This can be done through `jym.MultiDiscreteToListDiscreteWrapper` "
+        "or by flattening the action space using `jym.FlattenActionWrapper`."
     )
 
 
@@ -80,32 +84,58 @@ def _apply_action_mask(logits: Array, action_mask: Array) -> Array:
     NOTE: The mask is assumed to be a PyTree of the same structure as the
         output space. Masking dependent on another action is not supported.
     """
-    BIG_NEGATIVE = -1e9
-    return jax.tree.map(
-        lambda a, mask: a + (BIG_NEGATIVE * (1 - mask)),
-        logits,
-        action_mask,
-    )
+    try:
+        BIG_NEGATIVE = -1e9
+        return jax.tree.map(
+            lambda a, mask: a + (BIG_NEGATIVE * (1 - mask)),
+            logits,
+            action_mask,
+        )
+    except Exception as e:
+        logger.error(f"Failed to apply action mask: {e}")
+        raise ValueError(
+            "Failed to apply action mask with the above error. "
+            "logits and action_mask must have the same pytree structure and shapes. "
+            f"logits: {jax.tree.structure(logits)} with shapes {jax.tree.map(lambda x: x.shape, logits)} "
+            f"action_mask: {jax.tree.structure(action_mask)} with shapes {jax.tree.map(lambda x: x.shape, action_mask)}."
+            "Further note that action masking is not supported for actions which are conditionally dependent. "
+            "In this case, flatten the action space (e.g. using a `jym.FlattenActionWrapper`) or use a custom model."
+        )
 
 
 def _resolve_discrete_distribution(
     distribution: Literal["categorical"],
+    dtype: jnp.dtype = jnp.int32,
 ) -> Callable[..., distrax.Distribution]:
     if distribution == "categorical":
-        return distrax.Categorical
+        return partial(distrax.Categorical, dtype=dtype)
     raise ValueError(f"Unsupported discrete distribution: {distribution}")
 
 
 def _resolve_continuous_distribution(
-    distribution: Literal["normal", "tanhnormal"],
-    low: np.ndarray,
-    high: np.ndarray,
+    distribution: Literal["normal", "tanhnormal"], low: np.ndarray, high: np.ndarray
 ) -> Callable[..., distrax.Distribution]:
     if distribution == "normal":
         return distrax.Normal
     if distribution == "tanhnormal":
         return TanhNormalFactory(low=low, high=high)
     raise ValueError(f"Unsupported continuous distribution: {distribution}")
+
+
+class FlattenLayer(eqx.Module):
+    """Flattens the input array to a 1D vector."""
+
+    def __call__(self, x: Array, *args, **kwargs) -> Array:
+        return x.reshape(-1)
+
+
+class PyTreeFlattenLayer(eqx.Module):
+    """Flattens every leaf of a pytree into a single 1D vector."""
+
+    def __call__(self, x: Any, *args, **kwargs) -> Array:
+        leaves = jax.tree.leaves(x)
+        flat = [jnp.ravel(jnp.asarray(leaf, dtype=jnp.float32)) for leaf in leaves]
+        return jnp.concatenate(flat)
 
 
 class PyTreeObsSpaceNetwork(eqx.Module):
@@ -152,11 +182,26 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                     key, obs_space, architecture_2d, kwargs_2d
                 )
             elif len(obs_space.shape) == 2:
-                logger.error(
+                raise ValueError(
                     f"2D observation space shape without a channel axis ({obs_space.shape}) detected. "
                     "Either add a channel axis or use a FlattenObservationWrapper."
                 )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
+
+        # Exclude action mask from the observation space if present
+        obs_space = jax.tree.map(
+            lambda o: o.observation if isinstance(o, jym.AgentObservation) else o,
+            obs_space,
+            is_leaf=lambda o: isinstance(o, jym.AgentObservation),
+        )
+
+        # For continuous action space where a Q network is used, the action is included
+        # in the observation space. We process it seperately by flattening only.
+        action_input = None
+        original_obs_space = obs_space
+        if isinstance(obs_space, dict):
+            original_obs_space = obs_space.copy()
+            action_input = obs_space.pop("_ACTION", None)
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
         self.input_structure = jax.tree.structure(obs_space)
@@ -168,8 +213,13 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             keys,
         )
 
+        # Add back the action input if present
+        if action_input is not None:
+            action_input_layer = PyTreeFlattenLayer()
+            self.networks["_ACTION"] = action_input_layer
+
         # Infer the output feature size
-        dummy_obs = jax.tree.map(lambda o: jnp.zeros(o.shape), obs_space)
+        dummy_obs = jax.tree.map(lambda o: jnp.zeros(o.shape), original_obs_space)
         f = lambda obs: jnp.atleast_1d(self(obs))
         self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
@@ -182,7 +232,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             x,
             is_leaf=_is_callable_module,
         )
-        return jaxnasium.tree.concatenate(outputs)
+        return jym.tree.concatenate(outputs)
 
     def _create_1d_obs_processor(
         self,
@@ -283,14 +333,14 @@ class DiscreteHead(eqx.Module):
         self.distribution = (
             None
             if distribution is None
-            else _resolve_discrete_distribution(distribution)
+            else _resolve_discrete_distribution(distribution, dtype=output_space.dtype)
         )
 
     def __call__(self, x, action_mask=None):
         if len(self.layers) == 1:  # single-dimensional output space
             logits = self.layers[0](x)
         else:
-            stacked_layers = jaxnasium.tree.stack(self.layers)
+            stacked_layers = jym.tree.stack(self.layers)
             logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
 
         if action_mask is not None:
@@ -311,6 +361,7 @@ class ContinuousHead(eqx.Module):
     distribution: Callable[..., distrax.Distribution] = eqx.field(static=True)
     log_std_min: float = eqx.field(static=True)
     log_std_max: float = eqx.field(static=True)
+    output_shape: tuple[int, ...] = eqx.field(static=True)
 
     def __init__(
         self,
@@ -328,10 +379,14 @@ class ContinuousHead(eqx.Module):
         self.distribution = _resolve_continuous_distribution(distribution, low, high)
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
+        self.output_shape = output_space.shape
 
-        # Two outputs (mean, std) per dimension of the (homogeneous) space.
-        num_outputs = np.atleast_1d(np.ones(output_space.shape, dtype=int) * 2).tolist()
-        _assert_homogeneous_output_space(num_outputs)
+        if self.output_shape == ():
+            num_action_dims = 1
+        else:
+            num_action_dims = int(np.prod(self.output_shape))
+
+        num_outputs = [2] * num_action_dims  # [mean, std] per dimension
 
         # Create a (homegenuous) head per output dimension
         keys = optax.tree.split_key_like(key, num_outputs)
@@ -343,14 +398,16 @@ class ContinuousHead(eqx.Module):
         if action_mask is not None:
             logger.debug("Action mask provided for continuous space, ignoring.")
 
-        if len(self.layers) == 1:  # single-dimensional output space
-            out = self.layers[0](x)
+        if self.output_shape == ():
+            out = self.layers[0](x)  # scalar output
         else:
-            stacked_layers = jaxnasium.tree.stack(self.layers)
+            stacked_layers = jym.tree.stack(self.layers)
             out = jax.vmap(lambda layer: layer(x))(stacked_layers)
 
-        mean = out[..., 0]
-        log_std = jnp.clip(out[..., 1], self.log_std_min, self.log_std_max)
+        mean = out[..., 0].reshape(self.output_shape)
+        log_std = jnp.clip(
+            out[..., 1].reshape(self.output_shape), self.log_std_min, self.log_std_max
+        )
         std = jnp.exp(log_std)
 
         return self.distribution(mean, std)

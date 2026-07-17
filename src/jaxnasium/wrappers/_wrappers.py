@@ -10,96 +10,27 @@ import numpy as np
 from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 
 import jaxnasium as jym
-
-from ._environment import (
+from jaxnasium._environment import (
     ORIGINAL_OBSERVATION_KEY,
-    AgentObservation,
     Environment,
     TEnvState,
     TimeStep,
     TObservation,
 )
-from ._spaces import Discrete, MultiDiscrete, Space
+from jaxnasium._spaces import Discrete, MultiDiscrete, Space
+
+from ._util import partition_obs_and_masks
 
 logger = logging.getLogger(__name__)
-
-
-def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
-    """
-    Check if the environment is wrapped with a specific wrapper class.
-    """
-    current_env = wrapped_env
-    while isinstance(current_env, Wrapper):
-        if isinstance(wrapper_class, str):  # Handle string class names
-            if current_env.__class__.__name__ == wrapper_class:
-                return True
-        else:  # Handle class type inputs
-            if isinstance(current_env, wrapper_class):
-                return True
-        current_env = current_env._env
-    return False
-
-
-def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
-    """
-    Remove a specific wrapper class from the environment.
-    """
-    current_env = wrapped_env
-    while isinstance(current_env, Wrapper):
-        if isinstance(current_env, wrapper_class):
-            return current_env._env
-        current_env = current_env._env
-    return wrapped_env
-
-
-def _partition_obs_and_masks(
-    observation_tree: PyTree[TObservation], multi_agent: bool
-) -> Tuple[PyTree, PyTree]:
-    """
-    Seperates a PyTree of observations of type `AgentObservation` into two trees:
-    one with the observations and one with the masks.
-    If the observation is not of type `AgentObservation`, the second tree will only
-    contain `None` values.
-    This is used such that wrappers can act on the observations only when action masks
-    are present.
-
-    Useage:
-    ```python
-    (observation, ...), env_state = self._env.step/reset(...)
-    obs, masks = self.partition_obs_and_masks(observation)
-    obs = ... # do something with obs ...
-    observation = eqx.combine(obs, masks)
-    ```
-
-    **Arguments:**
-
-    - `observation_tree`: (PyTree of) observations to be partitioned.
-    - `multi_agent`: Whether the environment is multi-agent or not.
-
-    """
-    observations = [observation_tree]
-    if multi_agent:
-        observations, _ = eqx.tree_flatten_one_level(observation_tree)
-    if all(not isinstance(o, AgentObservation) for o in observations):
-        filter_spec = True
-    elif all(isinstance(o, AgentObservation) for o in observations):
-        filter_spec = AgentObservation(observation=True, action_mask=False)
-        filter_spec = jax.tree.map(
-            lambda _: filter_spec,
-            observation_tree,
-            is_leaf=lambda x: isinstance(x, AgentObservation),
-        )
-    else:
-        raise ValueError(
-            "Observations for all agents must be either AgentObservation or not."
-        )
-    return eqx.partition(observation_tree, filter_spec=filter_spec)
 
 
 class Wrapper(Environment):
     """Base class for all wrappers."""
 
     _env: Environment
+
+    def __check_init__(self):
+        logger.info(f"Wrapping environment with {self.__class__.__name__}")
 
     def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         return self._env.reset_env(key)
@@ -131,6 +62,34 @@ class Wrapper(Environment):
 
     def __getattr__(self, name):
         return getattr(self._env, name)
+
+
+def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
+    """
+    Check if the environment is wrapped with a specific wrapper class.
+    """
+    current_env = wrapped_env
+    while isinstance(current_env, Wrapper):
+        if isinstance(wrapper_class, str):  # Handle string class names
+            if current_env.__class__.__name__ == wrapper_class:
+                return True
+        else:  # Handle class type inputs
+            if isinstance(current_env, wrapper_class):
+                return True
+        current_env = current_env._env
+    return False
+
+
+def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
+    """
+    Remove a specific wrapper class from the environment.
+    """
+    current_env = wrapped_env
+    while isinstance(current_env, Wrapper):
+        if isinstance(current_env, wrapper_class):
+            return current_env._env
+        current_env = current_env._env
+    return wrapped_env
 
 
 class VecEnvWrapper(Wrapper):
@@ -189,24 +148,25 @@ class LogWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, LogEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        structure = self._env.agent_structure
-        initial_vals = jnp.zeros(structure.num_leaves).squeeze()
-        initial_timestep = 0
-        if is_wrapped(self._env, VecEnvWrapper):
-            vec_count = jax.tree.leaves(obs)[0].shape[0]
-            initial_vals = jnp.zeros((vec_count, structure.num_leaves)).squeeze()
-            initial_timestep = jnp.zeros((vec_count,)).squeeze()
-        if initial_vals.ndim == 0:
-            initial_vals = jnp.expand_dims(initial_vals, axis=0)
-        initial_returns = jax.tree.unflatten(structure, initial_vals.T)
+
+        # Infer the reward shape from the environment step function:
+        key = jax.random.PRNGKey(0)
+        reward_template = jax.eval_shape(
+            lambda s: self._env.step(key, s, self._env.sample_action(key))[0].reward,
+            env_state,
+        )
+
+        initial_returns = jym.tree.zeros_like(reward_template)
+        initial_lengths = jym.tree.zeros_like(reward_template, dtype=jnp.int32)
         state = LogEnvState(
             env_state=env_state,
             episode_returns=initial_returns,
-            episode_lengths=initial_vals,
+            episode_lengths=initial_lengths,
             returned_episode_returns=initial_returns,
-            returned_episode_lengths=initial_vals,
-            timestep=initial_timestep,
+            returned_episode_lengths=initial_lengths,
+            timestep=0,
         )
+
         return obs, state
 
     def step(
@@ -216,25 +176,26 @@ class LogWrapper(Wrapper):
 
         terminated, truncated = timestep.terminated, timestep.truncated
         assert jax.tree.structure(terminated) == jax.tree.structure(truncated)
+
         done = jax.tree.map(jnp.logical_or, terminated, truncated)
         done = jnp.all(jnp.array(jax.tree.leaves(done)))  # jax.tree.all does not work
-        new_episode_return = jax.tree.map(
-            lambda _r, r: (_r + r), state.episode_returns, timestep.reward
-        )
-        new_episode_length = state.episode_lengths + 1
+
+        new_episode_return = jym.tree.add(state.episode_returns, timestep.reward)
+        new_episode_length = jym.tree.add(state.episode_lengths, 1)
+
         state = LogEnvState(
             env_state=env_state,
-            episode_returns=jax.tree.map(
-                lambda n_r: (n_r * (1 - done)).squeeze(), new_episode_return
+            episode_returns=jym.tree.mul(new_episode_return, (1 - done)),  # done reset
+            episode_lengths=jym.tree.mul(new_episode_length, (1 - done)),  # done reset
+            # If done, set new episode return (/length); else, keep old episode return (/length)
+            returned_episode_returns=jym.tree.add(
+                jym.tree.mul(state.returned_episode_returns, (1 - done)),
+                jym.tree.mul(new_episode_return, done),
             ),
-            episode_lengths=new_episode_length * (1 - done),
-            returned_episode_returns=jax.tree.map(
-                lambda r, n_r: (r * (1 - done) + n_r * done).squeeze(),
-                state.returned_episode_returns,
-                new_episode_return,
+            returned_episode_lengths=jym.tree.add(
+                jym.tree.mul(state.returned_episode_lengths, (1 - done)),
+                jym.tree.mul(new_episode_length, done),
             ),
-            returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-            + new_episode_length * done,
             timestep=state.timestep + 1,
         )
         info = timestep.info
@@ -278,7 +239,7 @@ class NormalizeVecObsWrapper(Wrapper):
         batch_var = jax.tree.map(lambda o: jnp.var(o, axis=0), obs)
         batch_count = jax.tree.leaves(obs)[0].shape[0]
 
-        delta = jax.tree.map(lambda m, b: b - m, batch_mean, state.mean)
+        delta = jax.tree.map(lambda m, b: b - m, state.mean, batch_mean)
         tot_count = state.count + batch_count
         new_mean = jax.tree.map(
             lambda m, d: m + d * batch_count / tot_count,
@@ -289,9 +250,9 @@ class NormalizeVecObsWrapper(Wrapper):
         m_a = jax.tree.map(lambda v: v * state.count, state.var)
         m_b = jax.tree.map(lambda v: v * batch_count, batch_var)
         M2 = jax.tree.map(
-            lambda a, b, d: a
-            + b
-            + jnp.square(d) * state.count * batch_count / tot_count,
+            lambda a, b, d: (
+                a + b + jnp.square(d) * state.count * batch_count / tot_count
+            ),
             m_a,
             m_b,
             delta,
@@ -309,11 +270,12 @@ class NormalizeVecObsWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, NormalizeVecObsState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
+        obs_template = jax.tree.map(lambda o: o[0], obs)
         state = NormalizeVecObsState(
             env_state=env_state,
-            mean=jax.tree.map(jnp.zeros_like, obs),
-            var=jax.tree.map(jnp.ones_like, obs),
+            mean=jax.tree.map(jnp.zeros_like, obs_template),
+            var=jax.tree.map(jnp.ones_like, obs_template),
             count=1e-4,
         )
         normalized_obs, state = self.update_state_and_get_obs(obs, state)
@@ -328,7 +290,7 @@ class NormalizeVecObsWrapper(Wrapper):
     ) -> Tuple[TimeStep, NormalizeVecObsState]:
         timestep, env_state = self._env.step(key, state.env_state, action)
         obs = timestep.observation
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
         state = replace(state, env_state=env_state)
         normalized_obs, state = self.update_state_and_get_obs(obs, state)
         normalized_obs = eqx.combine(normalized_obs, masks)
@@ -439,7 +401,7 @@ class FlattenObservationWrapper(Wrapper):
 
     def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, env_state = self._env.reset(key)
-        obs, masks = _partition_obs_and_masks(obs, self._env.multi_agent)
+        obs, masks = partition_obs_and_masks(obs, self._env.multi_agent)
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
         obs = eqx.combine(obs, masks)
         return obs, env_state
@@ -448,7 +410,7 @@ class FlattenObservationWrapper(Wrapper):
         self, key: PRNGKeyArray, state: TEnvState, action: PyTree[int | float | Array]
     ) -> Tuple[TimeStep, TEnvState]:
         timestep, env_state = self._env.step(key, state, action)
-        obs, masks = _partition_obs_and_masks(
+        obs, masks = partition_obs_and_masks(
             timestep.observation, self._env.multi_agent
         )
         obs = jax.tree.map(lambda x: jnp.reshape(x, -1), obs)
@@ -471,6 +433,7 @@ class FlattenObservationWrapper(Wrapper):
     @property
     def observation_space(self) -> Space:
         obs_space = self._env.observation_space
+        obs, masks = partition_obs_and_masks(obs_space, self._env.multi_agent)
 
         def get_flat_shape(space):
             if not hasattr(space, "shape") or space.shape == ():
@@ -492,7 +455,9 @@ class FlattenObservationWrapper(Wrapper):
 
             return _space
 
-        return jax.tree.map(get_flat_shape, obs_space)
+        flat_obs = jax.tree.map(get_flat_shape, obs)
+        obs_space = eqx.combine(flat_obs, masks)
+        return obs_space
 
 
 class TransformRewardWrapper(Wrapper):
@@ -612,6 +577,51 @@ class MetaParamsWrapper(Wrapper):
         return env.step(key, state, action)
 
 
+def _to_single_discrete_space(spaces):
+    """Combines a PyTree of (multi-)discrete spaces to a single discrete space."""
+
+    n_values = []
+    spaces = jax.tree.leaves(spaces)
+    for space in spaces:
+        if hasattr(space, "n"):
+            n_values.append(int(space.n))
+        elif hasattr(space, "nvec"):
+            n_values.append(int(np.prod(np.array(space.nvec))))
+        else:
+            raise ValueError(
+                f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
+            )
+
+    combined_num_actions = int(np.prod(np.array(n_values)))
+    logger.info(
+        f"Flattened action space from: {spaces} to single space of {combined_num_actions} actions."
+    )
+    return Discrete(combined_num_actions)
+
+
+def _from_single_discrete_space(target_action_space: PyTree[Space], action: int):
+    """Converts a single discrete action to a (multi-)discrete action space."""
+
+    original_actions = []
+    spaces, space_structure = jax.tree.flatten(target_action_space)
+    for space in spaces:
+        if hasattr(space, "n"):
+            original_actions.append(action % space.n)
+            action = action // space.n
+        elif hasattr(space, "nvec"):
+            _actions = []
+            for n in space.nvec:
+                _actions.append(action % n)
+                action = action // n
+            original_actions.append(jnp.array(_actions))
+        else:
+            raise ValueError(
+                f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
+            )
+
+    return jax.tree.unflatten(space_structure, original_actions)
+
+
 class FlattenActionSpaceWrapper(Wrapper):
     """Wrapper to convert (PyTrees of) (multi-)discrete action spaces to a single
     discrete action space. This grows the action space (significantly for large action spaces),
@@ -630,72 +640,29 @@ class FlattenActionSpaceWrapper(Wrapper):
     ) -> Tuple[TimeStep, TEnvState]:
         # Converts the single discrete action back to the original PyTree of (multi-)discrete actions
 
-        def from_single_discrete_space(action_space: PyTree[Space], action: int):
-            """Converts a single discrete action to a (multi-)discrete action space."""
-
-            original_actions = []
-            spaces, space_structure = jax.tree.flatten(action_space)
-            for space in spaces:
-                if hasattr(space, "n"):
-                    original_actions.append(action % space.n)
-                    action = action // space.n
-                elif hasattr(space, "nvec"):
-                    _actions = []
-                    for n in space.nvec:
-                        _actions.append(action % n)
-                        action = action // n
-                    original_actions.append(jnp.array(_actions))
-                else:
-                    raise ValueError(
-                        f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
-                    )
-
-            return jax.tree.unflatten(space_structure, original_actions)
-
         # Skip if action space did not change
         if hasattr(self.original_action_space, "n"):
             return self._env.step(key, state, action)
 
         if self.multi_agent:
             action = jym.tree.map_one_level(
-                lambda sp, a: from_single_discrete_space(sp, a),
+                lambda sp, a: _from_single_discrete_space(sp, a),
                 self.original_action_space,
                 action,
             )
             return self._env.step(key, state, action)
 
-        action = from_single_discrete_space(self.original_action_space, action)
+        action = _from_single_discrete_space(self.original_action_space, action)
         return self._env.step(key, state, action)
 
     @property
     def action_space(self) -> Discrete:
-        def to_single_discrete_space(spaces):
-            """Combines a PyTree of (multi-)discrete spaces to a single discrete space."""
-
-            n_values = []
-            spaces = jax.tree.leaves(spaces)
-            for space in spaces:
-                if hasattr(space, "n"):
-                    n_values.append(int(space.n))
-                elif hasattr(space, "nvec"):
-                    n_values.append(int(np.prod(np.array(space.nvec))))
-                else:
-                    raise ValueError(
-                        f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
-                    )
-
-            combined_num_actions = int(np.prod(np.array(n_values)))
-            logger.info(
-                f"Flattened action space from: {spaces} to single space of {combined_num_actions} actions."
-            )
-            return Discrete(combined_num_actions)
-
         if self.multi_agent:
             return jym.tree.map_one_level(
-                to_single_discrete_space, self._env.action_space
+                _to_single_discrete_space, self._env.action_space
             )
 
-        return to_single_discrete_space(self._env.action_space)
+        return _to_single_discrete_space(self._env.action_space)
 
     @property
     def original_action_space(self) -> Space:

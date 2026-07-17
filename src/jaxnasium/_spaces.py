@@ -5,7 +5,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Int, PRNGKeyArray
+from jaxtyping import Array, ArrayLike, DTypeLike, Int, PRNGKeyArray
 
 
 class Space(ABC):
@@ -44,6 +44,7 @@ class Space(ABC):
     """
 
     shape: eqx.AbstractVar[tuple[int, ...]]
+    dtype: eqx.AbstractVar[DTypeLike]
 
     @abstractmethod
     def sample(self, rng: PRNGKeyArray) -> Array:
@@ -67,10 +68,10 @@ class Box(Space):
     - `dtype`: The data type of the space. Default is jnp.float32.
     """
 
-    low: float | Array = eqx.field(converter=np.asarray, default=0.0)
-    high: float | Array = eqx.field(converter=np.asarray, default=1.0)
+    low: float | ArrayLike = eqx.field(converter=np.asarray, default=0.0)
+    high: float | ArrayLike = eqx.field(converter=np.asarray, default=1.0)
     shape: tuple[int, ...] = ()
-    dtype: type = jnp.float32
+    dtype: DTypeLike = jnp.float32
 
     def __post_init__(self):
         if not isinstance(self.shape, tuple):
@@ -85,7 +86,7 @@ class Box(Space):
                 rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
             )
         if jnp.isdtype(self.dtype, "bool"):
-            self.dtype = jnp.int8
+            return jax.random.bernoulli(rng, 0.5, shape=self.shape)
         return jax.random.randint(
             rng, shape=self.shape, minval=low, maxval=high, dtype=self.dtype
         )
@@ -103,10 +104,10 @@ class Discrete(Space):
     """
 
     n: int
-    dtype: type
+    dtype: DTypeLike
     shape: tuple[int, ...] = ()
 
-    def __init__(self, n: int, dtype: type = jnp.int32):
+    def __init__(self, n: int, dtype: DTypeLike = jnp.int32):
         self.n = n
         self.dtype = dtype
 
@@ -129,19 +130,21 @@ class MultiDiscrete(Space):
     **Arguments:**
 
     - `nvec` (Array[int]): The number of discrete actions for each dimension.
-    - `dtype`: The data type of the space. Default is jnp.int16.
+    - `dtype`: The data type of the space. Default is jnp.int32.
     """
 
-    nvec: Int[Array | np.ndarray, " num_actions"]
-    dtype: type
+    nvec: Int[ArrayLike, " num_actions"]
+    dtype: DTypeLike
     shape: tuple[int, ...]
 
     def __init__(
-        self, nvec: Int[Array | np.ndarray, " num_actions"], dtype: type = jnp.int32
+        self,
+        nvec: Int[ArrayLike, " num_actions"],
+        dtype: DTypeLike = jnp.int32,
     ):
         self.nvec = nvec
         self.dtype = dtype
-        self.shape = (len(nvec),)
+        self.shape = (len(np.asarray(nvec).tolist()),)
 
     def sample(self, rng: PRNGKeyArray) -> Int[Array, ""]:
         """Sample random action uniformly from set of discrete choices."""

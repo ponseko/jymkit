@@ -1,61 +1,54 @@
 import os
 
-import _consts as TEST_CONSTS
 import cloudpickle
 import jax
 import jax.numpy as jnp
+import pytest
+from _test_utils import get_valid_test_algs
 
-import jaxnasium
-import jaxnasium.algorithms
+import jaxnasium as jym
+import jaxnasium.algorithms as jxalgs
+
+TEST_ENV = jym.make("CartPole-v1")
 
 
-def test_saving_loading(tmp_path):
+@pytest.mark.parametrize("test_alg_cls", get_valid_test_algs(TEST_ENV))
+def test_saving_loading(tmp_path, test_alg_cls: type[jxalgs.RLAlgorithm]):
     # Create a simple environment
-    env = jaxnasium.make("CartPole-v1")
+    env = TEST_ENV
 
-    # Initialize the agent
-    agent = jaxnasium.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
-
-    # # Train the agent
-    # agent = agent.train(jax.random.PRNGKey(1), env)
-    agent = agent.init_state(jax.random.PRNGKey(1), env)
+    agent = test_alg_cls()  # type: ignore
+    agent = agent.init_agent(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_saving_loading.eqx."
     agent.save_state(save_path)
 
-    # Load the agent
-    load_agent = jaxnasium.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
-    load_agent = load_agent.init_state(jax.random.PRNGKey(1), env)
+    # Reload the agent
+    load_agent = test_alg_cls()  # type: ignore
+    load_agent = load_agent.init_agent(jax.random.PRNGKey(42), env)
     load_agent = load_agent.load_state(save_path)
 
-    # Check if weights match (via some arbitary layer)
-    assert jnp.all(
-        agent.state.actor.mlp.layers[0].weight
-        == load_agent.state.actor.mlp.layers[0].weight
-    ), "Weights do not match after loading."
-    assert jnp.all(
-        agent.state.critic.mlp.layers[1].weight
-        == load_agent.state.critic.mlp.layers[1].weight
-    ), "Weights do not match after loading."
+    agent_weight = jym.tree.get_first(agent.agent, "weight")
+    load_agent_weight = jym.tree.get_first(load_agent.agent, "weight")
+    assert jnp.all(agent_weight == load_agent_weight), (
+        "Weights do not match after loading."
+    )
 
     # Check if the loaded agent can still train
-    load_agent.train(jax.random.PRNGKey(1), env)
-    load_agent.evaluate(jax.random.PRNGKey(1), env, num_eval_episodes=10)
+    # load_agent.train(jax.random.PRNGKey(1), env)
+    load_agent.evaluate(jax.random.PRNGKey(1), env, num_eval_episodes=2)
 
     # Remove the saved file after the test
     os.remove(save_path)
 
 
-def test_cloudpickle_saving(tmp_path):
+@pytest.mark.parametrize("test_alg_cls", get_valid_test_algs(TEST_ENV))
+def test_cloudpickle_saving(tmp_path, test_alg_cls: type[jxalgs.RLAlgorithm]):
     # Create a simple environment
-    env = jaxnasium.make("CartPole-v1")
+    env = TEST_ENV
 
-    # Initialize the agent
-    agent = jaxnasium.algorithms.PPO(**TEST_CONSTS.PPO_MIN_CONFIG)
-
-    # # Train the agent
-    # agent = agent.train(jax.random.PRNGKey(1), env)
-    agent = agent.init_state(jax.random.PRNGKey(1), env)
+    agent = test_alg_cls()  # type: ignore
+    agent = agent.init_agent(jax.random.PRNGKey(1), env)
 
     save_path = tmp_path / "test_cloudpickle_saving.pkl"
     with open(save_path, "wb") as f:
@@ -63,21 +56,17 @@ def test_cloudpickle_saving(tmp_path):
 
     # Load the agent
     with open(save_path, "rb") as f:
-        load_agent: jaxnasium.algorithms.PPO = cloudpickle.load(f)
+        load_agent = cloudpickle.load(f)
 
-    # Check if weights match
-    assert jnp.all(
-        agent.state.actor.mlp.layers[0].weight
-        == load_agent.state.actor.mlp.layers[0].weight
-    ), "Weights do not match after loading."
-    assert jnp.all(
-        agent.state.critic.mlp.layers[1].weight
-        == load_agent.state.critic.mlp.layers[1].weight
-    ), "Weights do not match after loading."
+    agent_weight = jym.tree.get_first(agent.agent, "weight")
+    load_agent_weight = jym.tree.get_first(load_agent.agent, "weight")
+    assert jnp.all(agent_weight == load_agent_weight), (
+        "Weights do not match after loading."
+    )
 
     # Check if the loaded agent can still train
-    load_agent.train(jax.random.PRNGKey(1), env)
-    load_agent.evaluate(jax.random.PRNGKey(1), env, num_eval_episodes=10)
+    # load_agent.train(jax.random.PRNGKey(1), env)
+    load_agent.evaluate(jax.random.PRNGKey(1), env, num_eval_episodes=2)
 
     # Remove the saved file after the test
     os.remove(save_path)

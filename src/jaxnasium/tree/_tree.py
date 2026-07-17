@@ -4,7 +4,7 @@ from typing import Any, Callable, Optional
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import Array, PRNGKeyArray, PyTree, PyTreeDef
+from jaxtyping import Array, DTypeLike, PRNGKeyArray, PyTree, PyTreeDef
 
 """
 Convenience pytree functions used in the various RL algorithms which
@@ -74,7 +74,7 @@ def tree_map_distribution(fn: Callable, tree, *rest):
     try:
         import distrax
 
-        from jaxnasium.algorithms.utils import DistraxContainer
+        from jaxnasium.algorithms.core._distributions import DistraxContainer
     except ImportError:
         raise ImportError(
             "jaxnasium.algorithms is required for `jaxnasium.tree.map_distributions()`. Please install  `pip install jaxnasium[algs]`."
@@ -115,10 +115,25 @@ def tree_concatenate(trees: PyTree) -> Array:
     return jnp.concatenate(leaves)
 
 
+def _key_entry_name(key_entry: Any) -> str | None:
+    """Return the string name of a JAX/optax pytree key entry, if available."""
+    if isinstance(key_entry, jax.tree_util.GetAttrKey):
+        return key_entry.name
+    if isinstance(key_entry, jax.tree_util.DictKey):
+        dict_key = key_entry.key
+        return dict_key if isinstance(dict_key, str) else None
+    try:
+        from optax.tree_utils._state_utils import NamedTupleKey
+
+        if isinstance(key_entry, NamedTupleKey):
+            return key_entry.name
+    except ImportError:
+        pass
+    return None
+
+
 def tree_get_first(tree: PyTree, key: str) -> Any:
     """Get the first value from a pytree with the given key.
-    Like `optax.tree.get()` but returns the first value found in case
-    of multiple matches instead of raising an error.
 
     **Arguments**:
 
@@ -131,16 +146,12 @@ def tree_get_first(tree: PyTree, key: str) -> Any:
     **Raises**:
         KeyError: If the key is not found in the pytree.
     """
-    try:
-        import optax
-    except ImportError:
-        raise ImportError(
-            "optax is (for now) required for `jaxnasium.tree.get_first()`. Please install optax with `pip install optax`."
-        )
-    found_values_with_path = optax.tree.get_all_with_path(tree, key)
-    if not found_values_with_path:
-        raise KeyError(f"Key '{key}' not found in tree: {tree}.")
-    return found_values_with_path[0][1]
+    for path, leaf in jax.tree_util.tree_leaves_with_path(tree):
+        if not path:
+            continue
+        if _key_entry_name(path[-1]) == key:
+            return leaf
+    raise KeyError(f"Key '{key}' not found in tree: {tree}.")
 
 
 def tree_batch_sum(values, batch_axes: int | tuple[int, ...] = 0):
@@ -209,7 +220,8 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
     this function will return the q-values corresponding to the actions taken.
     In continuous action spaces, q-values cannot be generated per action and
     tree will already contain the q-value for the action taken. This q-value
-    is then returned as is.
+    is then returned as is. This is also infered when the indices are floating
+    point indices.
 
     **Arguments**:
         tree: Array or Pytree of arrays.
@@ -219,6 +231,9 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
 
     def gather_actions(arr, indices):
         if arr.squeeze().shape == indices.squeeze().shape:
+            return arr
+        indices = jnp.asarray(indices)
+        if jnp.isdtype(indices.dtype, "real floating"):
             return arr
         return jnp.take_along_axis(arr, indices[..., None], axis=-1).squeeze()
 
@@ -315,6 +330,78 @@ def tree_split_key_like_structure(key: PRNGKeyArray, structure: PyTreeDef):  # p
     return jax.tree.unflatten(structure, keys)
 
 
+def tree_zeros_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
+    """
+    Creates an all-zeros PyTree with the same structure as `tree`.
+
+    **Arguments**:
+        `tree`: A pytree.
+        `dtype`: The dtype of the tree of zeros.
+    """
+    return jax.tree.map(lambda x: jnp.zeros_like(x, dtype=dtype), tree)
+
+
+def tree_ones_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
+    """
+    Creates an all-ones PyTree with the same structure as `tree`.
+
+    **Arguments**:
+        `tree`: A pytree.
+        `dtype`: The dtype of the tree of ones.
+    """
+    return jax.tree.map(lambda x: jnp.ones_like(x, dtype=dtype), tree)
+
+
+def tree_add(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+    """Add two pytrees or add a scalar, array, or prefix-pytree to each leaf of a pytree.
+
+    **Arguments**:
+        `tree_A`: First pytree.
+        `tree_B_or_prefix`: Second pytree or scalar, array, or prefix-pytree of tree_A.
+
+    **Example**:
+    ```python
+        >>> tree_A = [5, 6]
+        >>> tree_B = [10, 11]
+        >>> tree_add(tree_A, tree_B)
+        [Array(15, dtype=int32), Array(17, dtype=int32)]
+    ```
+    ```python
+        >>> tree_A = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
+        >>> tree_B = 1
+        >>> tree_add(tree_A, tree_B)
+        {'a': Array([2, 3], dtype=int32), 'b': Array(4, dtype=int32)}
+    ```
+    """
+    tree_B = jax.tree.broadcast(tree_B_or_prefix, tree_A)
+    return jax.tree.map(jnp.add, tree_A, tree_B)
+
+
+def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+    """Multiply two pytrees or multiply a scalar, array, or prefix-pytree to each leaf of a pytree.
+
+    **Arguments**:
+        `tree_A`: First pytree.
+        `tree_B_or_prefix`: Second pytree or scalar, array, or prefix-pytree of tree_A.
+
+    **Example**:
+    ```python
+    >>> tree_A = [5, 6]
+    >>> tree_B = [10, 11]
+    >>> tree_mul(tree_A, tree_B)
+    [Array(50, dtype=int32), Array(66, dtype=int32)]
+    ```
+    ```python
+    >>> tree_A = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
+    >>> tree_B = 2
+    >>> tree_mul(tree_A, tree_B)
+    {'a': Array([2, 4], dtype=int32), 'b': Array(6, dtype=int32)}
+    ```
+    """
+    tree_B = jax.tree.broadcast(tree_B_or_prefix, tree_A)
+    return jax.tree.map(jnp.multiply, tree_A, tree_B)
+
+
 batch_sum = tree_batch_sum
 get_first = tree_get_first
 gather_actions = tree_gather_actions
@@ -325,3 +412,7 @@ unstack = tree_unstack
 concatenate = tree_concatenate
 map_distribution = tree_map_distribution
 split_key_like_structure = tree_split_key_like_structure
+zeros_like = tree_zeros_like
+ones_like = tree_ones_like
+add = tree_add
+mul = tree_mul
