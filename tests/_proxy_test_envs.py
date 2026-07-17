@@ -250,7 +250,6 @@ def obs_ma_heterogeneous_discrete_multidiscrete():
     }
 
 
-# Also add a multi agent nested space with AgentObservation
 def obs_ma_dict_nested_masked_agent_observation():
     return {
         "agent_0": AgentObservation(

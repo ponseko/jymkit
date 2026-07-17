@@ -28,7 +28,9 @@ INPUT_SPACE_CASES = [
 @pytest.mark.parametrize("obs_space_fn, multi_agent", INPUT_SPACE_CASES)
 def test_various_input_spaces(obs_space_fn: Callable[[], Any], multi_agent: bool):
     env = make_proxy_env(obs_space_fn, multi_agent=multi_agent)
-    run_env_and_agent_env_test(env, test_reset=True, test_step=True, flatten_obs=False)
+    run_env_and_agent_env_test(
+        env, test_reset=True, test_step=True, flatten_obs=False, test_train_runs=True
+    )
 
 
 OUTPUT_SPACE_CASES = [
@@ -46,4 +48,6 @@ def test_various_output_spaces(action_space_fn: Callable[[], Any], multi_agent: 
         obs_space_fn = default_obs_space
 
     env = make_proxy_env(obs_space_fn, action_space_fn, multi_agent=multi_agent)
-    run_env_and_agent_env_test(env, test_reset=True, test_step=True, flatten_obs=False)
+    run_env_and_agent_env_test(
+        env, test_reset=True, test_step=True, flatten_obs=False, test_train_runs=True
+    )
