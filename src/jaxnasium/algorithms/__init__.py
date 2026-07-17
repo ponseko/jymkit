@@ -6,7 +6,6 @@ try:
         QValueNetwork as QValueNetwork,
         ValueNetwork as ValueNetwork,
     )
-    from .btr import BTR as BTR
     from .dqn import DQN as DQN
     from .ppo import PPO as PPO
     from .pqn import PQN as PQN
