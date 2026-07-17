@@ -324,7 +324,16 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         batch = self._gather_batch(flat_indices)
 
-        batch = batch.replace(PER_weight=weights, PER_index=flat_indices)
+        if isinstance(batch, Transition):
+            batch = batch.replace(PER_weight=weights, PER_index=flat_indices)
+        else:
+            batch = jax.tree.map(
+                lambda transition: transition.replace(
+                    PER_weight=weights, PER_index=flat_indices
+                ),
+                batch,
+                is_leaf=lambda x: isinstance(x, Transition),
+            )
 
         return batch
 
