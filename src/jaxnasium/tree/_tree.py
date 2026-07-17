@@ -220,7 +220,8 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
     this function will return the q-values corresponding to the actions taken.
     In continuous action spaces, q-values cannot be generated per action and
     tree will already contain the q-value for the action taken. This q-value
-    is then returned as is.
+    is then returned as is. This is also infered when the indices are floating
+    point indices.
 
     **Arguments**:
         tree: Array or Pytree of arrays.
@@ -230,6 +231,9 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
 
     def gather_actions(arr, indices):
         if arr.squeeze().shape == indices.squeeze().shape:
+            return arr
+        indices = jnp.asarray(indices)
+        if jnp.isdtype(indices.dtype, "real floating"):
             return arr
         return jnp.take_along_axis(arr, indices[..., None], axis=-1).squeeze()
 

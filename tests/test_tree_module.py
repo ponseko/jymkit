@@ -84,6 +84,23 @@ def test_gather_actions_continuous_passthrough():
     assert jnp.array_equal(jym.tree.gather_actions(q_value, action), q_value)
 
 
+def test_gather_actions_continuous_mismatched_shape():
+    """Continuous Q(s, a) is already computed; do not index with float actions."""
+    q_value = jnp.array(1.5)
+    action = jnp.array([0.1, 0.2, 0.3])
+    assert jnp.array_equal(jym.tree.gather_actions(q_value, action), q_value)
+
+
+def test_gather_actions_composite_continuous():
+    q_values = {"throttle": jnp.array(1.5), "steer": jnp.array(2.5)}
+    actions = {
+        "throttle": jnp.array([0.1, 0.2]),
+        "steer": jnp.array([0.3, 0.4, 0.5]),
+    }
+    gathered = jym.tree.gather_actions(q_values, actions)
+    assert gathered == q_values
+
+
 def test_stack_and_unstack_roundtrip():
     trees = (
         [jnp.array([1, 2]), jnp.array(4)],
