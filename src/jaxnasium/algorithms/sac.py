@@ -1,5 +1,6 @@
 import logging
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
 import distrax
@@ -328,42 +329,6 @@ class SAC(RLAlgorithm):
         return replace(self, agent=SACAgent(key=key, env=env, trainer=self))
 
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "SAC":
-        @scan_callback(
-            callback_fn=self.log_function,
-            callback_interval=self.log_interval,
-            n=self.num_iterations,
-        )
-        def train_iteration(runner_state, _):
-            """
-            Performs a single training iteration (A single `Collect data + Update` run).
-            This is repeated until the total number of timesteps is reached.
-            """
-
-            # Do rollout of single trajactory
-            self: SAC = runner_state[0]
-            buffer: TransitionBuffer = runner_state[1]
-            rollout_state = runner_state[2:]
-            (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-                rollout_state, env
-            )
-
-            # Update normalizer
-            agent = self.agent.update_normalizer(trajectory_batch)
-
-            # Add new data to buffer & Sample update batch from the buffer
-            buffer = buffer.insert(trajectory_batch)
-            train_batch = buffer.sample(rng)
-
-            train_batch = train_batch.normalize(agent.normalizer)
-
-            # Update
-            updated_agent = self._update_agent_state(rng, agent, train_batch)
-
-            metric = trajectory_batch.info or {}
-            self = replace(self, agent=updated_agent)
-            runner_state = (self, buffer, env_state, last_obs, rng)
-            return runner_state, metric
-
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
@@ -383,12 +348,53 @@ class SAC(RLAlgorithm):
         )
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
+        train_iteration_fn = partial(self.train_iteration, env=env)
+        train_iteration_fn = scan_callback(
+            func=train_iteration_fn,
+            callback_fn=self.log_function,
+            callback_interval=self.log_interval,
+            n=self.num_iterations,
+        )
+
         runner_state = (self, buffer, env_state, obsv, key)
         runner_state, metrics = jax.lax.scan(
-            train_iteration, runner_state, jnp.arange(self.num_iterations)
+            train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]
         return updated_self
+
+    @staticmethod
+    def train_iteration(runner_state, train_iter, *, env: Environment):
+        """
+        Performs a single training iteration (A single `Collect data + Update` run).
+
+        Typically, the method is wrapped in a partial `train_fn = partial(train_iteration, env=env)`,
+        and scanned over until the total number of timesteps is reached.
+        """
+        # Do rollout of single trajactory
+        self: SAC = runner_state[0]
+        buffer: TransitionBuffer = runner_state[1]
+        rollout_state = runner_state[2:]
+        (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
+            rollout_state, env
+        )
+
+        # Update normalizer
+        agent = self.agent.update_normalizer(trajectory_batch)
+
+        # Add new data to buffer & Sample update batch from the buffer
+        buffer = buffer.insert(trajectory_batch)
+        train_batch = buffer.sample(rng)
+
+        train_batch = train_batch.normalize(agent.normalizer)
+
+        # Update
+        updated_agent = self._update_agent_state(rng, agent, train_batch)
+
+        metric = trajectory_batch.info or {}
+        self = replace(self, agent=updated_agent)
+        runner_state = (self, buffer, env_state, last_obs, rng)
+        return runner_state, metric
 
     def _collect_rollout(self, rollout_state, env: Environment, length=None):
         def env_step(rollout_state, _):

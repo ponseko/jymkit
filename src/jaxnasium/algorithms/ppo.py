@@ -217,62 +217,68 @@ class PPO(RLAlgorithm):
         return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
 
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
-        @scan_callback(
-            callback_fn=self.log_function,
-            callback_interval=self.log_interval,
-            n=self.num_iterations,
-        )
-        def train_iteration(runner_state, _):
-            """
-            Performs a single training iteration (A single `Collect data + Update` run).
-            This is repeated until the total number of timesteps is reached.
-            """
-
-            # Do rollout of single trajactory
-            self: PPO = runner_state[0]
-            rollout_state = runner_state[1:]
-            (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-                rollout_state, env
-            )
-            metric = trajectory_batch.info or {}
-
-            agent = self.agent.update_normalizer(trajectory_batch)
-
-            trajectory_batch = trajectory_batch.normalize(agent.normalizer)
-
-            # Calculate GAE and returns, add to trajectory batch
-            _, (advantages, returns) = (
-                trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
-                    lambda gae, transition: self._compute_gae_scan(gae, transition),
-                    jnp.zeros(self.num_envs),
-                    reverse=True,
-                    unroll=16,
-                )
-            )
-            trajectory_batch = replace(
-                trajectory_batch, advantage=advantages, return_=returns
-            )
-
-            # Update agent
-            updated_agent = self._update_agent_state(rng, agent, trajectory_batch)
-            self = replace(self, agent=updated_agent)
-
-            runner_state = (self, env_state, last_obs, rng)
-            return runner_state, metric
-
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
         if not self.is_initialized:
             self = self.init_agent(key, env)
 
+        train_iteration_fn = partial(self.train_iteration, env=env)
+        train_iteration_fn = scan_callback(
+            func=train_iteration_fn,
+            callback_fn=self.log_function,
+            callback_interval=self.log_interval,
+            n=self.num_iterations,
+        )
+
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
         runner_state, metrics = jax.lax.scan(
-            train_iteration, runner_state, jnp.arange(self.num_iterations)
+            train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]
         return updated_self
+
+    @staticmethod
+    def train_iteration(runner_state, train_iter, *, env: Environment):
+        """
+        Performs a single training iteration (A single `Collect data + Update` run).
+
+        Typically, the method is wrapped in a partial `train_fn = partial(train_iteration, env=env)`,
+        and scanned over until the total number of timesteps is reached.
+        """
+
+        # Do rollout of single trajactory
+        self: PPO = runner_state[0]
+        rollout_state = runner_state[1:]
+        (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
+            rollout_state, env
+        )
+        metric = trajectory_batch.info or {}
+
+        agent = self.agent.update_normalizer(trajectory_batch)
+
+        trajectory_batch = trajectory_batch.normalize(agent.normalizer)
+
+        # Calculate GAE and returns, add to trajectory batch
+        _, (advantages, returns) = (
+            trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
+                lambda gae, transition: self._compute_gae_scan(gae, transition),
+                jnp.zeros(self.num_envs),
+                reverse=True,
+                unroll=16,
+            )
+        )
+        trajectory_batch = replace(
+            trajectory_batch, advantage=advantages, return_=returns
+        )
+
+        # Update agent
+        updated_agent = self._update_agent_state(rng, agent, trajectory_batch)
+        self = replace(self, agent=updated_agent)
+
+        runner_state = (self, env_state, last_obs, rng)
+        return runner_state, metric
 
     def _collect_rollout(self, rollout_state, env: Environment, length=None):
         def env_step(rollout_state, _):
