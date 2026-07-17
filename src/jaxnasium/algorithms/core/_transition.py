@@ -1,5 +1,4 @@
 import logging
-import warnings
 from typing import TYPE_CHECKING, Any, Optional
 
 import equinox as eqx
@@ -189,12 +188,6 @@ class Transition(eqx.Module):
             ``(final_carry, outputs)`` where in multi-agent mode every output
             has been merged back into the original per-agent pytree structure.
         """
-
-        warnings.warn(
-            "Transition.scan is deprecated.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
         structure = self.structure
 
