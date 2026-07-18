@@ -15,8 +15,8 @@ AGENT_MIN_CONFIG = {
     "log_function": None,
     "normalize_observations": False,
     "normalize_rewards": False,
-    "actor_kwargs": {"body": {"hidden_sizes": (8,)}},
-    "critic_kwargs": {"body": {"hidden_sizes": (8,)}},
+    "actor_kwargs": {"shared": {"hidden_sizes": (8,)}},
+    "critic_kwargs": {"shared": {"hidden_sizes": (8,)}},
 }
 
 

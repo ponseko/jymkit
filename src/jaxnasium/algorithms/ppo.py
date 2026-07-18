@@ -37,12 +37,12 @@ class PPOAgent(RLAgent):
             env.observation_space,
             env.action_space,
             key=actor_key,
-            network_kwargs=trainer.actor_kwargs,
+            **trainer.actor_kwargs,
         )
         self.critic = ValueNetwork(
             env.observation_space,
             key=critic_key,
-            network_kwargs=trainer.critic_kwargs,
+            **trainer.critic_kwargs,
         )
         self.optimizer_state = trainer.optimizer.init(
             eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
@@ -171,8 +171,8 @@ class PPO(RLAlgorithm):
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
 
-    actor_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
-    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
+    actor_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
+    critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
 
     @property
     def learning_rate_schedule(self):

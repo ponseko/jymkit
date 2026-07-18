@@ -57,7 +57,7 @@ def _split_network_kwargs(
     network_kwargs = network_kwargs or {}
     return (
         network_kwargs.get("obs", {}),
-        network_kwargs.get("body", {}),
+        network_kwargs.get("shared", {}),
         network_kwargs.get("output", {}),
     )
 
@@ -78,14 +78,12 @@ class ActorNetwork(eqx.Module):
         output_layers: Callable[..., PyTreeOutputNetwork] = PyTreeOutputNetwork,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        network_kwargs: dict[str, Any] | None = None,
+        **network_kwargs: dict[str, Any],
     ):
         obs_kwargs, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
 
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(
-            obs_space, key=obs_key, network_kwargs=obs_kwargs
-        )
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **obs_kwargs)
         self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
             self.body.out_features, output_space, key=output_key, **output_kwargs
@@ -124,14 +122,12 @@ class ValueNetwork(eqx.Module):
         output_layers: Callable[..., Network] = eqx.nn.Linear,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        network_kwargs: dict[str, Any] | None = None,
+        **network_kwargs: dict[str, Any],
     ):
         obs_kwargs, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
 
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(
-            obs_space, key=obs_key, network_kwargs=obs_kwargs
-        )
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **obs_kwargs)
         self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
             in_features=self.body.out_features,
@@ -174,7 +170,7 @@ class QValueNetwork(eqx.Module):
         output_layers: Callable[..., PyTreeOutputNetwork] = _QVALUE_OUTPUT_LAYERS,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        network_kwargs: dict[str, Any] | None = None,
+        **network_kwargs: dict[str, Any],
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
@@ -183,12 +179,10 @@ class QValueNetwork(eqx.Module):
         else:
             self.include_action_in_input = False
 
-        obs_section, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
+        obs_kwargs, body_kwargs, output_kwargs = _split_network_kwargs(network_kwargs)
 
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
-        self.obs_processor = obs_processor(
-            obs_space, key=obs_key, network_kwargs=obs_section
-        )
+        self.obs_processor = obs_processor(obs_space, key=obs_key, **obs_kwargs)
         self.body = body(self.obs_processor.out_features, key=body_key, **body_kwargs)
         self.output_layers = output_layers(
             self.body.out_features,

@@ -2,9 +2,7 @@ import jax
 from jaxtyping import PRNGKeyArray
 
 import jaxnasium as jym
-from jaxnasium.algorithms import PPO
-
-# from <PROJECTNAME> import ExampleEnv
+from jaxnasium.algorithms import PPO as Algo
 
 
 def do_random_evaluation(
@@ -27,19 +25,18 @@ def do_random_evaluation(
 
 
 if __name__ == "__main__":
-    env = ExampleEnv()  # noqa: F821 # type: ignore[reportUndefinedVariable]
+    env = jym.make("CartPole-v1")
     env = jym.LogWrapper(env)
     rng = jax.random.PRNGKey(0)
 
     random_rewards = do_random_evaluation(rng, env)
     print(f"Random Agent average reward: {random_rewards}")
 
-    # RL Training with PPO
-    agent = PPO(
-        total_timesteps=50000,
-        num_steps=64,
-        learning_rate=2.5e-3,
-        ent_coef=0.0,
-        num_epochs=1,
-    )
+    # RL Training
+    agent = Algo(total_timesteps=100000)
     agent = agent.train(rng, env)
+
+    # Changing network architecture:
+    # from jaxnasium.algorithms.architectures import BroNet
+    # agent = Algo(critic_kwargs={"body": BroNet.with_params(depth=2, width_size=256)})
+    #

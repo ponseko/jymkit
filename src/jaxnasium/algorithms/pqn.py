@@ -36,7 +36,7 @@ class PQNAgent(RLAgent):
             env.observation_space,
             env.action_space,
             key=key,
-            network_kwargs=trainer.critic_kwargs,
+            **trainer.critic_kwargs,
         )
 
         self.optimizer_state = trainer.optimizer.init(
@@ -119,7 +119,7 @@ class PQN(RLAlgorithm):
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
 
-    critic_kwargs: dict[str, Any] | None = eqx.field(static=True, default=None)
+    critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
 
     @property
     def learning_rate_schedule(self):

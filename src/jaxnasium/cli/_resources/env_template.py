@@ -17,6 +17,7 @@ class EnvState(eqx.Module):
         return (self.x, self.y)
 
 
+@jym.registry.register("ExampleEnv")
 class ExampleEnv(jym.Environment):
     max_episode_steps: int = 100
 

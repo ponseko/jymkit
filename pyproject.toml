@@ -27,7 +27,10 @@ requires = ["uv_build>=0.8.14,<0.9.0"]
 build-backend = "uv_build"
 
 [project.scripts]
-jaxnasium = "jaxnasium.cli.init:main"
+jaxnasium = "create_rl_app.main:main"
+
+[tool.uv.sources]
+create-rl-app = { git = "https://github.com/ponseko/create-rl-app.git", branch = "v1" } 
 
 [dependency-groups]
 dev = [
@@ -71,6 +74,7 @@ exclude = ["src/jaxnasium/cli/*"]
 markers = [
     "learn: full algorithm training loops",
     "external: smoke tests for third-party env packages",
+    "cli: test the create-rl-app cli tooling",
 ]
 testpaths = ["tests"]
 addopts = "-m 'not learn and not external'"
