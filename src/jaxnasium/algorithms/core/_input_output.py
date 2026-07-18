@@ -166,11 +166,11 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             strides=(1, 1, 1),
             padding=(0, 0, 0),
         ),
-        network_kwargs: dict[str, Any] | None = None,
+        network_kwargs_1d: dict[str, Any] | None = {},
+        network_kwargs_2d: dict[str, Any] | None = {},
     ):
-        network_kwargs = network_kwargs or {}
-        kwargs_1d = network_kwargs.get("1d", {})
-        kwargs_2d = network_kwargs.get("2d", {})
+        kwargs_1d = network_kwargs_1d or {}
+        kwargs_2d = network_kwargs_2d or {}
 
         def create_obs_processor(key: PRNGKeyArray, obs_space: SpaceLike):
             if obs_space.shape == () or len(obs_space.shape) == 1:
