@@ -170,7 +170,7 @@ class QValueNetwork(eqx.Module):
         output_layers: Callable[..., PyTreeOutputNetwork] = _QVALUE_OUTPUT_LAYERS,
         weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
         bias_init: float = 0.0,
-        network_kwargs: dict[str, Any] | None = None,
+        **network_kwargs: dict[str, Any],
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
