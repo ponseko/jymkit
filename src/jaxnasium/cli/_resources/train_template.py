@@ -36,6 +36,8 @@ if __name__ == "__main__":
     agent = Algo(total_timesteps=100000)
     agent = agent.train(rng, env)
 
+    print(f"Agent average reward: {agent.evaluate(rng, env)}")
+
     # Changing network architecture:
     # from jaxnasium.algorithms.architectures import BroNet
     # agent = Algo(critic_kwargs={"body": BroNet.with_params(depth=2, width_size=256)})
