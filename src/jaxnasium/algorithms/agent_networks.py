@@ -1,6 +1,6 @@
 import logging
 from functools import partial
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
 import equinox as eqx
 import jax
@@ -13,6 +13,7 @@ from jaxnasium.algorithms.core import (
     PyTreeOutputNetwork,
     set_weight_bias,
 )
+from jaxnasium.algorithms.types import Network, OutSizedNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,6 @@ Each of these consist of three components:
         Automtically builds a discrete or continuous output network based on the output space.
         Returns the output of each output network in the same PyTree structure as the action space. 
 """
-
-
-class Network(Protocol):
-    """Any module with a __call__ defined"""
-
-    def __call__(self, *args, **kwargs) -> Any: ...
-
-
-class OutSizedNetwork(Network, Protocol):
-    """Any module with a __call__ defined and an out_features attribute"""
-
-    out_features: int
 
 
 def _split_network_kwargs(

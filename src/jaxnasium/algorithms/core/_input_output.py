@@ -1,6 +1,6 @@
 import logging
 from functools import partial
-from typing import Any, Callable, List, Literal, Protocol, Sequence
+from typing import Any, Callable, List, Literal
 
 import distrax
 import equinox as eqx
@@ -13,31 +13,15 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 import jaxnasium as jym
 
 from ..architectures import CNN, Identity
+from ..types import (
+    ContinuousSpaceLike,
+    DiscreteSpaceLike,
+    Network,
+    SpaceLike,
+)
 from ._distributions import TanhNormalFactory
 
 logger = logging.getLogger(__name__)
-
-
-class SpaceLike(Protocol):
-    shape: tuple[int, ...]
-    sample: Callable[[PRNGKeyArray], Array]
-    dtype: jnp.dtype
-
-
-class DiscreteSpaceLike(SpaceLike, Protocol):
-    n: int | None = None
-    nvec: Sequence[int] | None = None
-
-
-class ContinuousSpaceLike(SpaceLike, Protocol):
-    low: Array
-    high: Array
-
-
-class Network(Protocol):
-    """Any module with a __call__ defined"""
-
-    def __call__(self, *args, **kwargs) -> Any: ...
 
 
 def _is_space_discrete(space: SpaceLike) -> bool:
