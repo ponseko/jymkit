@@ -223,11 +223,11 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         f = lambda obs: jnp.atleast_1d(self(obs))
         self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
 
-    def __call__(self, x):
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
         x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
 
         outputs = jax.tree.map(
-            lambda layer, x: layer(x),
+            lambda layer, x: layer(x, key=key),
             self.networks,
             x,
             is_leaf=_is_callable_module,
@@ -336,12 +336,12 @@ class DiscreteHead(eqx.Module):
             else _resolve_discrete_distribution(distribution, dtype=output_space.dtype)
         )
 
-    def __call__(self, x, action_mask=None):
+    def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if len(self.layers) == 1:  # single-dimensional output space
-            logits = self.layers[0](x)
+            logits = self.layers[0](x, key=key)
         else:
             stacked_layers = jym.tree.stack(self.layers)
-            logits = jax.vmap(lambda layer: layer(x))(stacked_layers)
+            logits = jax.vmap(lambda layer: layer(x, key=key))(stacked_layers)
 
         if action_mask is not None:
             logits = _apply_action_mask(logits, action_mask)
@@ -394,15 +394,15 @@ class ContinuousHead(eqx.Module):
             lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
         )
 
-    def __call__(self, x, action_mask=None):
+    def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if action_mask is not None:
             logger.debug("Action mask provided for continuous space, ignoring.")
 
         if self.output_shape == ():
-            out = self.layers[0](x)  # scalar output
+            out = self.layers[0](x, key=key)  # scalar output
         else:
             stacked_layers = jym.tree.stack(self.layers)
-            out = jax.vmap(lambda layer: layer(x))(stacked_layers)
+            out = jax.vmap(lambda layer: layer(x, key=key))(stacked_layers)
 
         mean = out[..., 0].reshape(self.output_shape)
         log_std = jnp.clip(
@@ -448,12 +448,12 @@ class QHead(eqx.Module):
         else:
             raise ValueError(f"Unsupported output space: {output_space}")
 
-    def __call__(self, x, action_mask=None):
+    def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if self.mode == "discrete":
-            return self.layer(x, action_mask=action_mask)
+            return self.layer(x, action_mask=action_mask, key=key)
         if action_mask is not None:
             logger.debug("Action mask provided for continuous space, ignoring.")
-        return self.layer(x).squeeze()
+        return self.layer(x, key=key).squeeze()
 
 
 class PyTreeOutputNetwork(eqx.Module):
@@ -550,14 +550,14 @@ class PyTreeOutputNetwork(eqx.Module):
             )
         return has_continuous_q_head
 
-    def __call__(self, x, action_mask=None):
+    def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if action_mask is None:  # Dummy action mask if not provided
             action_mask = jax.tree.map(
                 lambda _: None, self.heads, is_leaf=_is_callable_module
             )
 
         outputs = jax.tree.map(
-            lambda head, mask: head(x, action_mask=mask),
+            lambda head, mask: head(x, action_mask=mask, key=key),
             self.heads,
             action_mask,
             is_leaf=_is_callable_module,

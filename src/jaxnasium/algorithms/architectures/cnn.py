@@ -86,12 +86,12 @@ class CNN(eqx.Module):
         )
         self.out_features = out_shape[0]
 
-    def __call__(self, x):
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
         if self.channels_axis == "last":
             x = jnp.moveaxis(x, -1, 0)
 
         for layer in self.layers:
-            x = self.activation(layer(x))
+            x = self.activation(layer(x, key=key))
         x = jnp.reshape(x, -1)
         return x
 

@@ -96,15 +96,15 @@ class ActorNetwork(eqx.Module):
             bias_init=bias_init,
         )
 
-    def __call__(self, x):
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
         action_mask = None
         if isinstance(x, jym.AgentObservation):
             action_mask = x.action_mask
             x = x.observation
 
-        x = self.obs_processor(x)
-        x = self.body(x)
-        return self.output_layers(x, action_mask=action_mask)
+        x = self.obs_processor(x, key=key)
+        x = self.body(x, key=key)
+        return self.output_layers(x, action_mask=action_mask, key=key)
 
 
 class ValueNetwork(eqx.Module):
@@ -143,13 +143,13 @@ class ValueNetwork(eqx.Module):
             bias_init=bias_init,
         )
 
-    def __call__(self, x):
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
         if isinstance(x, jym.AgentObservation):
             x = x.observation
 
-        x = self.obs_processor(x)
-        x = self.body(x)
-        return self.output_layers(x).squeeze(-1)
+        x = self.obs_processor(x, key=key)
+        x = self.body(x, key=key)
+        return self.output_layers(x, key=key).squeeze(-1)
 
 
 class QValueNetwork(eqx.Module):
@@ -198,7 +198,9 @@ class QValueNetwork(eqx.Module):
             bias_init=bias_init,
         )
 
-    def __call__(self, x, action=None) -> Array | PyTree[Array]:
+    def __call__(
+        self, x, action=None, *, key: PRNGKeyArray | None = None
+    ) -> Array | PyTree[Array]:
         action_mask = None
         if isinstance(x, jym.AgentObservation):
             action_mask = x.action_mask
@@ -208,9 +210,9 @@ class QValueNetwork(eqx.Module):
             assert action is not None, "Action not provided in continuous Q network."
             x = {"_OBSERVATION": x, "_ACTION": action}
 
-        x = self.obs_processor(x)
-        x = self.body(x)
-        return self.output_layers(x, action_mask=action_mask)
+        x = self.obs_processor(x, key=key)
+        x = self.body(x, key=key)
+        return self.output_layers(x, action_mask=action_mask, key=key)
 
 
 AdvantageNetwork = QValueNetwork
