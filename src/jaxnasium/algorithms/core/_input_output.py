@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from jaxtyping import Array, PRNGKeyArray, PyTree
+from typing_extensions import Self
 
 import jaxnasium as jym
 
@@ -150,21 +151,12 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             strides=(1, 1, 1),
             padding=(0, 0, 0),
         ),
-        network_kwargs_1d: dict[str, Any] | None = {},
-        network_kwargs_2d: dict[str, Any] | None = {},
     ):
-        kwargs_1d = network_kwargs_1d or {}
-        kwargs_2d = network_kwargs_2d or {}
-
         def create_obs_processor(key: PRNGKeyArray, obs_space: SpaceLike):
             if obs_space.shape == () or len(obs_space.shape) == 1:
-                return self._create_1d_obs_processor(
-                    key, obs_space, architecture_1d, kwargs_1d
-                )
+                return self._create_1d_obs_processor(key, obs_space, architecture_1d)
             elif len(obs_space.shape) == 3:
-                return self._create_2d_obs_processor(
-                    key, obs_space, architecture_2d, kwargs_2d
-                )
+                return self._create_2d_obs_processor(key, obs_space, architecture_2d)
             elif len(obs_space.shape) == 2:
                 raise ValueError(
                     f"2D observation space shape without a channel axis ({obs_space.shape}) detected. "
@@ -223,7 +215,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         key: PRNGKeyArray,
         obs_space: SpaceLike,
         architecture: Callable[..., Network],
-        architecture_kwargs: dict[str, Any],
     ):
         try:
             if obs_space.shape == ():
@@ -234,7 +225,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                 raise ValueError(
                     f"Unsupported observation space shape: {obs_space.shape}"
                 )
-            return architecture(in_features, key=key, **architecture_kwargs)
+            return architecture(in_features, key=key)
         except AttributeError:
             raise ValueError(f"Unsupported observation space {obs_space}")
 
@@ -243,7 +234,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         key: PRNGKeyArray,
         obs_space: SpaceLike,
         architecture: Callable[..., Network],
-        architecture_kwargs: dict[str, Any],
     ):
         try:
             if len(obs_space.shape) == 3:
@@ -252,7 +242,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                     obs_space.shape,
                     key=key,
                     channels_axis=channels_axis,
-                    **architecture_kwargs,
                 )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
         except AttributeError:
@@ -277,6 +266,24 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         raise ValueError(
             f"Cannot infer channel axis from shape {obs_space.shape}. "
             "Pass `channels_axis` explicitly  ('first' or 'last')."
+        )
+
+    @classmethod
+    def with_params(
+        cls,
+        *,
+        architecture_1d: Callable[..., Network] = Identity,
+        architecture_2d: Callable[..., Network] = CNN.with_params(
+            out_channels=(32, 64, 64),
+            kernel_sizes=(3, 3, 2),
+            strides=(1, 1, 1),
+            padding=(0, 0, 0),
+        ),
+    ) -> Callable[..., Self]:
+        return partial(
+            cls,
+            architecture_1d=architecture_1d,
+            architecture_2d=architecture_2d,
         )
 
 
@@ -558,3 +565,32 @@ class PyTreeOutputNetwork(eqx.Module):
                 return distrax.Joint(outputs)
 
         return outputs
+
+    @classmethod
+    def with_params(
+        cls,
+        *,
+        discrete_distribution: Literal["categorical"] | None = "categorical",
+        continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        assume_independent: bool = True,
+    ) -> Callable[..., Self]:
+        return partial(
+            cls,
+            discrete_distribution=discrete_distribution,
+            continuous_distribution=continuous_distribution,
+            layer_type=layer_type,
+            assume_independent=assume_independent,
+        )
+
+    @classmethod
+    def with_raw_outputs(
+        cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
+    ) -> Callable[..., Self]:
+        """Create a network without a distribution output, instead returning the raw
+        outputs. E.g. for Q-values."""
+        return cls.with_params(
+            discrete_distribution=None,
+            continuous_distribution=None,
+            layer_type=layer_type,
+        )

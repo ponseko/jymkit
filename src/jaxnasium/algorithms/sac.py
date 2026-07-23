@@ -54,13 +54,9 @@ class SACAgent(RLAgent):
     def __init__(self, key, env: Environment, trainer: "SAC"):
         actor_key, critics_key = jax.random.split(key, 2)
 
-        # If the continuous distribution is not specified, use "tanhnormal" for SAC
-        output_kwargs = trainer.actor_kwargs.get("output", {})
-        cont_dist_output = output_kwargs.get("continuous_distribution", "tanhnormal")
-        output_kwargs["continuous_distribution"] = cont_dist_output
-        actor_kwargs = trainer.actor_kwargs.copy()
-        actor_kwargs["output"] = output_kwargs
-
+        # Set default continuous distribution to tanhnormal if not specified
+        actor_kwargs = dict(trainer.actor_kwargs)
+        actor_kwargs.setdefault("continuous_distribution", "tanhnormal")
         self.actor = ActorNetwork(
             env.observation_space,
             env.action_space,
