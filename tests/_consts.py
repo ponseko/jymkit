@@ -1,6 +1,7 @@
 from typing import Type
 
 from jaxnasium.algorithms import DQN, PPO, PQN, SAC  # noqa: F401
+from jaxnasium.algorithms.architectures import MLP
 from jaxnasium.wrappers import Wrapper
 
 DISCRETE_ALGS = [PPO, PQN, DQN, SAC]
@@ -15,8 +16,8 @@ AGENT_MIN_CONFIG = {
     "log_function": None,
     "normalize_observations": False,
     "normalize_rewards": False,
-    "actor_kwargs": {"shared": {"hidden_sizes": (8,)}},
-    "critic_kwargs": {"shared": {"hidden_sizes": (8,)}},
+    "actor_kwargs": {"body": MLP.with_params(hidden_sizes=(8,))},
+    "critic_kwargs": {"body": MLP.with_params(hidden_sizes=(8,))},
 }
 
 

@@ -43,11 +43,10 @@ class MLP(eqx.Module):
             )
             in_features = hidden_dim
 
-    def __call__(self, x):
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
         for layer in self.layers[:-1]:
-            x = self.activation(layer(x))
-        x = self.layers[-1](x)
-        return x
+            x = self.activation(layer(x, key=key))
+        return self.layers[-1](x, key=key)
 
     @classmethod
     def with_params(

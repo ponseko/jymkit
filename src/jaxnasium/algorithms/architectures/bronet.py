@@ -26,12 +26,12 @@ class _BroNetBlock(eqx.Module):
         self.in_features = shape
         self.out_features = shape
 
-    def __call__(self, x):
-        _x = self.layers[0](x)
-        _x = self.layers[1](_x)
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
+        _x = self.layers[0](x, key=key)
+        _x = self.layers[1](_x, key=key)
         _x = jax.nn.relu(_x)
-        _x = self.layers[2](_x)
-        _x = self.layers[3](_x)
+        _x = self.layers[2](_x, key=key)
+        _x = self.layers[3](_x, key=key)
         return x + _x
 
 
@@ -71,13 +71,13 @@ class BroNet(eqx.Module):
         for i in range(1, depth + 1):
             self.layers.append(_BroNetBlock(width_size, key=keys[i]))
 
-    def __call__(self, x):
-        x = self.layers[0](x)  # dense
-        x = self.layers[1](x)  # layernorm
+    def __call__(self, x, *, key: PRNGKeyArray | None = None):
+        x = self.layers[0](x, key=key)  # dense
+        x = self.layers[1](x, key=key)  # layernorm
         x = jax.nn.relu(x)
         # then the bronet blocks:
         for block in self.layers[2:]:
-            x = block(x)
+            x = block(x, key=key)
         return x
 
     @classmethod
