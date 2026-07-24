@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import distrax
 import equinox as eqx
@@ -160,10 +160,10 @@ class PQN(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "PQN":
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=PQNAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PQN":
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 

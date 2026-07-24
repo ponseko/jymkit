@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import distrax
 import equinox as eqx
@@ -321,10 +321,10 @@ class SAC(RLAlgorithm):
     def num_training_updates_alpha(self):
         return self.num_iterations * self.alpha_num_epochs * self.alpha_num_minibatches
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "SAC":
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=SACAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "SAC":
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
