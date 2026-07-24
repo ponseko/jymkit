@@ -171,7 +171,7 @@ class SACAgent(RLAgent):
         new_critics = eqx.apply_updates(self.critics, updates)
 
         new_critics_target = jax.tree.map(
-            lambda x, y: trainer.tau * x + (1 - trainer.tau) * y,
+            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
             self.critics_target,
             new_critics,
         )
@@ -246,7 +246,7 @@ class SAC(RLAlgorithm):
     update_every: int = eqx.field(static=True, default=512)
     replay_buffer_size: int = 50_000
     batch_size: int = 512
-    tau: float = 0.95
+    tau: float = 0.05
 
     actor_num_epochs: int = eqx.field(static=True, default=1)
     actor_num_minibatches: int = eqx.field(static=True, default=1)

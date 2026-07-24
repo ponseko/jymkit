@@ -106,7 +106,7 @@ class DQNAgent(RLAgent):
 
         # update target policy
         new_critic_target = jax.tree.map(
-            lambda x, y: trainer.tau * x + (1 - trainer.tau) * y,
+            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
             self.critic_target,
             new_critic,
         )
@@ -137,10 +137,10 @@ class DQN(RLAlgorithm):
     update_every: int = eqx.field(static=True, default=int(2e2))
     replay_buffer_size: int = int(1e4)
     batch_size: int = 64
-    tau: float = 0.95
+    tau: float = 0.05
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=4)
+    num_envs: int = eqx.field(static=True, default=8)
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
