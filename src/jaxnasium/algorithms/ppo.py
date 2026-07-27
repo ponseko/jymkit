@@ -213,9 +213,11 @@ class PPO(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
+    @eqx.filter_jit
     def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
 
+    @eqx.filter_jit
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)

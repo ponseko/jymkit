@@ -321,9 +321,11 @@ class SAC(RLAlgorithm):
     def num_training_updates_alpha(self):
         return self.num_iterations * self.alpha_num_epochs * self.alpha_num_minibatches
 
+    @eqx.filter_jit
     def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=SACAgent(key=key, env=env, trainer=self))
 
+    @eqx.filter_jit
     def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
@@ -447,10 +449,7 @@ class SAC(RLAlgorithm):
 
                 update_keys = jax.random.split(update_key, num_minibatches)
                 return jax.lax.scan(
-                    scan_minibatch_update,
-                    current_agent,
-                    (minibatches, update_keys),
-                    unroll=4,
+                    scan_minibatch_update, current_agent, (minibatches, update_keys)
                 )
 
             update_keys = jax.random.split(key, num_epochs)
