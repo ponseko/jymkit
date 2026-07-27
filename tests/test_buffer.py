@@ -55,7 +55,10 @@ def test_buffer_incremental_fill_samples_valid_region_sa(
     for i in range(4):
         start_index = i * chunk_size
         chunk_transition = jax.tree.map(
-            lambda x: x[start_index : start_index + chunk_size], transition
+            lambda x, _start_index=start_index: x[
+                _start_index : _start_index + chunk_size
+            ],
+            transition,
         )
         buffer = buffer.insert(chunk_transition)
 
@@ -85,7 +88,10 @@ def test_buffer_incremental_fill_samples_valid_region_ma(
     for i in range(4):
         start_index = i * chunk_size
         chunk_transition = jax.tree.map(
-            lambda x: x[start_index : start_index + chunk_size], transition
+            lambda x, _start_index=start_index: x[
+                _start_index : _start_index + chunk_size
+            ],
+            transition,
         )
         buffer = buffer.insert(chunk_transition)
 

@@ -168,11 +168,11 @@ def run_env_and_agent_env_test(
     sampled_obs = env.sample_observation(o_sample_key)
     sampled_action = env.sample_action(a_sample_key)
     if test_reset:
-        reset_obs, reset_state = env.reset(reset_key)
+        _reset_obs, reset_state = env.reset(reset_key)
         # _assert_equal_pytrees(sampled_obs, reset_obs, "sampled_obs != reset_obs")
     if test_step:
         assert test_reset, "test_step requires test_reset"
-        timestep, step_state = env.step(step_key, reset_state, sampled_action)  # type: ignore
+        timestep, _step_state = env.step(step_key, reset_state, sampled_action)  # type: ignore
         assert jym.ORIGINAL_OBSERVATION_KEY in timestep.info, (
             f"ORIGINAL_OBSERVATION_KEY not in timestep.info for {env_id}"
         )
@@ -189,7 +189,7 @@ def run_env_and_agent_env_test(
             sampled_action, agent_action, "sampled_action != agent_action"
         )
         if test_step:
-            timestep, step_state = env.step(step_key, reset_state, agent_action)  # type: ignore
+            timestep, _step_state = env.step(step_key, reset_state, agent_action)  # type: ignore
             assert jym.ORIGINAL_OBSERVATION_KEY in timestep.info, (
                 f"ORIGINAL_OBSERVATION_KEY not in timestep.info for {env_id}"
             )

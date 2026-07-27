@@ -108,7 +108,7 @@ def test_scale_reward_wrapper():
     scale = 0.25
     env = jym.ScaleRewardWrapper(base_env, scale=scale)
 
-    _, base_state, base_timestep = _run_single_reset_step(base_env)
+    _, _base_state, base_timestep = _run_single_reset_step(base_env)
     _, _, wrapped_timestep = _run_single_reset_step(env)
 
     assert wrapped_timestep.reward == pytest.approx(base_timestep.reward * scale)
@@ -157,7 +157,7 @@ def test_normalize_vec_obs_wrapper():
     norm_env = jym.NormalizeVecObsWrapper(jym.VecEnvWrapper(_make_norm_env()))
 
     keys = jax.random.split(SEED, NUM_ENVS)
-    raw_obs, raw_state = raw_env.reset(keys)
+    _raw_obs, raw_state = raw_env.reset(keys)
     norm_obs, norm_state = norm_env.reset(keys)
 
     assert norm_obs.shape[0] == NUM_ENVS
@@ -289,8 +289,9 @@ def test_combined_wrappers():
     assert "returned_episode_returns" in timestep.info
     assert "returned_episode_lengths" in timestep.info
 
+    key = SEED
     for _ in range(3):
-        key, step_key, action_key = jax.random.split(SEED, 3)
+        key, step_key, action_key = jax.random.split(key, 3)
         actions = jax.vmap(env.action_space.sample)(
             jax.random.split(action_key, NUM_ENVS)
         )

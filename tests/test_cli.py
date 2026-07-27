@@ -40,6 +40,7 @@ def _run_jaxnasium_add(item: str, cwd: Path) -> subprocess.CompletedProcess:
         cwd=cwd,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -59,6 +60,7 @@ def test_cli_jaxnasium_uvx(tmp_path, cli_env):
         env=cli_env,
         capture_output=True,
         text=True,
+        check=False,
     )
 
     assert result.returncode == 0, f"CLI failed with: {result.stderr}\n{result.stdout}"
