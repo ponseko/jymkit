@@ -76,7 +76,7 @@ The Jaxnasium API stays close to the *somewhat* established [Gymnax](https://git
 ```python
 env = jym.make(...)
 
-obs, env_state = env.reset(key) # <-- Mirroring Gymnax
+obs, env_state = env.reset(key)  # <-- Mirroring Gymnax
 
 # env.step(): Gymnasium Timestep tuple with state information
 (obs, reward, terminated, truncated, info), env_state = env.step(key, state, action)

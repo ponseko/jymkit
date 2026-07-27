@@ -17,39 +17,31 @@ All elements below the first level of the PyTree can be arbitrary structures, in
 
 ```python
 # Homogeneous agents
-env.action_space = {
-    "agent_0": Discrete(2), "agent_1": Discrete(2)
-}
+env.action_space = {"agent_0": Discrete(2), "agent_1": Discrete(2)}
 env.observation_space = {
-    "agent_0": Box(low=0, high=1, shape=(3,)), "agent_1": Box(low=0, high=1, shape=(3,))
+    "agent_0": Box(low=0, high=1, shape=(3,)),
+    "agent_1": Box(low=0, high=1, shape=(3,)),
 }
-reward = {
-    "agent_0": -1, "agent_1": 1
-}
+reward = {"agent_0": -1, "agent_1": 1}
 
 # Heterogeneous agents
-env.action_space = {
-    "agent_0": Discrete(2), "agent_1": MultiDiscrete(2, 3)
-}
+env.action_space = {"agent_0": Discrete(2), "agent_1": MultiDiscrete(2, 3)}
 env.observation_space = {
-    "agent_0": Box(low=0, high=1, shape=(3,)), "agent_1": Box(low=0, high=1, shape=(8,))
+    "agent_0": Box(low=0, high=1, shape=(3,)),
+    "agent_1": Box(low=0, high=1, shape=(8,)),
 }
-reward = {
-    "agent_0": -1, "agent_1": 1
-}
+reward = {"agent_0": -1, "agent_1": 1}
 
 # Heterogeneous agents in a list with nested PyTree actions
 env.action_space = [
-    {"position": Discrete(2), "velocity": Discrete(2)}, 
-    {"action": MultiDiscrete(2, 3)}
+    {"position": Discrete(2), "velocity": Discrete(2)},
+    {"action": MultiDiscrete(2, 3)},
 ]
 env.observation_space = [
     {"xy": Box(low=0, high=1, shape=(2,)), "velocity": Box(low=0, high=1, shape=(1,))},
-    Discrete(3)
+    Discrete(3),
 ]
-reward = [
-    -1, 1
-]
+reward = [-1, 1]
 ```
 
 !!! note "Enforcement"
@@ -80,7 +72,7 @@ When this function is called with multi-agent data:
 # Multi-agent inputs
 agent_states = {"agent_0": state_0, "agent_1": state_1}
 observations = {"agent_0": obs_0, "agent_1": obs_1}
-key = jax.random.PRNGKey(42) # Key is (optionally) automatically split over the agents.
+key = jax.random.PRNGKey(42)  # Key is (optionally) automatically split over the agents.
 
 # The decorator automatically handles the transformation
 actions = get_action(key, agent_states, observations)

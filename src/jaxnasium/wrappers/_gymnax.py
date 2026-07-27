@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any
 
 import equinox as eqx
 from jaxtyping import PRNGKeyArray
@@ -23,15 +23,15 @@ class GymnaxWrapper(Wrapper):
     _env: Any
     handle_truncation: bool = True
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         params = getattr(self._env, "default_params", None)
         obs, env_state = self._env.reset(key, params)
         return obs, env_state
 
     def step(
-        self, key: PRNGKeyArray, state: Any, action: int | float
-    ) -> Tuple[TimeStep, Any]:
-        _params = getattr(self._env, "default_params")  # is dataclass
+        self, key: PRNGKeyArray, state: Any, action: float
+    ) -> tuple[TimeStep, Any]:
+        _params = self._env.default_params  # is dataclass
         original_max_steps = getattr(_params, "max_steps_in_episode", None)
 
         if not self.handle_truncation or original_max_steps is None:

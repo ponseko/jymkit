@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -64,7 +64,7 @@ def map_multi_agent(
     f,
     tree,
     *rest,
-    agent_structure: Optional[PyTreeDef] = None,  # pyright: ignore[reportInvalidTypeForm]
+    agent_structure: PyTreeDef | None = None,  # pyright: ignore[reportInvalidTypeForm]
     **kwargs,
 ) -> Any:
     # from jaxnasium.algorithms import RLAlgorithm
@@ -126,9 +126,10 @@ def map_multi_agent(
     out = _result_tuple_to_tuple_result(result)
 
     def _process_output(o):
-        if any(isinstance(x, MultiAgentWrapper) for x in arguments):
-            if _is_pytree_of_agents(o):
-                return MultiAgentWrapper(o)
+        if any(
+            isinstance(x, MultiAgentWrapper) for x in arguments
+        ) and _is_pytree_of_agents(o):
+            return MultiAgentWrapper(o)
 
         if _is_pytree_of_transitions(o):
             return Transition.from_transposed(o)

@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Generic, Tuple, TypeVar
+from typing import Generic, TypeVar
 
 import equinox as eqx
 import jax
@@ -43,7 +43,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         key: PRNGKeyArray,
         state: TEnvState,
         action: PyTree[Real[Array, "..."]],
-    ) -> Tuple[TimeStep, TEnvState]:
+    ) -> tuple[TimeStep, TEnvState]:
         """
         Steps the environment forward with the given action and performs auto-reset when necessary.
         Additionally, this function inserts the original observation (before auto-resetting) in
@@ -65,7 +65,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         timestep, state = self.auto_reset(key, timestep_step, state_step)
         return timestep, state
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Resets the environment to an initial state and returns the initial observation.
         Environment-specific logic is defined in the `reset_env` method. Typically, this function
@@ -83,7 +83,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
     @abstractmethod
     def step_env(
         self, key: PRNGKeyArray, state: TEnvState, action: PyTree[Real[Array, "..."]]
-    ) -> Tuple[TimeStep, TEnvState]:
+    ) -> tuple[TimeStep, TEnvState]:
         """
         Defines the environment-specific step logic. I.e. here the state of the environment is updated
         according to the transition function.
@@ -96,10 +96,9 @@ class Environment(eqx.Module, Generic[TEnvState]):
         - `state`: Current state of the environment.
         - `action`: Action to take in the environment.
         """
-        pass
 
     @abstractmethod
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset_env(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         """
         Defines the environment-specific reset logic.
 
@@ -109,7 +108,6 @@ class Environment(eqx.Module, Generic[TEnvState]):
 
         - `key`: JAX PRNG key.
         """
-        pass
 
     @property
     @abstractmethod
@@ -119,7 +117,6 @@ class Environment(eqx.Module, Generic[TEnvState]):
         For multi-agent environments, this should be a PyTree of spaces.
         See [`jaxnasium.spaces`](Spaces.md) for more information on how to define (composite) action spaces.
         """
-        pass
 
     @property
     @abstractmethod
@@ -129,11 +126,10 @@ class Environment(eqx.Module, Generic[TEnvState]):
         For multi-agent environments, this should be a PyTree of spaces.
         See [`jaxnasium.spaces`](Spaces.md) for more information on how to define (composite) observation spaces.
         """
-        pass
 
     def auto_reset(
         self, key: PRNGKeyArray, timestep_step: TimeStep, state_step: TEnvState
-    ) -> Tuple[TimeStep, TEnvState]:
+    ) -> tuple[TimeStep, TEnvState]:
         """
         Auto-resets the environment when the episode is terminated or truncated.
 

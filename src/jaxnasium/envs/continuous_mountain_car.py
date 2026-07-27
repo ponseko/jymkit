@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -47,7 +45,7 @@ class MountainCarContinuous(Environment[EnvState]):
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: Float[Array, ""]
-    ) -> Tuple[TimeStep, EnvState]:
+    ) -> tuple[TimeStep, EnvState]:
         action = action[0]
         position = state.position
         velocity = state.velocity
@@ -75,7 +73,7 @@ class MountainCarContinuous(Environment[EnvState]):
 
         return timestep, state
 
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Array, EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> tuple[Array, EnvState]:
         init_position = jax.random.uniform(key, shape=(), minval=-0.6, maxval=-0.4)
         state = EnvState(
             position=init_position,

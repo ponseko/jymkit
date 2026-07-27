@@ -235,7 +235,7 @@ class PPO(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]

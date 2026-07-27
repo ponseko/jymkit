@@ -1,7 +1,7 @@
 import difflib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Type
+from typing import Any, Literal
 
 from ._environment import Environment
 from .wrappers import (
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def _wrap_env(
-    env: Environment | Any, wrapper: Type[Wrapper], **wrapper_kwargs
+    env: Environment | Any, wrapper: type[Wrapper], **wrapper_kwargs
 ) -> Environment:
     """Simply wraps an environment and outputs what happened to a logger"""
     return wrapper(env, **wrapper_kwargs)
@@ -28,8 +28,8 @@ def _wrap_env(
 
 @dataclass
 class Registry:
-    _environments: Dict[str, Type[Environment]] = field(default_factory=dict)
-    _aliases: Dict[str, str] = field(default_factory=dict)
+    _environments: dict[str, type[Environment]] = field(default_factory=dict)
+    _aliases: dict[str, str] = field(default_factory=dict)
 
     def register(self, id: str, **kwargs):
         """Register an environment with the registry.
@@ -40,7 +40,7 @@ class Registry:
             `**kwargs`: currently unused
         """
 
-        def decorator(env_class: Type[Environment]) -> Type[Environment]:
+        def decorator(env_class: type[Environment]) -> type[Environment]:
             self._environments[id] = env_class
             return env_class
 
@@ -58,10 +58,7 @@ class Registry:
     def make(
         self,
         id: str,
-        wrappers: List[Type[Wrapper] | Literal["external_lib_wrapper"]] = [
-            "external_lib_wrapper",
-            LogWrapper,
-        ],
+        wrappers: list[type[Wrapper] | Literal["external_lib_wrapper"]] | None = None,
         **env_kwargs,
     ) -> Environment:
         """Create an environment instance.
@@ -69,11 +66,13 @@ class Registry:
         **Arguments**:
             `id`: The environment ID
             `wrappers`: List of wrappers to apply to the environment.
-                - `external_lib_wrapper` (string): Wrapper for external libraries (e.g. Gymnax, Jumanji, Brax).
+                can also be "external_lib_wrapper" (string): Wrapper for external libraries (e.g. Gymnax, Jumanji, Brax).
                     only used if a environment is loaded from a supported external library.
-                - `LogWrapper` (class): Wrapper for logging the actions
+                If None provided, we wrap the external_lib_wrapper (if applicable) and `LogWrapper`.
             `**env_kwargs`: Environment constructor arguments
         """
+        if wrappers is None:
+            wrappers = ["external_lib_wrapper", LogWrapper]
         # Handle aliases
         assert id is not None, "Environment ID cannot be None"
         env = None
@@ -125,49 +124,49 @@ class Registry:
                     return _wrap_env(env, GymnaxWrapper)
                 return env  # type: ignore
             elif package == "jumanji":
-                import jumanji
+                import jumanji  # type: ignore
 
                 env = jumanji.make(env_name, **env_kwargs)  # type: ignore
                 if wrap:
                     return _wrap_env(env, JumanjiWrapper)
                 return env  # type: ignore
             elif package == "brax":
-                import brax.envs
+                import brax.envs  # type: ignore
 
                 env = brax.envs.get_environment(env_name, **env_kwargs)
                 if wrap:
                     return _wrap_env(env, BraxWrapper)
                 return env  # type: ignore
             elif package == "pgx":
-                import pgx
+                import pgx  # type: ignore
 
                 env = pgx.make(env_name, **env_kwargs)  # type: ignore
                 if wrap:
                     return _wrap_env(env, PgxWrapper)
                 return env  # type: ignore
             elif package == "jaxmarl":
-                import jaxmarl
+                import jaxmarl  # type: ignore
 
                 env = jaxmarl.make(env_name, **env_kwargs)
                 if wrap:
                     return _wrap_env(env, JaxMARLWrapper)
                 return env  # type: ignore
             elif package == "xminigrid":
-                import xminigrid
+                import xminigrid  # type: ignore
 
                 env, env_params = xminigrid.make(env_name, **env_kwargs)  # type: ignore
                 if wrap:
                     return _wrap_env(env, xMinigridWrapper, _params=env_params)
                 return env  # type: ignore
             elif package == "navix":
-                import navix
+                import navix  # type: ignore
 
                 env = navix.make(env_name, **env_kwargs)
                 if wrap:
                     return _wrap_env(env, NavixWrapper)
                 return env  # type: ignore
             elif package == "craftax":
-                from craftax import craftax_env
+                from craftax import craftax_env  # type: ignore
 
                 env = craftax_env.make_craftax_env_from_name(
                     env_name, auto_reset=False, **env_kwargs
@@ -182,7 +181,7 @@ class Registry:
                 f"Package {package} not installed. Please install manually via pip: {e}"
             )
 
-    def get_env_class(self, id: str) -> Type[Environment]:
+    def get_env_class(self, id: str) -> type[Environment]:
         """Get the environment class for an environment ID.
 
         **Arguments**:
@@ -200,7 +199,7 @@ class Registry:
         raise ValueError(f"Environment {id} not found in registry")
 
     @property
-    def registered_envs(self) -> List[str]:
+    def registered_envs(self) -> list[str]:
         """List all environments in the registry as a flat list."""
         return list(self._environments.keys()) + list(self._aliases.keys())
 
@@ -215,7 +214,7 @@ class Registry:
             envs_per_line = 3
             # Get max length across ALL environments for consistent column width
             all_envs = list(self._environments.keys()) + [
-                alias for alias in self._aliases.keys()
+                alias for alias in self._aliases
             ]
             max_length = max(len(env) for env in all_envs) if all_envs else 0
             formatted = "\n".join(

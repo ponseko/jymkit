@@ -1,6 +1,4 @@
-from typing import Type
-
-from jaxnasium.algorithms import DQN, PPO, PQN, SAC  # noqa: F401
+from jaxnasium.algorithms import DQN, PPO, PQN, SAC
 from jaxnasium.algorithms.architectures import MLP
 from jaxnasium.wrappers import Wrapper
 
@@ -8,7 +6,7 @@ DISCRETE_ALGS = [PPO, PQN, DQN, SAC]
 CONTINUOUS_ALGS = [PPO, SAC]
 
 # Optional wrappers applied before environment use.
-ENV_WRAPPERS: dict[str, list[Type[Wrapper]]] = {}
+ENV_WRAPPERS: dict[str, list[type[Wrapper]]] = {}
 
 AGENT_MIN_CONFIG = {
     "num_envs": 1,

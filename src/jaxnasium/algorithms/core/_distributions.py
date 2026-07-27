@@ -1,6 +1,6 @@
 import warnings
+from collections.abc import Callable
 from functools import partial
-from typing import Callable
 
 import distrax
 import equinox as eqx

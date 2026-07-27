@@ -1,11 +1,11 @@
 import logging
+from collections.abc import Callable
 from functools import partial
-from typing import Callable
+from typing import Self
 
 import equinox as eqx
 import jax
 from jaxtyping import PRNGKeyArray
-from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 

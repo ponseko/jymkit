@@ -1,4 +1,4 @@
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 from jaxtyping import Array, Bool, Float, Num, PyTree
 
@@ -17,7 +17,7 @@ class AgentObservation(NamedTuple):
     """
 
     observation: Num[Array, "..."] | PyTree[Bool[Array, "..."]]
-    action_mask: Optional[Bool[Array, "..."] | PyTree[Bool[Array, "..."]]] = None
+    action_mask: Bool[Array, "..."] | PyTree[Bool[Array, "..."]] | None = None
 
 
 class TimeStep(NamedTuple):

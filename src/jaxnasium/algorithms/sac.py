@@ -355,7 +355,7 @@ class SAC(RLAlgorithm):
         )
 
         runner_state = (self, buffer, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]

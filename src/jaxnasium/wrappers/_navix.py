@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any
 
 from jaxtyping import PRNGKeyArray
 
@@ -19,11 +19,11 @@ class NavixWrapper(Wrapper):
 
     _env: Any
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         timestep_navix = self._env.reset(key)
         return timestep_navix.observation, timestep_navix
 
-    def step(self, key: PRNGKeyArray, state: Any, action: int) -> Tuple[TimeStep, Any]:
+    def step(self, key: PRNGKeyArray, state: Any, action: int) -> tuple[TimeStep, Any]:
         timestep_navix = self._env._step(state, action)
         obs = timestep_navix.observation
         reward = timestep_navix.reward

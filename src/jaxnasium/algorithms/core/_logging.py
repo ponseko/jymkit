@@ -58,7 +58,8 @@ def scan_callback(
         timesteps = timestep[returned_episode] * num_envs
         for t in range(len(timesteps)):
             return_values_t = jax.tree.map(
-                lambda x: x[t].item() if hasattr(x[t], "item") else x[t], return_values
+                lambda x, _t=t: x[_t].item() if hasattr(x[_t], "item") else x[_t],
+                return_values,
             )
             return_values_t = jax.tree.map(lambda x: round(x, 3), return_values_t)
             print(f"global step={timesteps[t]}, episodic return={return_values_t}")

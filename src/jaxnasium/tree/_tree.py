@@ -1,5 +1,6 @@
 import operator
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -19,7 +20,7 @@ def _tree_size(tree):
     return sum([jnp.size(leaf) for leaf in jax.tree.leaves(tree)])
 
 
-def _tree_sum(tree: Any, axis: Optional[int | tuple[int, ...]] = None):
+def _tree_sum(tree: Any, axis: int | tuple[int, ...] | None = None):
     """
     Compute the sum of all the elements in a pytree
     If axis is provided, sums each leaf over the specified axis and
@@ -274,7 +275,7 @@ def tree_stack(pytrees: PyTree, *, axis=0) -> PyTree:
     return jax.tree.map(lambda *v: jnp.stack(v, axis=axis), *leaves)
 
 
-def tree_unstack(tree, *, axis=0, structure: Optional[PyTreeDef] = None):  # type: ignore # TODO: return when completed: https://github.com/jax-ml/jax/issues/29037
+def tree_unstack(tree, *, axis=0, structure: PyTreeDef | None = None):  # type: ignore # TODO: return when completed: https://github.com/jax-ml/jax/issues/29037
     """Inverse of `stack`: split a pytree whose leaves were stacked along `axis`
     into N separate pytrees.
 
@@ -352,7 +353,7 @@ def tree_ones_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
     return jax.tree.map(lambda x: jnp.ones_like(x, dtype=dtype), tree)
 
 
-def tree_add(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+def tree_add(tree_A: PyTree, tree_B_or_prefix: PyTree | float | Array) -> PyTree:
     """Add two pytrees or add a scalar, array, or prefix-pytree to each leaf of a pytree.
 
     **Arguments**:
@@ -377,7 +378,7 @@ def tree_add(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> 
     return jax.tree.map(jnp.add, tree_A, tree_B)
 
 
-def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | int | float | Array) -> PyTree:
+def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | float | Array) -> PyTree:
     """Multiply two pytrees or multiply a scalar, array, or prefix-pytree to each leaf of a pytree.
 
     **Arguments**:
