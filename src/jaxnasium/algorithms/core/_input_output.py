@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from functools import partial
-from typing import Any, Callable, List, Literal
+from typing import Any, Literal, Self
 
 import distrax
 import equinox as eqx
@@ -9,7 +10,6 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from jaxtyping import Array, PRNGKeyArray, PyTree
-from typing_extensions import Self
 
 import jaxnasium as jym
 
@@ -51,7 +51,7 @@ def _make_independent(dist: distrax.Distribution) -> distrax.Distribution:
     return distrax.Independent(dist, reinterpreted_batch_ndims=ndims)
 
 
-def _assert_homogeneous_output_space(num_outputs: List[int]):
+def _assert_homogeneous_output_space(num_outputs: list[int]):
     assert len(set(num_outputs)) == 1, (
         "Only homogeneous multi-dimensional output spaces supported to be supported for vmap."
         f" (all nvec elements must be the same, got {num_outputs}) "
@@ -121,6 +121,10 @@ class PyTreeFlattenLayer(eqx.Module):
         leaves = jax.tree.leaves(x)
         flat = [jnp.ravel(jnp.asarray(leaf, dtype=jnp.float32)) for leaf in leaves]
         return jnp.concatenate(flat)
+
+
+def _infer_out_features(self, obs):
+    return jnp.atleast_1d(self(obs))
 
 
 class PyTreeObsSpaceNetwork(eqx.Module):
@@ -196,8 +200,9 @@ class PyTreeObsSpaceNetwork(eqx.Module):
 
         # Infer the output feature size
         dummy_obs = jax.tree.map(lambda o: jnp.zeros(o.shape), original_obs_space)
-        f = lambda obs: jnp.atleast_1d(self(obs))
-        self.out_features = jax.eval_shape(f, dummy_obs).shape[0]
+        self.out_features = jax.eval_shape(_infer_out_features, self, dummy_obs).shape[
+            0
+        ]
 
     def __call__(self, x, *, key: PRNGKeyArray | None = None):
         x = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), x)
@@ -297,7 +302,7 @@ class DiscreteHead(eqx.Module):
     `distribution=None`: Produces raw logits (e.g. for Q values).
     """
 
-    layers: List[Network]
+    layers: list[Network]
     distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
 
     def __init__(
@@ -348,7 +353,7 @@ class ContinuousHead(eqx.Module):
     distribution (`normal` or `tanhnormal`).
     """
 
-    layers: List[Network]
+    layers: list[Network]
     distribution: Callable[..., distrax.Distribution] = eqx.field(static=True)
     log_std_min: float = eqx.field(static=True)
     log_std_max: float = eqx.field(static=True)

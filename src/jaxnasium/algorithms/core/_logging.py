@@ -1,15 +1,17 @@
 import functools
-from typing import Callable, Literal, Optional
+from collections.abc import Callable
+from typing import Literal
 
 import equinox as eqx
 import jax
+import numpy as np
 
 
 def scan_callback(
-    func: Optional[Callable] = None,
-    callback_fn: Optional[Callable | Literal["tqdm", "simple"]] = None,
-    callback_interval: int | float = 20,
-    n: Optional[int] = None,
+    func: Callable | None = None,
+    callback_fn: Callable | Literal["tqdm", "simple"] | None = None,
+    callback_interval: float = 20,
+    n: int | None = None,
 ) -> Callable:
     assert callable(func) or func is None
 
@@ -45,11 +47,15 @@ def scan_callback(
             and "timestep" in data
         ), "Missing keys in logging data. Is the environment wrapped with LogWrapper?"
 
-        num_envs = data["timestep"].shape[-1]
+        returned_episode = np.asarray(data["returned_episode"])
+        returned_episode_returns = np.asarray(data["returned_episode_returns"])
+        timestep = np.asarray(data["timestep"])
+
+        num_envs = timestep.shape[-1]
         return_values = jax.tree.map(
-            lambda x: x[data["returned_episode"]], data["returned_episode_returns"]
+            lambda x: x[returned_episode], returned_episode_returns
         )
-        timesteps = data["timestep"][data["returned_episode"]] * num_envs
+        timesteps = timestep[returned_episode] * num_envs
         for t in range(len(timesteps)):
             return_values_t = jax.tree.map(
                 lambda x: x[t].item() if hasattr(x[t], "item") else x[t], return_values
