@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Tuple
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def partition_obs_and_masks(
     observation_tree: PyTree[TObservation], multi_agent: bool
-) -> Tuple[PyTree, PyTree]:
+) -> tuple[PyTree, PyTree]:
     """
     Seperates a PyTree of observations of type `AgentObservation` into two trees:
     one with the observations and one with the masks.

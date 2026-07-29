@@ -1,5 +1,3 @@
-from typing import Optional, Tuple
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -47,7 +45,7 @@ class RunningStatisticsState(eqx.Module):
         self,
         batch: Array,
         *,
-        weights: Optional[jnp.ndarray] = None,
+        weights: jnp.ndarray | None = None,
         std_min_value: float = 1e-6,
         std_max_value: float = 1e6,
         validate_shapes: bool = True,
@@ -63,7 +61,7 @@ class RunningStatisticsState(eqx.Module):
 
         def _compute_node_statistics(
             mean: jnp.ndarray, summed_variance: jnp.ndarray, batch: jnp.ndarray
-        ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        ) -> tuple[jnp.ndarray, jnp.ndarray]:
             assert isinstance(mean, jnp.ndarray), type(mean)
             assert isinstance(summed_variance, jnp.ndarray), type(summed_variance)
             # The mean and the sum of past variances are updated with Welford's
@@ -137,7 +135,7 @@ class RunningStatisticsState(eqx.Module):
     def _validate_batch_shapes(
         batch: PyTree,
         reference_sample: PyTree,
-        batch_dims: Tuple[int, ...],
+        batch_dims: tuple[int, ...],
     ) -> None:
         """Verifies shapes of the batch leaves against the reference sample.
 
@@ -166,8 +164,8 @@ class Normalizer(eqx.Module):
     obs: RunningStatisticsState | None
     reward: RunningStatisticsState | None
 
-    returns: Optional[Array] = None  # for (discounted) reward normalization
-    gamma: Optional[float] = None
+    returns: Array | None = None  # for (discounted) reward normalization
+    gamma: float | None = None
 
     def __init__(
         self,
@@ -177,7 +175,7 @@ class Normalizer(eqx.Module):
         normalize_obs: bool = True,
         normalize_rew: bool = True,
         gamma: float | None = 0.99,
-        rew_shape: Tuple[int, ...] | None = (1,),
+        rew_shape: tuple[int, ...] | None = (1,),
     ):
         self.obs = None
         self.reward = None

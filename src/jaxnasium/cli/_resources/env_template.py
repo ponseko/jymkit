@@ -1,4 +1,3 @@
-from typing import Tuple
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -23,7 +22,7 @@ class ExampleEnv(jym.Environment):
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: int
-    ) -> Tuple[jym.TimeStep, EnvState]:
+    ) -> tuple[jym.TimeStep, EnvState]:
         """
         Update the environment state based on the action taken.
         """
@@ -45,7 +44,7 @@ class ExampleEnv(jym.Environment):
         )
         return timestep, state
 
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Array, EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> tuple[Array, EnvState]:
         """
         Reset the environment to its initial state.
         """

@@ -1,14 +1,14 @@
 import logging
 import warnings
 from abc import abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Callable, Literal, Optional, Tuple
+from typing import Literal, Self
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
-from typing_extensions import Self
 
 import jaxnasium as jym
 from jaxnasium import Environment, Space, VecEnvWrapper, is_wrapped, remove_wrapper
@@ -47,7 +47,7 @@ class RLAlgorithm(eqx.Module):
 
     multi_agent: bool = eqx.field(static=True, default=False)
     auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
-    log_function: Optional[Callable | Literal["simple", "tqdm"]] = eqx.field(
+    log_function: Callable | Literal["simple", "tqdm"] | None = eqx.field(
         static=True, default="simple"
     )
     log_interval: int | float = eqx.field(static=True, default=0.05)
@@ -92,13 +92,13 @@ class RLAlgorithm(eqx.Module):
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
             env = remove_wrapper(env, VecEnvWrapper)
 
-        def eval_episode(key, _) -> Tuple[PRNGKeyArray, PyTree[float]]:
+        def eval_episode(key, _) -> tuple[PRNGKeyArray, PyTree[float]]:
             def step_env(carry):
                 episode_reward, rng, obs, env_state, done = carry
                 rng, action_key, step_key = jax.random.split(rng, 3)
 
                 action = self.get_action(action_key, obs, deterministic=True)
-                (obs, reward, terminated, truncated, info), env_state = env.step(
+                (obs, reward, terminated, truncated, _info), env_state = env.step(
                     step_key, env_state, action
                 )
                 done = jax.tree.map(jnp.logical_or, terminated, truncated)
@@ -143,7 +143,7 @@ class RLAlgorithm(eqx.Module):
                 "Action space and observation space must have the same first-level structure for multi-agent environments."
             )
             dummy_action = env.sample_action(jax.random.PRNGKey(0))
-            obs, state = env.reset(jax.random.PRNGKey(0))
+            _obs, state = env.reset(jax.random.PRNGKey(0))
             timestep, _ = env.step(jax.random.PRNGKey(0), state, dummy_action)
             first_level_obs = first_level_structure(timestep.observation)
             first_level_action = first_level_structure(dummy_action)
@@ -157,7 +157,7 @@ class RLAlgorithm(eqx.Module):
                 "that may not be compatible with this algorithm. "
                 "If this is the case, training will crash during compilation."
             )
-        if is_wrapped(env, "JaxMARLWrapper"):
+        if is_wrapped(env, "JaxMARLWrapper"):  # noqa: SIM102
             if getattr(env, "name", None) == "coin_game":
                 logger.warning(
                     "Coin game is currently not supported due to an inconsistent API"

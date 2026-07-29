@@ -1,4 +1,4 @@
-from typing import Any, List, Tuple
+from typing import Any
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -23,7 +23,7 @@ class PgxWrapper(Wrapper):
     _env: Any
     self_play: bool = eqx.field(static=True, default=False)
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         state = self._env.init(key)
         observation = state.observation
         action_mask = state.legal_action_mask
@@ -33,8 +33,8 @@ class PgxWrapper(Wrapper):
         return obs, state  # pyright: ignore
 
     def step(
-        self, key: PRNGKeyArray, state: Any, action: Tuple[int | float] | int | float
-    ) -> Tuple[TimeStep, Any]:
+        self, key: PRNGKeyArray, state: Any, action: tuple[int | float] | float
+    ) -> tuple[TimeStep, Any]:
         current_player_index = state.current_player
         active_player_action = jnp.array(action)
         try:  # If trainer returns actions for each player: only excecute the active player action
@@ -63,7 +63,7 @@ class PgxWrapper(Wrapper):
         return timestep, state
 
     @property
-    def observation_space(self) -> Box | List[Box]:
+    def observation_space(self) -> Box | list[Box]:
         num_players = self._env.num_players
         shape = self._env.observation_shape
         obs_space = Box(
@@ -77,7 +77,7 @@ class PgxWrapper(Wrapper):
         return obs_space
 
     @property
-    def action_space(self) -> Discrete | List[Discrete]:
+    def action_space(self) -> Discrete | list[Discrete]:
         num_players = self._env.num_players
         num_actions = self._env.num_actions
         action_space = Discrete(num_actions)

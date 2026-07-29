@@ -1,12 +1,12 @@
 import logging
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Callable, List, Literal, Sequence
+from typing import Literal, Self
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
-from typing_extensions import Self
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class CNN(eqx.Module):
     Flattens the output of the CNN into a 1d vector.
     """
 
-    layers: List[eqx.nn.Conv2d]
+    layers: list[eqx.nn.Conv2d]
     in_channels: int = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
     channels_axis: Literal["first", "last"] = eqx.field(static=True)

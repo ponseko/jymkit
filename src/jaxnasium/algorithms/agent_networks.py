@@ -1,5 +1,6 @@
 import logging
-from typing import Callable, Literal
+from collections.abc import Callable
+from typing import Literal
 
 import equinox as eqx
 import jax
@@ -58,7 +59,9 @@ class ActorNetwork(eqx.Module):
         continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
         assume_independent_output: bool = True,
-        weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
+        weights_init: Callable[
+            ..., jax.nn.initializers.Initializer
+        ] = jax.nn.initializers.orthogonal,
         bias_init: float = 0.0,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
@@ -114,7 +117,9 @@ class ValueNetwork(eqx.Module):
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
-        weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
+        weights_init: Callable[
+            ..., jax.nn.initializers.Initializer
+        ] = jax.nn.initializers.orthogonal,
         bias_init: float = 0.0,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
@@ -167,7 +172,9 @@ class QValueNetwork(eqx.Module):
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
-        weights_init: jax.nn.initializers.Initializer = jax.nn.initializers.orthogonal(),
+        weights_init: Callable[
+            ..., jax.nn.initializers.Initializer
+        ] = jax.nn.initializers.orthogonal,
         bias_init: float = 0.0,
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]

@@ -1,6 +1,6 @@
 import itertools
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -108,7 +108,7 @@ def create_batched_grid_search(
         # We want to chunk these into chunks of size max_vmap_chunk_size.
         skip = 0
         chunks = []
-        vmap_full_size = len(list(vmap_args.values())[0])
+        vmap_full_size = len(list(vmap_args.values())[0])  # noqa
         while max_vmap_chunk_size is not None and skip < vmap_full_size:
             chunk_dict = {}
             for k, v in vmap_args.items():
@@ -150,7 +150,7 @@ def create_batched_grid_search(
             return [
                 (
                     res[i],
-                    {**{k: pos_args[k][i] for k, v in pos_args.items()}, **kw_args},
+                    {**{k: v[i] for k, v in pos_args.items()}, **kw_args},
                 )
                 for i in range(res.shape[0])
             ]
@@ -248,7 +248,7 @@ def create_batched_random_search(
         # No chunking, just return the (original) function and sampled arguments as a list of dicts
         list_sampled_args = [
             {
-                **{k: sampled_args[k][i] for k in sampled_args.keys()},
+                **{k: sampled_args[k][i] for k in sampled_args},
             }
             for i in range(num_samples)
         ]

@@ -3,7 +3,8 @@ cover the possible paths that we want supported in terms of possible input / out
 and multi-agent support.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 from _proxy_test_envs import (

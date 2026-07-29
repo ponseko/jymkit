@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +25,7 @@ class JaxMARLWrapper(Wrapper):
     remove_world_state: bool = True
     """ Removes the world_state that is present in some environments from the observation. Required in Jaxnasium algorithms """
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         obs, state = self._env.reset(key)
         if "world_state" in obs and self.remove_world_state:
             obs.pop("world_state")
@@ -39,8 +39,8 @@ class JaxMARLWrapper(Wrapper):
         return obs, state  # pyright: ignore
 
     def step(
-        self, key: PRNGKeyArray, state: Any, action: int | float
-    ) -> Tuple[TimeStep, Any]:
+        self, key: PRNGKeyArray, state: Any, action: float
+    ) -> tuple[TimeStep, Any]:
         obs, state_step, reward, done, info = self._env.step(key, state, action)
 
         terminated = done  # No truncation in JaxMARL (?)
@@ -71,7 +71,7 @@ class JaxMARLWrapper(Wrapper):
         return timestep, state
 
     @property
-    def observation_space(self) -> Dict[str, Space]:
+    def observation_space(self) -> dict[str, Space]:
         # Extract the observation space for each agent and return it as a dictionary
         agents = self._env.agents
         try:
@@ -84,7 +84,7 @@ class JaxMARLWrapper(Wrapper):
         return gymnasium_to_jaxnasium_space(obs_spaces)  # type: ignore[reportGeneralTypeIssues]
 
     @property
-    def action_space(self) -> Dict[str, Space]:
+    def action_space(self) -> dict[str, Space]:
         # Extract the action space for each agent and return it as a dictionary
         agents = self._env.agents
         try:

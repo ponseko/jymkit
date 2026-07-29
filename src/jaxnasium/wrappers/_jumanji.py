@@ -1,5 +1,5 @@
 from dataclasses import asdict, is_dataclass
-from typing import Any, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -31,7 +31,7 @@ class JumanjiWrapper(Wrapper):
     _env: Any
 
     def __init__(self, env: Any):
-        from jumanji.wrappers import AutoResetWrapper
+        from jumanji.wrappers import AutoResetWrapper  # type: ignore
 
         self._env = AutoResetWrapper(env, next_obs_in_extras=True)
 
@@ -62,14 +62,14 @@ class JumanjiWrapper(Wrapper):
                 obs = AgentObservation(observation=obs, action_mask=action_mask)
         return obs  # type: ignore[reportGeneralTypeIssues]
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         state, timestep = self._env.reset(key)
         observation = self._convert_jumanji_obs(timestep.observation)
         return observation, state
 
     def step(
-        self, key: PRNGKeyArray, state: TEnvState, action: int | float
-    ) -> Tuple[TimeStep, TEnvState]:
+        self, key: PRNGKeyArray, state: TEnvState, action: float
+    ) -> tuple[TimeStep, TEnvState]:
         state, timestep = self._env.step(state, action)  # No key for Jumanji
         obs = self._convert_jumanji_obs(timestep.observation)
 
@@ -92,7 +92,7 @@ class JumanjiWrapper(Wrapper):
 
     def __convert_gymnasium_space_to_dict(self, space: Any) -> Any:
         """Recursively convert Gymnasium Dict spaces to regular dicts."""
-        from gymnasium.spaces import Dict as GymnasiumDict
+        from gymnasium.spaces import Dict as GymnasiumDict  # type: ignore
 
         if isinstance(space, GymnasiumDict):
             # Recursively convert nested spaces and exclude action_mask
@@ -118,7 +118,7 @@ class JumanjiWrapper(Wrapper):
 
     @property
     def observation_space(self) -> Any:
-        from jumanji.specs import jumanji_specs_to_gym_spaces
+        from jumanji.specs import jumanji_specs_to_gym_spaces  # type: ignore
 
         space = self._env.observation_spec
         space = jumanji_specs_to_gym_spaces(space)
@@ -131,7 +131,7 @@ class JumanjiWrapper(Wrapper):
 
     @property
     def action_space(self) -> Any:
-        from jumanji.specs import jumanji_specs_to_gym_spaces
+        from jumanji.specs import jumanji_specs_to_gym_spaces  # type: ignore
 
         space = self._env.action_spec
         space = jumanji_specs_to_gym_spaces(space)

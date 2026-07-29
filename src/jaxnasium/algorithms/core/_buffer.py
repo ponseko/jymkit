@@ -1,11 +1,11 @@
 import logging
 import warnings
+from typing import Self
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
-from typing_extensions import Self
 
 from ._transition import Transition
 
@@ -108,6 +108,7 @@ class TransitionBuffer(eqx.Module):
         )
         return (jnp.arange(data_len) + self.insert_position) % self.max_size_per_env
 
+    @eqx.filter_jit
     def insert(self, transition: Transition) -> Self:
         """
         Insert a batch of transitions into the buffer.

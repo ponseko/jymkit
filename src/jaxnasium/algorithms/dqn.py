@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import distrax
 import equinox as eqx
@@ -106,7 +106,7 @@ class DQNAgent(RLAgent):
 
         # update target policy
         new_critic_target = jax.tree.map(
-            lambda x, y: trainer.tau * x + (1 - trainer.tau) * y,
+            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
             self.critic_target,
             new_critic,
         )
@@ -137,10 +137,10 @@ class DQN(RLAlgorithm):
     update_every: int = eqx.field(static=True, default=int(2e2))
     replay_buffer_size: int = int(1e4)
     batch_size: int = 64
-    tau: float = 0.95
+    tau: float = 0.05
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
-    num_envs: int = eqx.field(static=True, default=4)
+    num_envs: int = eqx.field(static=True, default=8)
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
@@ -176,10 +176,12 @@ class DQN(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations  # * num_epochs
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "DQN":
+    @eqx.filter_jit
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=DQNAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "DQN":
+    @eqx.filter_jit
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
@@ -208,7 +210,7 @@ class DQN(RLAlgorithm):
         )
 
         runner_state = (self, buffer, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]

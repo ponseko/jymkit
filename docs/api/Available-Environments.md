@@ -59,9 +59,9 @@ env = jym.make("CartPole-v1")
 
 # External environments (requires installing the respective library)
 env = jym.make("Breakout-MinAtar")  # Gymnax
-env = jym.make("Game2048-v1")       # Jumanji
-env = jym.make("ant")               # Brax
-env = jym.make("chess")             # Pgx
+env = jym.make("Game2048-v1")  # Jumanji
+env = jym.make("ant")  # Brax
+env = jym.make("chess")  # Pgx
 ```
 
 **Note:** External environment libraries are not bundled as dependencies and need to be installed manually (e.g., via pip) before use.

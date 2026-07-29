@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any, Tuple
+from typing import Any, Self
 
 import equinox as eqx
 import jax
@@ -62,7 +62,7 @@ class PPOAgent(RLAgent):
         observation: PyTree,
         deterministic: bool = False,
         get_log_prob: bool = False,
-    ) -> Array | Tuple[Array, Array]:
+    ) -> Array | tuple[Array, Array]:
         observation = self.normalizer.normalize_obs(observation)
         action_dist = self.actor(observation)
         if deterministic:
@@ -89,7 +89,7 @@ class PPOAgent(RLAgent):
     def update_params(self, batch: Transition, trainer: "PPO"):
         @eqx.filter_grad
         def __ppo_los_fn(
-            params: Tuple[ActorNetwork, ValueNetwork],
+            params: tuple[ActorNetwork, ValueNetwork],
             train_batch: Transition,
         ):
             assert train_batch.advantage is not None
@@ -213,10 +213,12 @@ class PPO(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "PPO":
+    @eqx.filter_jit
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PPO":
+    @eqx.filter_jit
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
@@ -233,7 +235,7 @@ class PPO(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]

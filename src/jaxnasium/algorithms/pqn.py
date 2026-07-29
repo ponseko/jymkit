@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import distrax
 import equinox as eqx
@@ -160,10 +160,12 @@ class PQN(RLAlgorithm):
     def num_training_updates(self):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "PQN":
+    @eqx.filter_jit
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=PQNAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "PQN":
+    @eqx.filter_jit
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
@@ -180,7 +182,7 @@ class PQN(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
         runner_state = (self, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]

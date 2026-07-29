@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import equinox as eqx
 import jax
@@ -24,19 +24,19 @@ class Transition(eqx.Module):
     reward: Float[Array, " "]
     terminated: Bool[Array, " "]
     truncated: Bool[Array, " "]
-    log_prob: Optional[Float[Array, "..."]] = None
-    info: Optional[dict] = None
-    value: Optional[Float[Array, " "]] = None
-    next_value: Optional[Float[Array, " "]] = None
-    next_observation: Optional[Array] = None
-    return_: Optional[Float[Array, " "]] = None
-    advantage: Optional[Float[Array, "..."]] = None
-    target: Optional[Float[Array, " "]] = None
+    log_prob: Float[Array, "..."] | None = None
+    info: dict | None = None
+    value: Float[Array, " "] | None = None
+    next_value: Float[Array, " "] | None = None
+    next_observation: Array | None = None
+    return_: Float[Array, " "] | None = None
+    advantage: Float[Array, "..."] | None = None
+    target: Float[Array, " "] | None = None
 
     # PER stores the values here so they are easily tracked and updated after reshuffling.
-    PER_weight: Optional[Float[Array, " "]] = None
-    PER_index: Optional[Int[Array, " "]] = None
-    PER_priority: Optional[Float[Array, " "]] = None
+    PER_weight: Float[Array, " "] | None = None
+    PER_index: Int[Array, " "] | None = None
+    PER_priority: Float[Array, " "] | None = None
 
     def replace(self, **updates):
         keys, values = zip(*updates.items())
@@ -112,9 +112,13 @@ class Transition(eqx.Module):
         per_agent_keys = []
         for f in field_names:
             attr = getattr(self, f)
-            attr_structure = jax.tree.structure(attr, is_leaf=lambda x: x is not attr)
+            attr_structure = jax.tree.structure(
+                attr, is_leaf=lambda x, _attr=attr: x is not _attr
+            )
             if attr_structure == self.structure:  # Compare with reference structure
-                fields[f] = jax.tree.leaves(attr, is_leaf=lambda x: x is not attr)
+                fields[f] = jax.tree.leaves(
+                    attr, is_leaf=lambda x, _attr=attr: x is not _attr
+                )
                 per_agent_keys.append(f)
                 continue
             fields[f] = attr
@@ -268,7 +272,7 @@ class Transition(eqx.Module):
             )
 
         # Create n_epochs of minibatches
-        rng, minibatches = jax.lax.scan(create_minibatch, key, None, n_epochs)
+        _, minibatches = jax.lax.scan(create_minibatch, key, None, n_epochs)
 
         # (n_epochs, n_minibatches, ...) --> (n_epochs * n_minibatches, ...)
         minibatches = jax.tree.map(

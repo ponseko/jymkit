@@ -1,7 +1,7 @@
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any
+from typing import Any, Self
 
 import distrax
 import equinox as eqx
@@ -171,7 +171,7 @@ class SACAgent(RLAgent):
         new_critics = eqx.apply_updates(self.critics, updates)
 
         new_critics_target = jax.tree.map(
-            lambda x, y: trainer.tau * x + (1 - trainer.tau) * y,
+            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
             self.critics_target,
             new_critics,
         )
@@ -246,7 +246,7 @@ class SAC(RLAlgorithm):
     update_every: int = eqx.field(static=True, default=512)
     replay_buffer_size: int = 50_000
     batch_size: int = 512
-    tau: float = 0.95
+    tau: float = 0.05
 
     actor_num_epochs: int = eqx.field(static=True, default=1)
     actor_num_minibatches: int = eqx.field(static=True, default=1)
@@ -321,10 +321,12 @@ class SAC(RLAlgorithm):
     def num_training_updates_alpha(self):
         return self.num_iterations * self.alpha_num_epochs * self.alpha_num_minibatches
 
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> "SAC":
+    @eqx.filter_jit
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
         return replace(self, agent=SACAgent(key=key, env=env, trainer=self))
 
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> "SAC":
+    @eqx.filter_jit
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
         env = self.__check_env__(env, vectorized=True)
         self = replace(self, **hyperparams)
 
@@ -353,7 +355,7 @@ class SAC(RLAlgorithm):
         )
 
         runner_state = (self, buffer, env_state, obsv, key)
-        runner_state, metrics = jax.lax.scan(
+        runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_self = runner_state[0]
@@ -447,10 +449,7 @@ class SAC(RLAlgorithm):
 
                 update_keys = jax.random.split(update_key, num_minibatches)
                 return jax.lax.scan(
-                    scan_minibatch_update,
-                    current_agent,
-                    (minibatches, update_keys),
-                    unroll=4,
+                    scan_minibatch_update, current_agent, (minibatches, update_keys)
                 )
 
             update_keys = jax.random.split(key, num_epochs)

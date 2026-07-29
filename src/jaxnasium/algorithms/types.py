@@ -1,4 +1,5 @@
-from typing import Any, Callable, Protocol, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any, Protocol
 
 import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray

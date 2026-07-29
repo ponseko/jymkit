@@ -44,17 +44,15 @@ import jaxnasium as jym
 from jaxnasium.algorithms import PPO
 
 # Create algorithm instance
-algorithm = PPO(
-    learning_rate=3e-4,
-    total_timesteps=1_000_000,
-    num_envs=8
-)
+algorithm = PPO(learning_rate=3e-4, total_timesteps=1_000_000, num_envs=8)
 
 # Train on environment
 trained_algorithm = algorithm.train(key, env)
 
 # Evaluate
-rewards = trained_algorithm.evaluate(key, env, num_episodes=10) # jnp.array of shape (num_episodes,)
+rewards = trained_algorithm.evaluate(
+    key, env, num_episodes=10
+)  # jnp.array of shape (num_episodes,)
 ```
 
 The algorithms are designed to work seamlessly with any Jaxnasium environment, automatically adapting to the environment's observation and action spaces, and scaling to multi-agent scenarios when needed.

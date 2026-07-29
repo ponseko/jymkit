@@ -1,5 +1,3 @@
-from typing import Tuple
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -31,13 +29,13 @@ class Pendulum(Environment[EnvState]):
     dt: float = 0.05
     g: float = 10.0
     m: float = 1.0
-    l: float = 1.0  # noqa: E741
+    l: float = 1.0  # noqa: E741!
 
     max_episode_steps: int = 200
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: Float[Array, ""]
-    ) -> Tuple[TimeStep, EnvState]:
+    ) -> tuple[TimeStep, EnvState]:
         action = action[0]
         u = jnp.clip(action, -self.max_torque, self.max_torque)
         costs = (
@@ -73,7 +71,7 @@ class Pendulum(Environment[EnvState]):
 
         return timestep, state
 
-    def reset_env(self, key: PRNGKeyArray) -> Tuple[Array, EnvState]:
+    def reset_env(self, key: PRNGKeyArray) -> tuple[Array, EnvState]:
         high = jnp.array([DEFAULT_X, DEFAULT_Y])
         state_variables = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
         state = EnvState(

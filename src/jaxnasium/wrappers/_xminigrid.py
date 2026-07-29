@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any
 
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
@@ -22,11 +22,11 @@ class xMinigridWrapper(Wrapper):
     _env: Any
     _params: Any
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, TEnvState]:  # pyright: ignore[reportInvalidTypeVarUse]
         timestep_xminigrid = self._env.reset(self._params, key)
         return timestep_xminigrid.observation, timestep_xminigrid
 
-    def step(self, key: PRNGKeyArray, state: Any, action: int) -> Tuple[TimeStep, Any]:
+    def step(self, key: PRNGKeyArray, state: Any, action: int) -> tuple[TimeStep, Any]:
         timestep_x = self._env.step(self._params, state, action)  # key is in state
         truncated = jnp.logical_and(timestep_x.discount != 0, timestep_x.step_type == 2)
         terminated = jnp.logical_and(timestep_x.step_type == 2, ~truncated)

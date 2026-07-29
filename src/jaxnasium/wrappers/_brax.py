@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any
 
 import equinox as eqx
 from jaxtyping import PRNGKeyArray
@@ -33,14 +33,14 @@ class BraxWrapper(Wrapper):
     _env: Any
     max_episode_steps: int = 1000  # Brax defaults to 1000
 
-    def reset(self, key: PRNGKeyArray) -> Tuple[TObservation, BraxWrapperState]:  # pyright: ignore[reportInvalidTypeVarUse]
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, BraxWrapperState]:  # pyright: ignore[reportInvalidTypeVarUse]
         env_state = self._env.reset(key)
         env_state = BraxWrapperState(brax_env_state=env_state, timestep=0)
         return env_state.brax_env_state.obs, env_state
 
     def step(
-        self, key: PRNGKeyArray, state: BraxWrapperState, action: int | float
-    ) -> Tuple[TimeStep, BraxWrapperState]:
+        self, key: PRNGKeyArray, state: BraxWrapperState, action: float
+    ) -> tuple[TimeStep, BraxWrapperState]:
         brax_env_state = self._env.step(state.brax_env_state, action)
         state_step = BraxWrapperState(
             brax_env_state=brax_env_state,
