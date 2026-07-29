@@ -1,5 +1,6 @@
 import itertools
 import logging
+import warnings
 from collections.abc import Callable
 
 import jax
@@ -67,6 +68,12 @@ def create_batched_grid_search(
     ... python process_single_job.py --batch_idx $SLURM_ARRAY_TASK_ID
     ```
     """
+    warnings.warn(
+        "create_batched_grid_search is deprecated in favor of "
+        "jaxnasium.algorithms.sweep.GridSearch.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     assert vmap_args is not None or static_args is not None, (
         "Either vmap_args or static_args must be provided"
     )
@@ -176,6 +183,12 @@ def create_batched_random_search(
     args: dict[str, list | tuple],
     max_vmap_chunk_size: int | None = None,
 ):
+    warnings.warn(
+        "create_batched_random_search is deprecated in favor of "
+        "jaxnasium.algorithms.sweep.RandomSearch.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     assert args is not None and len(args) > 0, "args must be a non-empty dictionary"
     assert num_samples > 0, "num_samples must be greater than 0"
     assert max_vmap_chunk_size is None or max_vmap_chunk_size >= 0, (
