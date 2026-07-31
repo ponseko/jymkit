@@ -77,6 +77,13 @@ class GridSearch:
         *,
         seed: PRNGKeyArray | None = None,  # unused for grid search
         batch_size: int | None = None,
+        print_cost_estimate: bool = False,
     ) -> Sweep:
         """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] object with this grid search"""
-        return Sweep(fn, self, seed=seed, batch_size=batch_size)
+        return Sweep(
+            fn,
+            self,
+            seed=seed,
+            batch_size=batch_size,
+            print_cost_estimate=print_cost_estimate,
+        )

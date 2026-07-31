@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
-from ._probe import split_static_dynamic_params
+from ._probe import log_cost_estimate, split_static_dynamic_params
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,9 @@ class Sweep:
             unlimited batching of configs that share the same static args, or a
             positive int to cap the vmap size. `fn` will be traced to determine which
             parameters are dynamic and can be `vmap`ed together.
+        `print_cost_estimate`: After creation, print the cost estimate of the first job to provide a
+        rough estimate of the memory requirements of a job in the sweep. This triggers a compilation, so
+        adds some overhead to the creation of the sweep.
 
     **Attributes**:
         `fn`: Runs one `SweepJob`, returning a `SweepResult` per configuration.
@@ -177,6 +180,7 @@ class Sweep:
         *stages: ParameterSpaceSearch,
         seed: PRNGKeyArray | None = None,
         batch_size: int | None = None,
+        print_cost_estimate: bool = False,
     ):
         if not stages:
             raise ValueError("At least one sweep stage is required")
@@ -296,6 +300,28 @@ class Sweep:
             f"Created {len(jobs)} sweep jobs for {len(configs)} configurations "
             f"(per job: {list(static_params)} fixed, {list(dynamic_params)} vmapped)"
         )
+
+        if print_cost_estimate:
+            first_job = jobs[0]
+            un_vmapped_first_job = SweepJob(
+                first_job.static_args,
+                {
+                    name: [first_job.dynamic_args[name][0]]
+                    for name in first_job.dynamic_args
+                },
+            )
+            print(
+                "Estimating the cost of the first job without any arguments mapped over.",
+                " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
+                " especially when sweeping over different environments, num_envs etc.",
+                " Compiling...",
+            )
+            print(log_cost_estimate(fn, **un_vmapped_first_job.arguments))
+            print("Done.")
+            print(
+                "Proxied a single configuration. In this sweep, the largest job runs",
+                f"{max(jobs, key=lambda j: j.num_runs).num_runs} configuration(s) in parallel (vmap batch size).",
+            )
 
         object.__setattr__(self, "fn", mapped_fn)
         object.__setattr__(self, "jobs", jobs)
