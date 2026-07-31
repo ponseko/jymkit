@@ -14,7 +14,10 @@ from ._logging import (
 )
 from ._multi_agent import MultiAgentWrapper as MultiAgentWrapper
 from ._normalization import Normalizer as Normalizer
-from ._scan import scan_transitions as scan_transitions
+from ._scan import (
+    scan_minibatch_epoch as scan_minibatch_epoch,
+    scan_transitions as scan_transitions,
+)
 from ._schedule import Schedule as Schedule
 from ._transition import (
     Transition as Transition,

@@ -42,7 +42,7 @@ Each of these consist of three components:
 
 
 class ActorNetwork(eqx.Module):
-    obs_processor: OutSizedNetwork
+    obs_processor: PyTreeObsSpaceNetwork
     body: OutSizedNetwork
     output_layers: PyTreeOutputNetwork
 
@@ -104,7 +104,7 @@ class ActorNetwork(eqx.Module):
 
 
 class ValueNetwork(eqx.Module):
-    obs_processor: OutSizedNetwork
+    obs_processor: PyTreeObsSpaceNetwork
     body: OutSizedNetwork
     output_layers: Network
 
@@ -156,7 +156,7 @@ class ValueNetwork(eqx.Module):
 
 
 class QValueNetwork(eqx.Module):
-    obs_processor: OutSizedNetwork
+    obs_processor: PyTreeObsSpaceNetwork
     body: OutSizedNetwork
     output_layers: PyTreeOutputNetwork
 

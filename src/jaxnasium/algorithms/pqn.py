@@ -19,6 +19,7 @@ from jaxnasium.algorithms.core import (
     Schedule,
     Transition,
     scan_callback,
+    scan_minibatch_epoch,
 )
 
 from .agent_networks import QValueNetwork
@@ -221,8 +222,22 @@ class PQN(RLAlgorithm):
         )
         trajectory_batch = replace(trajectory_batch, return_=returns)
 
-        # Update agent
-        updated_agent = self._update_agent_state(rng, agent, trajectory_batch)
+        # (num_steps * num_envs, ...) > (batch_size, ...)
+        train_batch = jax.tree.map(
+            lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
+            trajectory_batch,
+        )
+
+        # Update agent over multiple epochs x minibatches
+        key, rng = jax.random.split(rng)
+        updated_agent, _ = scan_minibatch_epoch(
+            lambda agent, minibatch: (agent.update_params(minibatch, self), None),
+            agent,
+            train_batch,
+            minibatch_rng=key,
+            num_epochs=self.num_epochs,
+            num_minibatches=self.num_minibatches,
+        )
         self = replace(self, agent=updated_agent)
 
         runner_state = (self, env_state, last_obs, rng)
@@ -285,28 +300,3 @@ class PQN(RLAlgorithm):
             self.q_lambda * next_return + (1 - self.q_lambda) * next_q_values
         )
         return return_this_step, return_this_step
-
-    def _update_agent_state(
-        self, key, current_agent: PQNAgent, trajectory_batch: Transition
-    ) -> PQNAgent:
-        def scan_epoch_update(current_agent: PQNAgent, key):
-            # Create a fresh set of minibatches and update the agent
-            minibatches = train_batch.make_minibatches(key, self.num_minibatches)
-            return jax.lax.scan(
-                lambda agent, minibatch: (agent.update_params(minibatch, self), None),
-                current_agent,
-                minibatches,
-                unroll=4,
-            )
-
-        # (num_steps * num_envs, ...) > (batch_size, ...)
-        train_batch = jax.tree.map(
-            lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
-            trajectory_batch,
-        )
-
-        update_keys = jax.random.split(key, self.num_epochs)
-        updated_agent, _ = jax.lax.scan(
-            scan_epoch_update, current_agent, update_keys, unroll=4
-        )
-        return updated_agent
