@@ -20,14 +20,14 @@ def _tree_size(tree):
     return sum([jnp.size(leaf) for leaf in jax.tree.leaves(tree)])
 
 
-def _tree_sum(tree: Any, axis: int | tuple[int, ...] | None = None):
+def tree_sum(tree: Any, axis: int | tuple[int, ...] | None = None):
     """
     Compute the sum of all the elements in a pytree
     If axis is provided, sums each leaf over the specified axis and
     then adds adds the resulting leafs.
     """
     sums = jax.tree.map(lambda x: jnp.sum(x, axis=axis), tree)
-    return jax.tree.reduce(operator.add, sums, initializer=0)
+    return jax.tree.reduce_associative(operator.add, sums)
 
 
 def _is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
@@ -44,7 +44,7 @@ def _is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
 
 def tree_mean(tree):
     """Computes the global mean of the leaves of a pytree."""
-    sum = _tree_sum(tree)
+    sum = tree_sum(tree)
     size = _tree_size(tree)
     return sum / size
 
@@ -417,3 +417,4 @@ zeros_like = tree_zeros_like
 ones_like = tree_ones_like
 add = tree_add
 mul = tree_mul
+sum = tree_sum
