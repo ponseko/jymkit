@@ -1,9 +1,11 @@
 import logging
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 
 logger = logging.getLogger(__name__)
@@ -92,3 +94,150 @@ def split_static_dynamic_params(
             dynamic_params[name] = spec
 
     return static_params, dynamic_params
+
+
+def _format_bytes(n: float | None) -> str:
+    """Human-readable byte count."""
+    if n is None:
+        return "n/a"
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(n) < 1024.0:
+            return f"{n:.2f} {unit}"
+        n /= 1024.0
+    return f"{n:.2f} PiB"
+
+
+def _format_flops(n: float | None) -> str:
+    """Human-readable FLOP count."""
+    if n is None:
+        return "n/a"
+    n = float(n)
+    for unit, scale in (
+        ("PFLOPs", 1e15),
+        ("TFLOPs", 1e12),
+        ("GFLOPs", 1e9),
+        ("MFLOPs", 1e6),
+        ("KFLOPs", 1e3),
+        ("FLOPs", 1.0),
+    ):
+        if abs(n) >= scale or unit == "FLOPs":
+            return f"{n / scale:.2f} {unit}"
+    return f"{n:.2e} FLOPs"
+
+
+@dataclass
+class CostEstimate:
+    """Container class for the result of log_cost_estimate.
+    Ballpark XLA cost / memory estimate for a compiled call.
+    Comes with a __repr__ for pretty printing.
+    """
+
+    fn_name: str
+    device_memory_bytes: float | None = None
+    temp_bytes: float | None = None
+    argument_bytes: float | None = None
+    output_bytes: float | None = None
+    flops: float | None = None
+    bytes_accessed: float | None = None
+    num_gpus: int = 0
+    device_byte_sizes: list[int | None] | None = None
+    error: str | None = None
+
+    def __repr__(self) -> str:
+        limits = self.device_byte_sizes or [None]
+        lines = [
+            "=================================================",
+            f"CostEstimate({self.fn_name!r}:",
+        ]
+        if self.error is not None:
+            lines.append(f"  failed — {self.error}")
+        else:
+            lines.extend(
+                [
+                    f"  device memory required ≈ {_format_bytes(self.device_memory_bytes)}",
+                    f"  FLOPs ≈ {_format_flops(self.flops)}",
+                    f"  bytes accessed ≈ {_format_bytes(self.bytes_accessed)}",
+                ]
+            )
+        lines.extend(
+            [
+                f"  GPUs detected = {self.num_gpus}",
+                f"  device bytes_limits = {'[' + ', '.join(_format_bytes(n) for n in limits) + ']'}",
+                " ================================================",
+                "  Note: These values are a proxy only and provide limited guarantees on the real usage.",
+                "    (compiler / backend / version / positioning of the stars may alter the real usage.)",
+                " ================================================",
+            ]
+        )
+        return "\n".join(lines)
+
+
+def log_cost_estimate(fn: Callable[..., Any], **kwargs: Any) -> CostEstimate:
+    """Compile ``fn(**kwargs)`` and return a ballpark memory / FLOP estimate.
+
+    Typical usage: ``print(log_cost_estimate(fn, **kwargs))``.
+
+    This is a compiler proxy only — it cannot guarantee real peak usage, which
+    can vary with backend, JAX version, rematerialization, and inputs that
+    change the computation graph.
+
+    https://docs.jax.dev/en/latest/aot.html#debug-information-and-analyses-when-available
+    """
+    fn_name = getattr(fn, "__name__", repr(fn))
+
+    try:
+        n_gpus = jax.device_count("gpu")
+    except RuntimeError:
+        n_gpus = 0
+
+    # Memory sizes of each (gpu/tpu) device; does not include cpu memory.
+    device_byte_sizes: list[int | None] = []
+    for device in jax.devices():
+        try:
+            stats = device.memory_stats()
+            device_byte_sizes.append(int(stats["bytes_limit"]))
+        except Exception:
+            logger.debug(f"Could not get memory stats for device {device}")
+            device_byte_sizes.append(None)
+
+    # Compile and get mem + flop stats
+    try:
+        compiled = jax.jit(lambda: fn(**kwargs)).lower().compile()
+        cost = compiled.cost_analysis() or {}
+        memory = compiled.memory_analysis()
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        logger.warning(f"Could not estimate cost for {fn_name}: {msg}")
+        return CostEstimate(
+            fn_name=fn_name,
+            num_gpus=n_gpus,
+            device_byte_sizes=device_byte_sizes,
+            error=msg,
+        )
+
+    temp = argument = output = device_memory = None
+    if memory is not None:
+        temp = float(memory.temp_size_in_bytes)
+        argument = float(memory.argument_size_in_bytes)
+        output = float(memory.output_size_in_bytes)
+        device_memory = temp + argument + output - float(memory.alias_size_in_bytes)
+
+    flops = bytes_accessed = None
+    if isinstance(cost, dict):
+        if "flops" in cost:
+            flops = float(cost["flops"])
+        if "bytes accessed" in cost:
+            bytes_accessed = float(cost["bytes accessed"])
+
+    return CostEstimate(
+        fn_name=fn_name,
+        device_memory_bytes=device_memory,
+        temp_bytes=temp,
+        argument_bytes=argument,
+        output_bytes=output,
+        flops=flops,
+        bytes_accessed=bytes_accessed,
+        num_gpus=n_gpus,
+        device_byte_sizes=device_byte_sizes,
+    )

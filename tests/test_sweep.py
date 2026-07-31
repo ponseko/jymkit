@@ -166,6 +166,31 @@ def test_batch_size_splits_a_vmapped_job():
     assert all(job.num_runs == 2 for job in sweep.jobs)
 
 
+def test_with_cost_size_estimate(capsys):
+    def fn(lr, env_name):
+        return lr
+
+    _sweep = GridSearch({"env_name": ["a", "b"], "lr": [0.1, 0.2, 0.3, 0.4]}).sweep(
+        fn, batch_size=2, print_cost_estimate=True
+    )
+
+    out = capsys.readouterr().out
+    assert "largest job runs 2 configuration(s) in parallel" in out
+    assert "CostEstimate('fn':" in out
+
+
+def test_log_cost_estimate_returns_dataclass():
+    from jaxnasium.algorithms.sweep._probe import CostEstimate, log_cost_estimate
+
+    def fn(lr):
+        return (jnp.ones(8) * lr).sum()
+
+    estimate = log_cost_estimate(fn, lr=0.1)
+    assert isinstance(estimate, CostEstimate)
+    assert estimate.error is None
+    assert estimate.device_memory_bytes is not None
+
+
 def test_batch_size_allows_a_smaller_final_batch():
     def fn(lr):
         return lr

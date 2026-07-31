@@ -11,6 +11,7 @@ from ._tree import (
     ones_like as ones_like,
     split_key_like_structure as split_key_like_structure,
     stack as stack,
+    sum as sum,
     unstack as unstack,
     zeros_like as zeros_like,
 )

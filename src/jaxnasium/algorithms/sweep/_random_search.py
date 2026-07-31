@@ -144,9 +144,16 @@ class RandomSearch:
         *,
         seed: PRNGKeyArray | None = None,
         batch_size: int | None = None,
+        print_cost_estimate: bool = False,
     ) -> Sweep:
         """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] with this search alone."""
-        return Sweep(fn, self, seed=seed, batch_size=batch_size)
+        return Sweep(
+            fn,
+            self,
+            seed=seed,
+            batch_size=batch_size,
+            print_cost_estimate=print_cost_estimate,
+        )
 
 
 @dataclass(frozen=True)
@@ -236,6 +243,13 @@ class SobolSearch:
         *,
         seed: PRNGKeyArray | None = None,
         batch_size: int | None = None,
+        print_cost_estimate: bool = False,
     ) -> Sweep:
         """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] with this search alone."""
-        return Sweep(fn, self, seed=seed, batch_size=batch_size)
+        return Sweep(
+            fn,
+            self,
+            seed=seed,
+            batch_size=batch_size,
+            print_cost_estimate=print_cost_estimate,
+        )

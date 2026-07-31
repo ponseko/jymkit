@@ -135,6 +135,12 @@ class PyTreeObsSpaceNetwork(eqx.Module):
 
     During a forward call this network simply returns a jax.tree.map over all observation spaces
     and concatenates the outputs of all observation networks as a single 1d vector.
+
+    **Arguments:**
+    - `obs_space`: The observation space(s) to build networks for.
+    - `key`: A PRNG key for reproducibility.
+    - `architecture_1d`: The architecture to use for 1d observation spaces.
+    - `architecture_2d`: The architecture to use for 2d observation spaces.
     """
 
     networks: PyTree[Network]

@@ -20,6 +20,7 @@ from jaxnasium.algorithms.core import (
     Transition,
     TransitionBuffer,
     scan_callback,
+    scan_minibatch_epoch,
 )
 
 from .agent_networks import ActorNetwork, QValueNetwork
@@ -193,7 +194,7 @@ class SACAgent(RLAgent):
                     if target_entropy is None:
                         action_dim = jnp.prod(jnp.array(log_probs.shape[1:]))
                         target_entropy = (
-                            target_entropy_scale * 0.5 * jnp.log(action_dim)
+                            target_entropy_scale * 0.89 * jnp.log(action_dim)
                         )
                     return (action_probs * (log_probs + target_entropy)).sum(axis=-1)
                 else:  # Continuous action space
@@ -243,10 +244,10 @@ class SAC(RLAlgorithm):
 
     gamma: float = 0.99
     max_grad_norm: float = 0.5
-    update_every: int = eqx.field(static=True, default=512)
+    update_every: int = eqx.field(static=True, default=256)
     replay_buffer_size: int = 50_000
     batch_size: int = 512
-    tau: float = 0.05
+    tau: float = 0.025
 
     actor_num_epochs: int = eqx.field(static=True, default=1)
     actor_num_minibatches: int = eqx.field(static=True, default=1)
@@ -437,53 +438,90 @@ class SAC(RLAlgorithm):
     def _update_agent_state(
         self, key: PRNGKeyArray, current_agent: SACAgent, train_batch: Transition
     ) -> SACAgent:
-        def update_network(key, agent, batch, update_fn, num_epochs, num_minibatches):
-            def scan_epoch_update(current_agent, key):
-                # Create a fresh set of minibatches and update the agent
-                shuffle_key, update_key = jax.random.split(key)
-                minibatches = batch.make_minibatches(shuffle_key, num_minibatches)
+        def _scan_update(update_fn, update_key, agent, n_epochs, n_minibatches):
+            """Update functions require a key, hence to scan them for epochs x minibatching they need to return a new key"""
 
-                def scan_minibatch_update(agent, minibatch_and_key):
-                    minibatch, key = minibatch_and_key
-                    return update_fn(agent, key, minibatch), None
+            def scan_fn(carry, minibatch):
+                agent, rng = carry
+                rng, sample_key = jax.random.split(rng)
+                agent = update_fn(agent, sample_key, minibatch, self)
+                return (agent, rng), None
 
-                update_keys = jax.random.split(update_key, num_minibatches)
-                return jax.lax.scan(
-                    scan_minibatch_update, current_agent, (minibatches, update_keys)
-                )
+            # Scan over epochs x minibatching
+            (updated_agent, _), _ = scan_minibatch_epoch(
+                scan_fn,
+                (agent, update_key),
+                train_batch,
+                minibatch_rng=shuffle_key,
+                num_epochs=n_epochs,
+                num_minibatches=n_minibatches,
+            )
 
-            update_keys = jax.random.split(key, num_epochs)
-            return jax.lax.scan(scan_epoch_update, agent, update_keys, unroll=4)
+            return updated_agent
 
-        update_critic_fn = lambda a, k, m: a.update_critics_params(k, m, self)
-        update_actor_fn = lambda a, k, m: a.update_actor_params(k, m, self)
-        update_alpha_fn = lambda a, k, m: a.update_alpha_params(k, m, self)
+        shuffle_key, critic_key, actor_key, alpha_key = jax.random.split(key, 4)
 
-        agent, _ = update_network(
-            key,
+        updated_agent = _scan_update(
+            SACAgent.update_critics_params,
+            critic_key,
             current_agent,
-            train_batch,
-            update_critic_fn,
             self.critics_num_epochs,
             self.critics_num_minibatches,
         )
 
-        agent, _ = update_network(
-            key,
-            agent,
-            train_batch,
-            update_actor_fn,
+        updated_agent = _scan_update(
+            SACAgent.update_actor_params,
+            actor_key,
+            updated_agent,
             self.actor_num_epochs,
             self.actor_num_minibatches,
         )
 
-        agent, _ = update_network(
-            key,
-            agent,
-            train_batch,
-            update_alpha_fn,
+        updated_agent = _scan_update(
+            SACAgent.update_alpha_params,
+            alpha_key,
+            updated_agent,
             self.alpha_num_epochs,
             self.alpha_num_minibatches,
         )
 
-        return agent
+        # (updated_agent, _), _ = scan_minibatch_epoch(
+        #     make_update_scannable(
+        #         lambda agent, sample_key, minibatch: agent.update_critics_params(
+        #             sample_key, minibatch, self
+        #         )
+        #     ),
+        #     (current_agent, critic_key),
+        #     train_batch,
+        #     minibatch_rng=shuffle_key,
+        #     num_epochs=self.critics_num_epochs,
+        #     num_minibatches=self.critics_num_minibatches,
+        # )
+
+        # (updated_agent, _), _ = scan_minibatch_epoch(
+        #     make_update_scannable(
+        #         lambda agent, sample_key, minibatch: agent.update_actor_params(
+        #             sample_key, minibatch, self
+        #         )
+        #     ),
+        #     (updated_agent, actor_key),
+        #     train_batch,
+        #     minibatch_rng=shuffle_key,
+        #     num_epochs=self.actor_num_epochs,
+        #     num_minibatches=self.actor_num_minibatches,
+        # )
+
+        # (updated_agent, _), _ = scan_minibatch_epoch(
+        #     make_update_scannable(
+        #         lambda agent, sample_key, minibatch: agent.update_alpha_params(
+        #             sample_key, minibatch, self
+        #         )
+        #     ),
+        #     (updated_agent, alpha_key),
+        #     train_batch,
+        #     minibatch_rng=shuffle_key,
+        #     num_epochs=self.alpha_num_epochs,
+        #     num_minibatches=self.alpha_num_minibatches,
+        # )
+
+        return updated_agent
