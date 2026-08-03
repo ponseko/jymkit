@@ -99,7 +99,7 @@ class Pendulum(Environment[EnvState]):
 
     @property
     def observation_space(self) -> Box:
-        high = jnp.array([1.0, 1.0, self.max_speed])
+        high = np.array([1.0, 1.0, self.max_speed])
         return Box(
             low=-high,
             high=high,

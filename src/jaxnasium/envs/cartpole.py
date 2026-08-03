@@ -111,7 +111,7 @@ class CartPole(Environment[EnvState]):
 
     @property
     def observation_space(self) -> Box:
-        high = jnp.array(
+        high = np.array(
             [
                 self.x_threshold * 2,
                 np.finfo(jnp.float32).max,

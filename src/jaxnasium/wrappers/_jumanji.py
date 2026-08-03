@@ -120,8 +120,10 @@ class JumanjiWrapper(Wrapper):
     def observation_space(self) -> Any:
         from jumanji.specs import jumanji_specs_to_gym_spaces  # type: ignore
 
-        space = self._env.observation_spec
-        space = jumanji_specs_to_gym_spaces(space)
+        # ensuring space properties are not tracers:
+        with jax.ensure_compile_time_eval():
+            space = self._env.observation_spec
+            space = jumanji_specs_to_gym_spaces(space)
         space = self.__convert_gymnasium_space_to_dict(space)
         space = gymnasium_to_jaxnasium_space(space)
         action_mask_space = space.pop("action_mask", None)  # pyright: ignore[reportAttributeAccessIssue]
@@ -133,8 +135,9 @@ class JumanjiWrapper(Wrapper):
     def action_space(self) -> Any:
         from jumanji.specs import jumanji_specs_to_gym_spaces  # type: ignore
 
-        space = self._env.action_spec
-        space = jumanji_specs_to_gym_spaces(space)
+        with jax.ensure_compile_time_eval():
+            space = self._env.action_spec
+            space = jumanji_specs_to_gym_spaces(space)
         space = jax.tree.map(self.__convert_gymnasium_int_box_to_discrete, space)
         space = self.__convert_gymnasium_space_to_dict(space)
         return gymnasium_to_jaxnasium_space(space)

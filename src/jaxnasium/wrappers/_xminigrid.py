@@ -1,6 +1,7 @@
 from typing import Any
 
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import TEnvState, TimeStep, TObservation
@@ -45,8 +46,8 @@ class xMinigridWrapper(Wrapper):
     def observation_space(self) -> Box:
         obs_shape = self._env.observation_shape(self._params)
         return Box(
-            low=jnp.full(obs_shape, -10),
-            high=jnp.full(obs_shape, 10),
+            low=np.full(obs_shape, -10),
+            high=np.full(obs_shape, 10),
             shape=obs_shape,
             dtype=jnp.int32,
         )

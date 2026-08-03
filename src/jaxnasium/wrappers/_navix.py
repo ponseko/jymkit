@@ -1,5 +1,6 @@
 from typing import Any
 
+import jax
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import TEnvState, TimeStep, TObservation
@@ -42,12 +43,15 @@ class NavixWrapper(Wrapper):
 
     @property
     def observation_space(self) -> Box:
-        return Box(
-            low=self._env.observation_space.minimum,
-            high=self._env.observation_space.maximum,
-            shape=self._env.observation_space.shape,
-            dtype=self._env.observation_space.dtype,
-        )
+        # ensuring space properties are not tracers:
+        with jax.ensure_compile_time_eval():
+            space = self._env.observation_space
+            return Box(
+                low=space.minimum,
+                high=space.maximum,
+                shape=space.shape,
+                dtype=space.dtype,
+            )
 
     @property
     def action_space(self) -> Discrete:

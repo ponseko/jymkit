@@ -50,10 +50,6 @@ class Space(ABC):
     def sample(self, rng: PRNGKeyArray) -> Array:
         pass
 
-    # @abstractmethod  # NOTE: Do we need this?
-    # def contains(self, x: int) -> bool:
-    #     pass
-
 
 @dataclass
 class Box(Space):
@@ -68,14 +64,16 @@ class Box(Space):
     - `dtype`: The data type of the space. Default is jnp.float32.
     """
 
-    low: float | ArrayLike = eqx.field(converter=np.asarray, default=0.0)
-    high: float | ArrayLike = eqx.field(converter=np.asarray, default=1.0)
+    low: float | ArrayLike = 0.0
+    high: float | ArrayLike = 1.0
     shape: tuple[int, ...] = ()
     dtype: DTypeLike = jnp.float32
 
     def __post_init__(self):
+        object.__setattr__(self, "low", np.asarray(self.low))
+        object.__setattr__(self, "high", np.asarray(self.high))
         if not isinstance(self.shape, tuple):
-            self.shape = (self.shape,)
+            object.__setattr__(self, "shape", (self.shape,))
 
     def sample(self, rng: PRNGKeyArray) -> Array:
         """Sample random action uniformly from set of continuous choices."""

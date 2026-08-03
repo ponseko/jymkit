@@ -34,11 +34,11 @@ class MountainCar(Environment[EnvState]):
 
     @property
     def low(self):
-        return jnp.array([self.min_position, -self.max_speed])
+        return np.array([self.min_position, -self.max_speed])
 
     @property
     def high(self):
-        return jnp.array([self.max_position, self.max_speed])
+        return np.array([self.max_position, self.max_speed])
 
     def step_env(
         self, key: PRNGKeyArray, state: EnvState, action: int

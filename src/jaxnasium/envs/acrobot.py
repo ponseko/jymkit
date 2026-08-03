@@ -127,7 +127,7 @@ class Acrobot(Environment[EnvState]):
 
     @property
     def observation_space(self) -> Box:
-        high = jnp.array([1.0, 1.0, 1.0, 1.0, self.max_vel_1, self.max_vel_2])
+        high = np.array([1.0, 1.0, 1.0, 1.0, self.max_vel_1, self.max_vel_2])
         return Box(
             low=-high,
             high=high,

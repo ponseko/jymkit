@@ -444,11 +444,11 @@ class FlattenObservationWrapper(Wrapper):
 
             # Also flatten the .low and .high attributes if they exist
             if hasattr(_space, "low") and hasattr(_space, "high"):
-                _space.low = jnp.reshape(_space.low, (-1,))
-                _space.high = jnp.reshape(_space.high, (-1,))
+                _space.low = np.reshape(_space.low, (-1,))
+                _space.high = np.reshape(_space.high, (-1,))
 
             if hasattr(_space, "nvec"):
-                _space.nvec = jnp.reshape(_space.nvec, (-1,))
+                _space.nvec = np.reshape(_space.nvec, (-1,))
 
             return _space
 

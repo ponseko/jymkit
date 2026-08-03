@@ -1,11 +1,14 @@
 from typing import Any
 
 import equinox as eqx
+import jax
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import TEnvState, TimeStep, TObservation
 from jaxnasium._spaces import Space
-from jaxnasium.wrappers._wrappers import Wrapper
+
+from ._util import gymnasium_to_jaxnasium_space
+from ._wrappers import Wrapper
 
 
 class GymnaxWrapper(Wrapper):
@@ -76,9 +79,14 @@ class GymnaxWrapper(Wrapper):
     @property
     def observation_space(self) -> Space:
         params = self._env.default_params
-        return self._env.observation_space(params)
+        # ensuring space properties are not tracers:
+        with jax.ensure_compile_time_eval():
+            space = self._env.observation_space(params)
+        return gymnasium_to_jaxnasium_space(space)
 
     @property
     def action_space(self) -> Space:
         params = self._env.default_params
-        return self._env.action_space(params)
+        with jax.ensure_compile_time_eval():
+            space = self._env.action_space(params)
+        return gymnasium_to_jaxnasium_space(space)
