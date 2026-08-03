@@ -38,17 +38,18 @@ def set_weight_bias(
             for layer in layers
         ]
 
+    keys = jax.random.split(key, len(new_layers))
     if weight_init is not None:
         # Update weight
         new_layers = [
             eqx.tree_at(
                 lambda x: x.weight,
                 layer,
-                replace_fn=lambda x: weight_init()(key, x.shape, x.dtype),  # type: ignore
+                replace_fn=lambda x, k=k: weight_init()(k, x.shape, x.dtype),  # type: ignore
             )
             if is_layer(layer)
             else layer
-            for layer in new_layers
+            for layer, k in zip(new_layers, keys)
         ]
 
     return jax.tree.unflatten(network_structure, new_layers)
