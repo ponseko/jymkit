@@ -134,7 +134,12 @@ class TransitionBuffer(eqx.Module):
         buffer = eqx.tree_at(lambda x: x.size, buffer, size)
         return buffer
 
-    def sample(self, key: PRNGKeyArray, with_replacement: bool = True) -> Transition:
+    def sample(
+        self,
+        key: PRNGKeyArray,
+        with_replacement: bool = True,
+        batch_size: int | None = None,
+    ) -> Transition:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
         of length `n_steps` when `n_steps > 1`, otherwise a batch of single transitions.
@@ -146,6 +151,7 @@ class TransitionBuffer(eqx.Module):
         the batch dimension of the returned transitions.
         """
 
+        batch_size = self.sample_batch_size if batch_size is None else batch_size
         flat_valid_start_indices = self._get_flat_valid_start_indices()
 
         if with_replacement:
@@ -153,12 +159,12 @@ class TransitionBuffer(eqx.Module):
                 flat_valid_start_indices.sum(), 1
             )
             flat_indices = jax.random.choice(
-                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
+                key, self.max_size, (batch_size,), p=probs, replace=True
             )
         else:
             id_probs = jax.random.uniform(key, (self.max_size,))
             id_probs = jnp.where(flat_valid_start_indices, id_probs, -jnp.inf)
-            flat_indices = jax.lax.top_k(id_probs, self.sample_batch_size)[1]
+            flat_indices = jax.lax.top_k(id_probs, batch_size)[1]
 
         batch = self._gather_batch(flat_indices)
 
@@ -285,7 +291,12 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         return buffer
 
-    def sample(self, key: PRNGKeyArray, with_replacement: bool = False) -> Transition:
+    def sample(
+        self,
+        key: PRNGKeyArray,
+        with_replacement: bool = False,
+        batch_size: int | None = None,
+    ) -> Transition:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
         of length ``n_steps`` when ``n_steps > 1``, otherwise a batch of single transitions.
@@ -300,6 +311,7 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
         to the Transition batch and returns the indices of the sampled sequence starts as
         ``(Transition, flat_indices)``.
         """
+        batch_size = self.sample_batch_size if batch_size is None else batch_size
         flat_valid_start_indices = self._get_flat_valid_start_indices()
         flat_priorities = self.priorities.reshape(-1)
         scaled_priorities = jnp.where(
@@ -309,14 +321,14 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
 
         if with_replacement:
             flat_indices = jax.random.choice(
-                key, self.max_size, (self.sample_batch_size,), p=probs, replace=True
+                key, self.max_size, (batch_size,), p=probs, replace=True
             )
         else:
             gumbel = jax.random.gumbel(key, (self.max_size,))
             keys_ = jnp.where(
                 flat_valid_start_indices, jnp.log(probs + 1e-12) + gumbel, -jnp.inf
             )
-            flat_indices = jax.lax.top_k(keys_, self.sample_batch_size)[1]
+            flat_indices = jax.lax.top_k(keys_, batch_size)[1]
 
         num_valid = flat_valid_start_indices.sum()
         sample_probs = probs[flat_indices]

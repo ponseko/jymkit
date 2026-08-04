@@ -19,7 +19,7 @@ def scan_minibatch_epoch(
     minibatch_rng: PRNGKeyArray,
     num_epochs: int,
     num_minibatches: int,
-    unroll: int | bool | tuple[int | bool, int | bool] = (True, False),
+    unroll: int | bool | tuple[int | bool, int | bool] = (False, False),
 ):
     """
     A simple double `jax.lax.scan` loop over num_epochs x num_minibatches.
