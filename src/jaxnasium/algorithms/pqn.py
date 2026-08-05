@@ -218,7 +218,7 @@ class PQN(RLAlgorithm):
                 unroll=16,
             )
         )
-        train_batch = replace(trajectory_batch, return_=returns)
+        train_batch = replace(train_batch, return_=returns)
 
         # (num_steps * num_envs, ...) > (batch_size, ...)
         train_batch = jax.tree.map(
