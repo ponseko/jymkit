@@ -110,15 +110,6 @@ class DistraxContainer(eqx.Module):
         )
 
 
-class Tanh(distrax.Tanh):
-    # https://github.com/google-deepmind/distrax/issues/216
-    def inverse_and_log_det(self, y):
-        # tanh.log_prob may fail due to machine precision
-        eps = jnp.finfo(y.dtype).eps
-        y = jnp.clip(y, -1 + eps, 1 - eps)
-        return super().inverse_and_log_det(y)
-
-
 class TanhNormal(distrax.Transformed):
     def __init__(self, mean, std, shift=0.0, scale=1.0):
         mean = jnp.asarray(mean)
@@ -128,7 +119,7 @@ class TanhNormal(distrax.Transformed):
         scale = jnp.broadcast_to(jnp.asarray(scale), target_shape)
 
         dist = distrax.Normal(loc=mean, scale=std)
-        tanh = Tanh()
+        tanh = distrax.Tanh()
         scaler = distrax.ScalarAffine(shift=shift, scale=scale)
         super().__init__(dist, distrax.Chain([scaler, tanh]))
         self._mean = mean
