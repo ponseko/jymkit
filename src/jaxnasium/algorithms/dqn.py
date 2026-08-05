@@ -128,15 +128,15 @@ class DQN(RLAlgorithm):
     "State of the DQN agent, containing the networks, optimizer state and optional normalization running statistics."
 
     learning_rate_start: float = 2.5e-3
-    learning_rate_end: float | None = eqx.field(static=True, default=None)
+    learning_rate_end: float | None = eqx.field(static=True, default=2.5e-4)
     epsilon_start: float = 0.1
     epsilon_end: float | None = eqx.field(static=True, default=None)
     gamma: float = 0.99
-    max_grad_norm: float = 1.0
-    update_every: int = eqx.field(static=True, default=int(2e2))
-    replay_buffer_size: int = 50_000
+    max_grad_norm: float = 10.0
+    update_every: int = eqx.field(static=True, default=int(128))
+    replay_buffer_size: int = 10_000
     batch_size: int = 64
-    warmup_steps: int = eqx.field(static=True, default=10_000)
+    warmup_steps: int = eqx.field(static=True, default=5_000)
     """ Warmup for the normalizer and the replay buffer. """
     tau: float = 0.05
 

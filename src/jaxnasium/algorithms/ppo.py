@@ -157,7 +157,7 @@ class PPO(RLAlgorithm):
     ent_coef_end: float | None = eqx.field(static=True, default=None)
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    max_grad_norm: float = 0.5
+    max_grad_norm: float = 10.0
     clip_coef: float = 0.2
     clip_coef_vf: float = 10.0
     vf_coef: float = 0.25
