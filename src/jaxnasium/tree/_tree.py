@@ -27,7 +27,7 @@ def tree_sum(tree: Any, axis: int | tuple[int, ...] | None = None):
     then adds adds the resulting leafs.
     """
     sums = jax.tree.map(lambda x: jnp.sum(x, axis=axis), tree)
-    return jax.tree.reduce_associative(operator.add, sums)
+    return jax.tree.reduce_associative(operator.add, sums)  # type: ignore[reportGeneralTypeIssues]
 
 
 def _is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
@@ -403,6 +403,19 @@ def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | float | Array) -> PyTree
     return jax.tree.map(jnp.multiply, tree_A, tree_B)
 
 
+def tree_clip(
+    tree: PyTree, min_value: float | Array, max_value: float | Array
+) -> PyTree:
+    """Clip the leaves of a pytree to a specified range.
+
+    **Arguments**:
+        `tree`: A pytree whose leaves are array-like.
+        `min_value`: Minimum value to clip to (scalar or array).
+        `max_value`: Maximum value to clip to (scalar or array).
+    """
+    return jax.tree.map(lambda x: jnp.clip(x, min_value, max_value), tree)
+
+
 batch_sum = tree_batch_sum
 get_first = tree_get_first
 gather_actions = tree_gather_actions
@@ -418,3 +431,4 @@ ones_like = tree_ones_like
 add = tree_add
 mul = tree_mul
 sum = tree_sum
+clip = tree_clip

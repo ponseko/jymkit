@@ -1,6 +1,7 @@
 from ._tree import (
     add as add,
     batch_sum as batch_sum,
+    clip as clip,
     concatenate as concatenate,
     gather_actions as gather_actions,
     get_first as get_first,

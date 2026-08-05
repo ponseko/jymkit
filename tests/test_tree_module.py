@@ -131,3 +131,17 @@ def test_split_key_like_structure():
     leaves = jax.tree.leaves(keys)
     assert len(leaves) == 2
     assert all(leaf.shape == (2,) for leaf in leaves)
+
+
+def test_clip():
+    tree = {
+        "a": jnp.array([-2.0, 0.5, 3.0]),
+        "b": jnp.array([1.0, -1.0]),
+        "c": jnp.array([0.0]),
+        "d": jnp.array([2.0, -3.0, 4.0]),
+    }
+    clipped_tree = jym.tree.clip(tree, -1.0, 1.0)
+    assert jnp.array_equal(clipped_tree["a"], jnp.array([-1.0, 0.5, 1.0]))
+    assert jnp.array_equal(clipped_tree["b"], jnp.array([1.0, -1.0]))
+    assert jnp.array_equal(clipped_tree["c"], jnp.array([0.0]))
+    assert jnp.array_equal(clipped_tree["d"], jnp.array([1.0, -1.0, 1.0]))
