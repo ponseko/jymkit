@@ -6,8 +6,8 @@ from jaxnasium.algorithms.core import TanhNormalFactory
 from jaxnasium.algorithms.core._distributions import (
     DistraxContainer,
     TanhNormal,
-    _transpose_tree_of_tuples,
 )
+from jaxnasium.tree._tree import _transpose_tree_of_tuples
 
 SEED = jax.random.PRNGKey(0)
 

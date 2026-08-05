@@ -10,6 +10,7 @@ from ._tree import (
     mean as mean,
     mul as mul,
     ones_like as ones_like,
+    split_key_like as split_key_like,
     split_key_like_structure as split_key_like_structure,
     stack as stack,
     sum as sum,
