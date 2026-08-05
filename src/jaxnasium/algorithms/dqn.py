@@ -51,7 +51,7 @@ class DQNAgent(RLAgent):
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
-            rew_shape=(trainer.rollout_length, trainer.num_envs),
+            rew_shape=(trainer.num_envs,),
         )
 
     def get_action(
@@ -81,8 +81,7 @@ class DQNAgent(RLAgent):
         return self.normalizer.normalize_reward(rewards)
 
     def update_normalizer(self, batch: Transition):
-        updated_normalizer = self.normalizer.update(batch)
-        return self.replace(normalizer=updated_normalizer)
+        return self.replace(normalizer=self.normalizer.update(batch))
 
     def update_params(self, batch: Transition, trainer: "DQN"):
         @eqx.filter_grad
@@ -90,7 +89,7 @@ class DQNAgent(RLAgent):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
             q_taken = jym.tree.batch_sum(q_taken)
-            q_loss = optax.huber_loss(q_taken, target)
+            q_loss = optax.losses.squared_error(q_taken, target)
             return jym.tree.mean(q_loss)
 
         # Compute target
@@ -135,15 +134,18 @@ class DQN(RLAlgorithm):
     gamma: float = 0.99
     max_grad_norm: float = 1.0
     update_every: int = eqx.field(static=True, default=int(2e2))
-    replay_buffer_size: int = int(1e4)
+    replay_buffer_size: int = 50_000
     batch_size: int = 64
+    warmup_steps: int = eqx.field(static=True, default=10_000)
+    """ Warmup for the normalizer and the replay buffer. """
     tau: float = 0.05
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=8)
 
     normalize_observations: bool = eqx.field(static=True, default=True)
-    normalize_rewards: bool = eqx.field(static=True, default=True)
+    normalize_rewards: bool = eqx.field(static=True, default=False)
+    """ Normalization params are only updated during the warmup rollout """
 
     critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
 
@@ -161,7 +163,7 @@ class DQN(RLAlgorithm):
     def optimizer(self):
         return optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(learning_rate=self.learning_rate_schedule),
+            optax.adam(learning_rate=self.learning_rate_schedule, eps=1e-4),
         )
 
     @property
@@ -170,6 +172,10 @@ class DQN(RLAlgorithm):
 
     @property
     def rollout_length(self):
+        if self.update_every < self.num_envs:
+            raise ValueError(
+                f"`update_every` ({self.update_every}) must be >= `num_envs` ({self.num_envs})"
+            )
         return int(self.update_every // self.num_envs)
 
     @property
@@ -190,9 +196,9 @@ class DQN(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
-        # Set up the buffer
-        _, dummy_trajectory = self._collect_rollout(
-            (env_state, obsv, key), env, length=self.batch_size // self.num_envs
+        warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
+        warmup_state, dummy_trajectory = self._collect_rollout(
+            (env_state, obsv, key), env, length=warmup_length
         )
         buffer = TransitionBuffer(
             max_size=self.replay_buffer_size,
@@ -200,6 +206,9 @@ class DQN(RLAlgorithm):
             data_sample=dummy_trajectory,
         )
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
+
+        # Update the normalizer with the warmup data. After this, the normalizer is frozen.
+        self = replace(self, agent=self.agent.update_normalizer(dummy_trajectory))
 
         train_iteration_fn = partial(self.train_iteration, env=env)
         train_iteration_fn = scan_callback(
@@ -209,7 +218,7 @@ class DQN(RLAlgorithm):
             n=self.num_iterations,
         )
 
-        runner_state = (self, buffer, env_state, obsv, key)
+        runner_state = (self, buffer, *warmup_state)
         runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
@@ -233,17 +242,14 @@ class DQN(RLAlgorithm):
         )
         metric = trajectory_batch.info or {}
 
-        # Update normalizer with new data from the trajectory
-        agent: DQNAgent = self.agent.update_normalizer(trajectory_batch)
-
         # Add new data to buffer & Sample update batch from the buffer
         buffer = buffer.insert(trajectory_batch)
         train_batch = buffer.sample(rng)
 
-        train_batch = train_batch.normalize(agent.normalizer)
+        train_batch = train_batch.normalize(self.agent.normalizer)
 
         # Update
-        updated_agent = agent.update_params(train_batch, self)
+        updated_agent = self.agent.update_params(train_batch, self)
         self = replace(self, agent=updated_agent)
 
         runner_state = (self, buffer, env_state, last_obs, rng)
