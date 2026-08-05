@@ -54,7 +54,7 @@ class PPOAgent(RLAgent):
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
-            rew_shape=(trainer.num_steps, trainer.num_envs),
+            rew_shape=(trainer.num_envs,),
         )
 
     def get_action(
@@ -78,8 +78,7 @@ class PPOAgent(RLAgent):
         return self.critic(observation)
 
     def update_normalizer(self, batch: Transition):
-        updated_normalizer = self.normalizer.update(batch)
-        return self.replace(normalizer=updated_normalizer)
+        return self.replace(normalizer=self.normalizer.update(batch))
 
     def normalize_observation(self, observations: PyTree):
         return self.normalizer.normalize_obs(observations)
@@ -195,7 +194,7 @@ class PPO(RLAlgorithm):
     def optimizer(self):
         return optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(learning_rate=self.learning_rate_schedule),
+            optax.adam(learning_rate=self.learning_rate_schedule, eps=1e-4),
         )
 
     @property
@@ -259,27 +258,25 @@ class PPO(RLAlgorithm):
         )
         metric = trajectory_batch.info or {}
 
+        # Normalize the train_batch before updating the normalizer
+        train_batch = trajectory_batch.normalize(self.agent.normalizer)
         agent = self.agent.update_normalizer(trajectory_batch)
-
-        trajectory_batch = trajectory_batch.normalize(agent.normalizer)
 
         # Calculate GAE and returns, add to trajectory batch
         _, (advantages, returns) = (
-            trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
+            train_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
                 lambda gae, transition: self._compute_gae_scan(gae, transition),
                 jnp.zeros(self.num_envs),
                 reverse=True,
                 unroll=16,
             )
         )
-        trajectory_batch = replace(
-            trajectory_batch, advantage=advantages, return_=returns
-        )
+        train_batch = replace(train_batch, advantage=advantages, return_=returns)
 
         # (num_steps * num_envs, ...) > (batch_size, ...)
         train_batch = jax.tree.map(
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
-            trajectory_batch,
+            train_batch,
         )
 
         # Update agent over multiple epochs x minibatches

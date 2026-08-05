@@ -49,7 +49,7 @@ class PQNAgent(RLAgent):
             normalize_obs=trainer.normalize_observations,
             normalize_rew=trainer.normalize_rewards,
             gamma=trainer.gamma,
-            rew_shape=(trainer.num_steps, trainer.num_envs),
+            rew_shape=(trainer.num_envs,),
         )
 
     def get_action(
@@ -79,8 +79,7 @@ class PQNAgent(RLAgent):
         return self.normalizer.normalize_reward(rewards)
 
     def update_normalizer(self, batch: Transition):
-        updated_normalizer = self.normalizer.update(batch)
-        return self.replace(normalizer=updated_normalizer)
+        return self.replace(normalizer=self.normalizer.update(batch))
 
     def update_params(self, batch: Transition, trainer: "PQN"):
         @eqx.filter_grad
@@ -88,7 +87,7 @@ class PQNAgent(RLAgent):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
             q_taken = jym.tree.batch_sum(q_taken)
-            q_loss = optax.huber_loss(q_taken, train_batch.return_)
+            q_loss = optax.losses.squared_error(q_taken, train_batch.return_)
             return jym.tree.mean(q_loss)
 
         grads = __dqn_loss(self.critic, batch)
@@ -142,7 +141,7 @@ class PQN(RLAlgorithm):
     def optimizer(self):
         return optax.chain(
             optax.clip_by_global_norm(self.max_grad_norm),
-            optax.adabelief(learning_rate=self.learning_rate_schedule),
+            optax.adam(learning_rate=self.learning_rate_schedule, eps=1e-4),
         )
 
     @property
@@ -206,26 +205,25 @@ class PQN(RLAlgorithm):
         )
         metric = trajectory_batch.info or {}
 
-        # Update normalizer with new data from the trajectory
-        agent: PQNAgent = self.agent.update_normalizer(trajectory_batch)
-
-        trajectory_batch = trajectory_batch.normalize(agent.normalizer)
+        # Normalize the train_batch before updating the normalizer
+        train_batch = trajectory_batch.normalize(self.agent.normalizer)
+        agent = self.agent.update_normalizer(trajectory_batch)
 
         # Calculate Qlambda returns, add to trajectory batch
         _, returns = (
-            trajectory_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
+            train_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
                 lambda re, transition: self._compute_q_lambda_scan(re, transition),
                 jnp.zeros(self.num_envs),
                 reverse=True,
                 unroll=16,
             )
         )
-        trajectory_batch = replace(trajectory_batch, return_=returns)
+        train_batch = replace(trajectory_batch, return_=returns)
 
         # (num_steps * num_envs, ...) > (batch_size, ...)
         train_batch = jax.tree.map(
             lambda x: x.reshape((self.batch_size,) + x.shape[2:]),
-            trajectory_batch,
+            train_batch,
         )
 
         # Update agent over multiple epochs x minibatches
