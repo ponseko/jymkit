@@ -3,10 +3,21 @@ from ._buffer import (
     TransitionBuffer as TransitionBuffer,
 )
 from ._distributions import TanhNormalFactory as TanhNormalFactory
-from ._initialization import set_weight_bias as set_weight_bias
+from ._initialization import (
+    DEFAULT_BIAS_INIT as DEFAULT_BIAS_INIT,
+    DEFAULT_WEIGHT_INIT as DEFAULT_WEIGHT_INIT,
+    POLICY_HEAD_WEIGHT_INIT as POLICY_HEAD_WEIGHT_INIT,
+    VALUE_HEAD_WEIGHT_INIT as VALUE_HEAD_WEIGHT_INIT,
+    set_weight_bias as set_weight_bias,
+)
 from ._input_output import (
+    CategoricalLayer as CategoricalLayer,
+    NormalLayer as NormalLayer,
+    PyTreeActionNetwork as PyTreeActionNetwork,
     PyTreeObsSpaceNetwork as PyTreeObsSpaceNetwork,
-    PyTreeOutputNetwork as PyTreeOutputNetwork,
+    PyTreeQValueNetwork as PyTreeQValueNetwork,
+    QLayer as QLayer,
+    TanhNormalLayer as TanhNormalLayer,
 )
 from ._logging import (
     pretty_print_network as pretty_print_network,

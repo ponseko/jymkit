@@ -1,4 +1,5 @@
 import logging
+from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
 from typing import Any, Literal, Self
@@ -20,7 +21,7 @@ from ..types import (
     Network,
     SpaceLike,
 )
-from ._distributions import TanhNormalFactory
+from ._distributions import TanhNormal
 
 logger = logging.getLogger(__name__)
 
@@ -88,23 +89,45 @@ def _apply_action_mask(logits: Array, action_mask: Array) -> Array:
         )
 
 
-def _resolve_discrete_distribution(
-    distribution: Literal["categorical"],
-    dtype: jnp.dtype = jnp.int32,
-) -> Callable[..., distrax.Distribution]:
-    if distribution == "categorical":
-        return partial(distrax.Categorical, dtype=dtype)
-    raise ValueError(f"Unsupported discrete distribution: {distribution}")
+def _discrete_num_outputs(output_space: DiscreteSpaceLike) -> list[int]:
+    """Number of outputs per dimension: `[n]` (Discrete) or `[n, n, ...]` (MultiDiscrete)."""
+    num_outputs = getattr(output_space, "n", getattr(output_space, "nvec", None))
+    if num_outputs is None:
+        raise ValueError(f"Unsupported discrete output space: {output_space}")
+    num_outputs = np.atleast_1d(num_outputs).tolist()
+    _assert_homogeneous_output_space(num_outputs)
+    return num_outputs
 
 
-def _resolve_continuous_distribution(
-    distribution: Literal["normal", "tanhnormal"], low: np.ndarray, high: np.ndarray
-) -> Callable[..., distrax.Distribution]:
-    if distribution == "normal":
-        return distrax.Normal
-    if distribution == "tanhnormal":
-        return TanhNormalFactory(low=low, high=high)
-    raise ValueError(f"Unsupported continuous distribution: {distribution}")
+def _num_action_dims(output_shape: tuple[int, ...]) -> int:
+    return 1 if output_shape == () else int(np.prod(output_shape))
+
+
+def _create_per_dimension_layers(
+    in_features: int,
+    num_outputs: list[int],
+    key: PRNGKeyArray,
+    layer_type: Callable[..., Network],
+) -> list[Network]:
+    """One (homogeneous) output layer per output dimension."""
+    keys = optax.tree.split_key_like(key, num_outputs)
+    return jax.tree.map(
+        lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
+    )
+
+
+def _forward_per_dimension(
+    layers: list[Network], x, *, key: PRNGKeyArray | None = None
+) -> Array:
+    """Forward `x` through one layer per *output dimension*, as a single stacked call."""
+    if len(layers) == 1:  # single-dimensional output space
+        return layers[0](x, key=key)
+
+    stacked = jym.tree.stack(layers)
+    if key is None:
+        return jax.vmap(lambda layer: layer(x, key=None))(stacked)
+    keys = jax.random.split(key, len(layers))
+    return jax.vmap(lambda layer, k: layer(x, key=k))(stacked, jnp.stack(keys))
 
 
 class FlattenLayer(eqx.Module):
@@ -298,18 +321,14 @@ class PyTreeObsSpaceNetwork(eqx.Module):
         )
 
 
-class DiscreteHead(eqx.Module):
-    """Latent -> Categorical distribution or raw Q-values over a (multi-)discrete space.
+## Output:
 
-    Produces one set of logits per output dimension and optionally applies an
-    action mask.
 
-    `distribution`="categorical": Produces a categorical distribution.
-    `distribution=None`: Produces raw logits (e.g. for Q values).
-    """
+class CategoricalLayer(eqx.Module):
+    """A layer type returning a `distrax.Categorical` distribution"""
 
     layers: list[Network]
-    distribution: Callable[..., distrax.Distribution] | None = eqx.field(static=True)
+    dtype: Any = eqx.field(static=True)
 
     def __init__(
         self,
@@ -317,53 +336,72 @@ class DiscreteHead(eqx.Module):
         output_space: DiscreteSpaceLike,
         *,
         key: PRNGKeyArray,
-        distribution: Literal["categorical"] | None = "categorical",
         layer_type: Callable[..., Network] = eqx.nn.Linear,
     ):
-        # Obtain the number of outputs per dimension: [n] (Discrete) or [n, n, ...] (MultiDiscrete)
-        num_outputs = getattr(output_space, "n", getattr(output_space, "nvec", None))
-        if num_outputs is None:
-            raise ValueError(f"Unsupported discrete output space: {output_space}")
-        num_outputs = np.atleast_1d(num_outputs).tolist()
-        _assert_homogeneous_output_space(num_outputs)
-
-        keys = optax.tree.split_key_like(key, num_outputs)
-        self.layers = jax.tree.map(  # Create a (homegenuous) head per output dimension
-            lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
+        self.layers = _create_per_dimension_layers(
+            in_features, _discrete_num_outputs(output_space), key, layer_type
         )
-
-        self.distribution = (
-            None
-            if distribution is None
-            else _resolve_discrete_distribution(distribution, dtype=output_space.dtype)
-        )
+        self.dtype = output_space.dtype
 
     def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
-        if len(self.layers) == 1:  # single-dimensional output space
-            logits = self.layers[0](x, key=key)
-        else:
-            stacked_layers = jym.tree.stack(self.layers)
-            logits = jax.vmap(lambda layer: layer(x, key=key))(stacked_layers)
-
+        logits = _forward_per_dimension(self.layers, x, key=key)
         if action_mask is not None:
             logits = _apply_action_mask(logits, action_mask)
-        if self.distribution is None:
-            return logits  # raw Q-values
-        return self.distribution(logits=logits)
+        return distrax.Categorical(logits=logits, dtype=self.dtype)
+
+    @classmethod
+    def with_params(
+        cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
+    ) -> Callable[..., Self]:
+        return partial(cls, layer_type=layer_type)
 
 
-class ContinuousHead(eqx.Module):
-    """Latent -> Distribution over a continuous (`Box`-like) space.
+class _ConstantLogStd(eqx.Module):
+    """A free `log_std` parameter, independent of state (CleanRL/SB3 PPO's choice)."""
 
-    Per dimension, produces a mean and (log) std and returns a continuous
-    distribution (`normal` or `tanhnormal`).
-    """
+    log_std: Array
 
-    layers: list[Network]
-    distribution: Callable[..., distrax.Distribution] = eqx.field(static=True)
+    def __call__(self, x=None, *, key: PRNGKeyArray | None = None) -> Array:
+        return self.log_std
+
+
+class _BoundedLogStdHead(eqx.Module):
+    """A state-dependent `log_std` head, squashed into `[log_std_min, log_std_max]`."""
+
+    layer: Network
+
+    output_shape: tuple[int, ...] = eqx.field(static=True)
     log_std_min: float = eqx.field(static=True)
     log_std_max: float = eqx.field(static=True)
+
+    def __call__(self, x, *, key: PRNGKeyArray | None = None) -> Array:
+        raw = self.layer(x, key=key).reshape(self.output_shape)
+        return self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+            jnp.tanh(raw) + 1.0
+        )
+
+
+class _GaussianOutputLayer(eqx.Module):
+    """Shared class for Gaussian-family output layers over a `Box` space.
+
+    **Arguments:**
+    - `in_features`: The number of input features to the layer.
+    - `output_space`: The output space to build the layer for.
+    - `key`: A PRNG key.
+    - `state_dependent_std`: Whether to use a state-dependent `log_std` head or a free parameter.
+    - `log_std_min`: The minimum value for the `log_std` head.
+    - `log_std_max`: The maximum value for the `log_std` head.
+    - `log_std_init`: The initial value for the free `log_std` parameter (only used when state_dependent_std is disabled).
+    - `layer_type`: The layer type to use for the `mean` and `log_std` heads.
+    """
+
+    mean: Network
+    log_std: Network
+
+    output_space: ContinuousSpaceLike = eqx.field(static=True)
     output_shape: tuple[int, ...] = eqx.field(static=True)
+    log_std_min: float = eqx.field(static=True)
+    log_std_max: float = eqx.field(static=True)
 
     def __init__(
         self,
@@ -371,60 +409,85 @@ class ContinuousHead(eqx.Module):
         output_space: ContinuousSpaceLike,
         *,
         key: PRNGKeyArray,
-        distribution: Literal["normal", "tanhnormal"] = "normal",
+        state_dependent_std: bool = True,
         log_std_min: float = -5.0,
         log_std_max: float = 2.0,
+        log_std_init: float = 0.0,
         layer_type: Callable[..., Network] = eqx.nn.Linear,
     ):
-        low = np.array(output_space.low, dtype=float)
-        high = np.array(output_space.high, dtype=float)
-        self.distribution = _resolve_continuous_distribution(distribution, low, high)
+        self.output_space = output_space
+        self.output_shape = output_space.shape
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
-        self.output_shape = output_space.shape
 
-        if self.output_shape == ():
-            num_action_dims = 1
+        num_dims = _num_action_dims(self.output_shape)
+        mean_key, log_std_key = jax.random.split(key)
+        self.mean = layer_type(in_features, num_dims, key=mean_key)
+
+        if state_dependent_std:
+            self.log_std = layer_type(in_features, num_dims, key=log_std_key)
         else:
-            num_action_dims = int(np.prod(self.output_shape))
+            self.log_std = _ConstantLogStd(jnp.full(self.output_shape, log_std_init))
 
-        num_outputs = [2] * num_action_dims  # [mean, std] per dimension
-
-        # Create a (homegenuous) head per output dimension
-        keys = optax.tree.split_key_like(key, num_outputs)
-        self.layers = jax.tree.map(
-            lambda o, k: layer_type(in_features, o, key=k), num_outputs, keys
-        )
+    @abstractmethod
+    def _distribution(self, mean: Array, std: Array) -> distrax.Distribution: ...
 
     def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if action_mask is not None:
             logger.debug("Action mask provided for continuous space, ignoring.")
+        mean = self.mean(x, key=key).reshape(self.output_shape)
+        log_std = self.log_std(x, key=key).reshape(self.output_shape)
+        if not isinstance(self.log_std, _ConstantLogStd):
+            log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
+                jnp.tanh(log_std) + 1.0
+            )  # tanh squash to [log_std_min, log_std_max]
+        return self._distribution(mean, jnp.exp(log_std))
 
-        if self.output_shape == ():
-            out = self.layers[0](x, key=key)  # scalar output
-        else:
-            stacked_layers = jym.tree.stack(self.layers)
-            out = jax.vmap(lambda layer: layer(x, key=key))(stacked_layers)
-
-        mean = out[..., 0].reshape(self.output_shape)
-        log_std = jnp.clip(
-            out[..., 1].reshape(self.output_shape), self.log_std_min, self.log_std_max
+    @classmethod
+    def with_params(
+        cls,
+        *,
+        state_dependent_std: bool = True,
+        log_std_min: float = -5.0,
+        log_std_max: float = 2.0,
+        log_std_init: float = 0.0,
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+    ) -> Callable[..., Self]:
+        return partial(
+            cls,
+            state_dependent_std=state_dependent_std,
+            log_std_min=log_std_min,
+            log_std_max=log_std_max,
+            log_std_init=log_std_init,
+            layer_type=layer_type,
         )
-        std = jnp.exp(log_std)
-
-        return self.distribution(mean, std)
 
 
-class QHead(eqx.Module):
-    """Convenience wrapper for Latent -> Q-values
+class NormalLayer(_GaussianOutputLayer):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("state_dependent_std", False)
+        super().__init__(*args, **kwargs)
 
-    - `mode="discrete"`: wraps a `DiscreteHead` with `distribution=None`
-      (one Q-value per action).
-    - `mode="continuous"`: maps the input to a single scalar Q(s, a).
-    Mode is inferred from the output space.
+    def _distribution(self, mean: Array, std: Array) -> distrax.Distribution:
+        return distrax.Normal(mean, std)
+
+
+class TanhNormalLayer(_GaussianOutputLayer):
+    def _distribution(self, mean: Array, std: Array) -> distrax.Distribution:
+        low, high = self.output_space.low, self.output_space.high
+        return TanhNormal(mean, std, shift=(high + low) / 2.0, scale=(high - low) / 2.0)
+
+
+class QLayer(eqx.Module):
+    """Latent -> raw values (no distribution).
+
+    Mode is inferred from the output space:
+
+    - discrete: one value per action, i.e. `Q(s, .)`.
+    - continuous: a single scalar `Q(s, a)`, which requires the action as input.
     """
 
-    layer: Network
+    layers: list[Network]
     mode: Literal["discrete", "continuous"] = eqx.field(static=True)
 
     def __init__(
@@ -437,33 +500,50 @@ class QHead(eqx.Module):
     ):
         if _is_space_discrete(output_space):
             self.mode = "discrete"
-            self.layer = DiscreteHead(
+            self.layers = _create_per_dimension_layers(
                 in_features,
-                output_space,  # type: ignore[arg-type]
-                key=key,
-                distribution=None,
-                layer_type=layer_type,
+                _discrete_num_outputs(output_space),  # type: ignore[arg-type]
+                key,
+                layer_type,
             )
         elif _is_space_continuous(output_space):
             self.mode = "continuous"
-            self.layer = layer_type(in_features, 1, key=key)  # Scalar output layer
+            self.layers = [layer_type(in_features, 1, key=key)]  # scalar Q(s, a)
         else:
             raise ValueError(f"Unsupported output space: {output_space}")
 
     def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
-        if self.mode == "discrete":
-            return self.layer(x, action_mask=action_mask, key=key)
+        out = _forward_per_dimension(self.layers, x, key=key)
+        if self.mode == "continuous":
+            if action_mask is not None:
+                logger.debug("Action mask provided for continuous space, ignoring.")
+            return out.squeeze()
         if action_mask is not None:
-            logger.debug("Action mask provided for continuous space, ignoring.")
-        return self.layer(x, key=key).squeeze()
+            out = _apply_action_mask(out, action_mask)
+        return out
+
+    @classmethod
+    def with_params(
+        cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
+    ) -> Callable[..., Self]:
+        return partial(cls, layer_type=layer_type)
 
 
-class PyTreeOutputNetwork(eqx.Module):
-    """Output network for a (single or PyTree of) output space(s).
+class _PyTreeOutputNetwork(eqx.Module):
+    """Base Output network for a (single or PyTree of) output space(s)."""
+
+    heads: PyTree[Network]
+
+    num_output_spaces: int = eqx.field(static=True)
+    output_structure: Any = eqx.field(static=True)
+
+
+class PyTreeActionNetwork(_PyTreeOutputNetwork):
+    """Output network producing an **action distribution** per output space.
 
     Builds one head per output-space leaf, selecting a discrete or continuous
-    head automatically from the space. Heads either output a distribution or
-    raw values (e.g. for Q-values) when `distribution` is None.
+    head automatically from the space and returning a
+    `distrax.Distribution` (policy head).
 
     A single head may itself be multi-dimensional (homogeneous),
     in which case its sub-layers are stacked and vmapped in the forward call.
@@ -475,10 +555,6 @@ class PyTreeOutputNetwork(eqx.Module):
     returned unchanged.
     """
 
-    heads: PyTree[Network]
-
-    num_output_spaces: int = eqx.field(static=True)
-    output_structure: Any = eqx.field(static=True)
     assume_independent: bool = eqx.field(static=True)
 
     def __init__(
@@ -487,42 +563,15 @@ class PyTreeOutputNetwork(eqx.Module):
         output_space: PyTree[SpaceLike],
         *,
         key: PRNGKeyArray,
-        discrete_distribution: Literal["categorical"] | None = "categorical",
-        continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
-        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        discrete_output_layer: Callable[..., Network] = CategoricalLayer,
+        continuous_output_layer: Callable[..., Network] = NormalLayer,
         assume_independent: bool = True,
     ):
         def create_head(key: PRNGKeyArray, space: SpaceLike):
             if _is_space_discrete(space):
-                if discrete_distribution is None:
-                    return QHead(
-                        in_features,
-                        space,
-                        key=key,
-                        layer_type=layer_type,
-                    )
-                return DiscreteHead(
-                    in_features,
-                    space,  # type: ignore[arg-type]
-                    key=key,
-                    distribution=discrete_distribution,
-                    layer_type=layer_type,
-                )
+                return discrete_output_layer(in_features, space, key=key)
             elif _is_space_continuous(space):
-                if continuous_distribution is None:
-                    return QHead(
-                        in_features,
-                        space,
-                        key=key,
-                        layer_type=layer_type,
-                    )
-                return ContinuousHead(
-                    in_features,
-                    space,  # type: ignore[arg-type]
-                    key=key,
-                    distribution=continuous_distribution,
-                    layer_type=layer_type,
-                )
+                return continuous_output_layer(in_features, space, key=key)
             raise ValueError(f"Unsupported output space: {space}")
 
         self.num_output_spaces = len(jax.tree.leaves(output_space))
@@ -531,26 +580,6 @@ class PyTreeOutputNetwork(eqx.Module):
         keys = optax.tree.split_key_like(key, output_space)
         self.heads = jax.tree.map(lambda o, k: create_head(k, o), output_space, keys)
         self.assume_independent = assume_independent
-
-    @property
-    def include_action_in_input(self) -> bool:
-        """In case a we output a continuous Q-value, the action
-        is required to be fed into the network as input."""
-
-        output_heads = jax.tree.leaves(self.heads, is_leaf=_is_callable_module)
-        has_continuous_q_head = any(
-            isinstance(head, QHead) and head.mode == "continuous"
-            for head in output_heads
-        )
-        only_continuous_q_heads = all(
-            isinstance(head, QHead) and head.mode == "continuous"
-            for head in output_heads
-        )
-        if has_continuous_q_head and not only_continuous_q_heads:
-            logger.warning(
-                "Mixed continuous and discrete Q-heads. This may have adverse training effects."
-            )
-        return has_continuous_q_head
 
     def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
         if action_mask is None:  # Dummy action mask if not provided
@@ -581,27 +610,64 @@ class PyTreeOutputNetwork(eqx.Module):
     def with_params(
         cls,
         *,
-        discrete_distribution: Literal["categorical"] | None = "categorical",
-        continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
-        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        discrete_output_layer: Callable[..., Network] = CategoricalLayer,
+        continuous_output_layer: Callable[..., Network] = NormalLayer,
         assume_independent: bool = True,
     ) -> Callable[..., Self]:
         return partial(
             cls,
-            discrete_distribution=discrete_distribution,
-            continuous_distribution=continuous_distribution,
-            layer_type=layer_type,
+            discrete_output_layer=discrete_output_layer,
+            continuous_output_layer=continuous_output_layer,
             assume_independent=assume_independent,
         )
 
+
+class PyTreeQValueNetwork(_PyTreeOutputNetwork):
+    """Output network producing **raw Q-values** per output space (no distribution).
+
+    Builds one head per output-space leaf, selecting a discrete or continuous
+    head automatically from the space and returning raw values (Q-value head).
+
+    A single head may itself be multi-dimensional (homogeneous),
+    in which case its sub-layers are stacked and vmapped in the forward call.
+
+    During a forward call this maps over all output spaces. The raw PyTree of outputs is
+    returned unchanged.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        output_space: PyTree[SpaceLike],
+        *,
+        key: PRNGKeyArray,
+        layer_type: Callable[..., Network] = eqx.nn.Linear,
+    ):
+        self.num_output_spaces = len(jax.tree.leaves(output_space))
+        self.output_structure = jax.tree.structure(output_space)
+
+        keys = optax.tree.split_key_like(key, output_space)
+        Q_layer = QLayer.with_params(layer_type=layer_type)
+        self.heads = jax.tree.map(
+            lambda o, k: Q_layer(in_features, o, key=k), output_space, keys
+        )
+
+    def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):
+        if action_mask is None:  # Dummy action mask if not provided
+            action_mask = jax.tree.map(
+                lambda _: None, self.heads, is_leaf=_is_callable_module
+            )
+
+        outputs = jax.tree.map(
+            lambda head, mask: head(x, action_mask=mask, key=key),
+            self.heads,
+            action_mask,
+            is_leaf=_is_callable_module,
+        )
+        return outputs
+
     @classmethod
-    def with_raw_outputs(
+    def with_params(
         cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
     ) -> Callable[..., Self]:
-        """Create a network without a distribution output, instead returning the raw
-        outputs. E.g. for Q-values."""
-        return cls.with_params(
-            discrete_distribution=None,
-            continuous_distribution=None,
-            layer_type=layer_type,
-        )
+        return partial(cls, layer_type=layer_type)

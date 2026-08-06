@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable
-from typing import Literal
 
 import equinox as eqx
 import jax
@@ -9,8 +8,13 @@ from jaxtyping import Array, PRNGKeyArray, PyTree
 import jaxnasium as jym
 from jaxnasium.algorithms.architectures import CNN, MLP
 from jaxnasium.algorithms.core import (
+    POLICY_HEAD_WEIGHT_INIT,
+    VALUE_HEAD_WEIGHT_INIT,
+    CategoricalLayer,
+    NormalLayer,
+    PyTreeActionNetwork,
     PyTreeObsSpaceNetwork,
-    PyTreeOutputNetwork,
+    PyTreeQValueNetwork,
     set_weight_bias,
 )
 from jaxnasium.algorithms.types import Network, OutSizedNetwork
@@ -44,7 +48,7 @@ Each of these consist of three components:
 class ActorNetwork(eqx.Module):
     obs_processor: PyTreeObsSpaceNetwork
     body: OutSizedNetwork
-    output_layers: PyTreeOutputNetwork
+    output_layers: PyTreeActionNetwork
 
     def __init__(
         self,
@@ -55,14 +59,9 @@ class ActorNetwork(eqx.Module):
         body: Callable[..., OutSizedNetwork] = MLP,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
-        discrete_distribution: Literal["categorical"] | None = "categorical",
-        continuous_distribution: Literal["normal", "tanhnormal"] | None = "normal",
-        output_layer_type: Callable[..., Network] = eqx.nn.Linear,
+        discrete_output_layer: Callable[..., Network] = CategoricalLayer,
+        continuous_output_layer: Callable[..., Network] = NormalLayer,
         assume_independent_output: bool = True,
-        weights_init: Callable[
-            ..., jax.nn.initializers.Initializer
-        ] = jax.nn.initializers.orthogonal,
-        bias_init: float = 0.0,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
 
@@ -75,21 +74,21 @@ class ActorNetwork(eqx.Module):
 
         self.body = body(self.obs_processor.out_features, key=body_key)
 
-        self.output_layers = PyTreeOutputNetwork(
+        self.output_layers = PyTreeActionNetwork(
             self.body.out_features,
             output_space,
             key=output_key,
-            discrete_distribution=discrete_distribution,
-            continuous_distribution=continuous_distribution,
-            layer_type=output_layer_type,
+            discrete_output_layer=discrete_output_layer,
+            continuous_output_layer=continuous_output_layer,
             assume_independent=assume_independent_output,
         )
 
-        (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
-            key=wb_key,
-            network=(self.obs_processor, self.body, self.output_layers),
-            weight_init=weights_init,
-            bias_init=bias_init,
+        body_key, head_key = jax.random.split(wb_key)
+        self.obs_processor, self.body, self.output_layers = set_weight_bias(
+            body_key, (self.obs_processor, self.body, self.output_layers)
+        )
+        self.output_layers = set_weight_bias(
+            head_key, self.output_layers, weight_init=POLICY_HEAD_WEIGHT_INIT
         )
 
     def __call__(self, x, *, key: PRNGKeyArray | None = None):
@@ -117,10 +116,6 @@ class ValueNetwork(eqx.Module):
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
-        weights_init: Callable[
-            ..., jax.nn.initializers.Initializer
-        ] = jax.nn.initializers.orthogonal,
-        bias_init: float = 0.0,
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
 
@@ -139,11 +134,12 @@ class ValueNetwork(eqx.Module):
             key=output_key,
         )
 
+        body_key, head_key = jax.random.split(wb_key)
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
-            key=wb_key,
-            network=(self.obs_processor, self.body, self.output_layers),
-            weight_init=weights_init,
-            bias_init=bias_init,
+            key=body_key, network=(self.obs_processor, self.body, self.output_layers)
+        )
+        self.output_layers = set_weight_bias(
+            key=head_key, network=self.output_layers, weight_init=VALUE_HEAD_WEIGHT_INIT
         )
 
     def __call__(self, x, *, key: PRNGKeyArray | None = None):
@@ -158,7 +154,7 @@ class ValueNetwork(eqx.Module):
 class QValueNetwork(eqx.Module):
     obs_processor: PyTreeObsSpaceNetwork
     body: OutSizedNetwork
-    output_layers: PyTreeOutputNetwork
+    output_layers: PyTreeQValueNetwork
 
     include_action_in_input: bool = eqx.field(static=True)
 
@@ -172,10 +168,6 @@ class QValueNetwork(eqx.Module):
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
-        weights_init: Callable[
-            ..., jax.nn.initializers.Initializer
-        ] = jax.nn.initializers.orthogonal,
-        bias_init: float = 0.0,
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
@@ -195,18 +187,19 @@ class QValueNetwork(eqx.Module):
 
         self.body = body(self.obs_processor.out_features, key=body_key)
 
-        self.output_layers = PyTreeOutputNetwork.with_raw_outputs()(
+        self.output_layers = PyTreeQValueNetwork(
             self.body.out_features,
             output_space,
             key=output_key,
             layer_type=output_layer_type,
         )
 
+        body_key, head_key = jax.random.split(wb_key)
         (self.obs_processor, self.body, self.output_layers) = set_weight_bias(
-            key=wb_key,
-            network=(self.obs_processor, self.body, self.output_layers),
-            weight_init=weights_init,
-            bias_init=bias_init,
+            key=body_key, network=(self.obs_processor, self.body, self.output_layers)
+        )
+        self.output_layers = set_weight_bias(
+            key=head_key, network=self.output_layers, weight_init=VALUE_HEAD_WEIGHT_INIT
         )
 
     def __call__(
