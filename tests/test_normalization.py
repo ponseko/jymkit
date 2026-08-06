@@ -90,7 +90,7 @@ def test_return_accumulator_runs_along_the_time_axis():
             seen.append(returns)
     seen = jnp.stack(seen)
 
-    assert normalizer.returns and normalizer.reward
+    assert normalizer.returns is not None and normalizer.reward is not None
     assert jnp.allclose(normalizer.returns, returns, atol=1e-4)
     assert jnp.allclose(normalizer.reward.std, jnp.std(seen), rtol=1e-3)
     assert normalizer.reward.count == iters * num_steps * num_envs
@@ -107,7 +107,7 @@ def test_return_accumulator_resets_on_done():
         reward, done
     )
     expected = jnp.array([1.0, 1.0 + gamma + gamma**2])
-    assert normalizer.returns
+    assert normalizer.returns is not None
     assert jnp.allclose(normalizer.returns, expected, atol=1e-5)
 
 
@@ -120,8 +120,7 @@ def test_constant_reward_does_not_explode_on_the_first_update():
     normalizer = _constant_reward_normalizer(num_envs).update_reward(reward, done)
     normalized = normalizer.normalize_reward(reward)
 
-    assert normalizer.reward
-    clip = normalizer.reward.clip_value
+    clip = normalizer.reward.clip_value  # type: ignore
     # if default is later set to None, we default to a large number
     assert jnp.all(jnp.abs(normalized) <= (clip or 1e8) + 1e-6)
 
