@@ -65,11 +65,11 @@ def _scale_to_spec(spec: list | tuple, u: float) -> Any:
 class RandomSearch:
     """`num_samples` independent draws from the given parameters.
 
-    Pass as a stage to [`Sweep`][jaxnasium.algorithms.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
     chained with other searches. For only performing this random search,
     `RandomSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
     A `Sweep` object allows batching jobs together in various `vmap` calls. See
-    [`Sweep`][jaxnasium.algorithms.sweep.Sweep] for more details.
+    [`Sweep`][jaxnasium.sweep.Sweep] for more details.
 
 
     **Arguments**:
@@ -146,7 +146,7 @@ class RandomSearch:
         batch_size: int | None = None,
         print_cost_estimate: bool = False,
     ) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] with this search alone."""
+        """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
         return Sweep(
             fn,
             self,
@@ -160,11 +160,11 @@ class RandomSearch:
 class SobolSearch:
     """Quasi-random draws that cover the parameter space more evenly than RandomSearch.
 
-    Pass as a stage to [`Sweep`][jaxnasium.algorithms.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
     chained with other searches. For only performing this Sobol search,
     `SobolSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
     A `Sweep` object allows batching jobs together in various `vmap` calls. See
-    [`Sweep`][jaxnasium.algorithms.sweep.Sweep] for more details.
+    [`Sweep`][jaxnasium.sweep.Sweep] for more details.
 
     **Arguments**:
         `params`: Maps param name to either:
@@ -245,7 +245,7 @@ class SobolSearch:
         batch_size: int | None = None,
         print_cost_estimate: bool = False,
     ) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] with this search alone."""
+        """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
         return Sweep(
             fn,
             self,

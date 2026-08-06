@@ -1,4 +1,6 @@
 try:
+    from jaxnasium.algorithms import core as core
+
     from ._algorithm import RLAgent as RLAgent, RLAlgorithm as RLAlgorithm
     from .agent_networks import (
         ActorNetwork as ActorNetwork,
