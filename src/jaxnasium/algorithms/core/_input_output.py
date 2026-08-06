@@ -169,7 +169,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
     networks: PyTree[Network]
 
     num_observation_spaces: int = eqx.field(static=True)
-    input_structure: Any = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
 
     def __init__(
@@ -213,7 +212,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             action_input = obs_space.pop("_ACTION", None)
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
-        self.input_structure = jax.tree.structure(obs_space)
 
         keys = optax.tree.split_key_like(key, obs_space)
         self.networks = jax.tree.map(
@@ -535,7 +533,6 @@ class _PyTreeOutputNetwork(eqx.Module):
     heads: PyTree[Network]
 
     num_output_spaces: int = eqx.field(static=True)
-    output_structure: Any = eqx.field(static=True)
 
 
 class PyTreeActionNetwork(_PyTreeOutputNetwork):
@@ -575,7 +572,6 @@ class PyTreeActionNetwork(_PyTreeOutputNetwork):
             raise ValueError(f"Unsupported output space: {space}")
 
         self.num_output_spaces = len(jax.tree.leaves(output_space))
-        self.output_structure = jax.tree.structure(output_space)
 
         keys = optax.tree.split_key_like(key, output_space)
         self.heads = jax.tree.map(lambda o, k: create_head(k, o), output_space, keys)
@@ -645,7 +641,6 @@ class PyTreeQValueNetwork(_PyTreeOutputNetwork):
         layer_type: Callable[..., Network] = eqx.nn.Linear,
     ):
         self.num_output_spaces = len(jax.tree.leaves(output_space))
-        self.output_structure = jax.tree.structure(output_space)
 
         keys = optax.tree.split_key_like(key, output_space)
         Q_layer = QLayer.with_params(layer_type=layer_type)

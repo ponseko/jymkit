@@ -43,12 +43,12 @@ class RLAlgorithm(eqx.Module):
 
     """
 
-    multi_agent: bool = eqx.field(static=True, default=False)
-    auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
+    multi_agent: bool = eqx.field(static=True, default=False, kw_only=True)
+    auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True, kw_only=True)
     log_function: Callable | Literal["simple", "tqdm"] | None = eqx.field(
-        static=True, default="simple"
+        static=True, default="simple", kw_only=True
     )
-    log_interval: int | float = eqx.field(static=True, default=0.05)
+    log_interval: int | float = eqx.field(static=True, default=0.05, kw_only=True)
 
     @abstractmethod
     def train(self, key: PRNGKeyArray, env: Environment, agent: Any = None) -> RLAgent:
@@ -90,13 +90,16 @@ class RLAlgorithm(eqx.Module):
                 )
                 done = jax.tree.map(jnp.logical_or, terminated, truncated)
                 done = jnp.all(jnp.array(jax.tree.leaves(done)))
-                episode_reward += jym.tree.mean(reward)
+                episode_reward = jym.tree.add(episode_reward, reward)
                 return (episode_reward, rng, obs, env_state, done)
 
             key, reset_key = jax.random.split(key)
             obs, env_state = env.reset(reset_key)
             done = False
-            episode_reward = 0.0
+
+            # get reward structure
+            timestep, _ = env.step(reset_key, env_state, env.sample_action(reset_key))
+            episode_reward = jym.tree.zeros_like(timestep.reward, dtype=float)
 
             episode_reward, key, obs, env_state, done = jax.lax.while_loop(
                 lambda carry: jnp.logical_not(carry[-1]),
@@ -169,6 +172,15 @@ class RLAlgorithm(eqx.Module):
             env = VecEnvWrapper(env)
 
         return env
+
+    @staticmethod
+    def load(file_path: str) -> RLAgent:
+        """Convenience method for `RLAgent.load(file_path)`.
+
+        Returns the algorithm stored in `file_path` which was saved with `save`
+        on an `RLAgent`, trainer included. Requires `jaxon` to be installed, which is not installed by default.
+        """
+        return RLAgent.load(file_path)
 
 
 def per_agent(method):
@@ -244,14 +256,26 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
         return self.trainer.evaluate(key, self, env, num_eval_episodes)
 
     @collective
-    def save_state(self, file_path: str):
-        with open(file_path, "wb") as f:
-            eqx.tree_serialise_leaves(f, self)
+    def save(self, file_path: str):
+        """Save the current state (along with the trainer) to `file_path`. This uses `jaxon`
+        internally to save the agent. `jaxon` is not installed by default, so must be installed manually.
 
+        Alternatively, serialization can be done like any other eqx.Module as described here:
+        https://docs.kidger.site/equinox/examples/serialisation/
+        """
+        from jaxnasium.algorithms.core import save_agent
+
+        save_agent(file_path, self)
+
+    @classmethod
     @collective
-    def load_state(self, file_path: str) -> Self:
-        with open(file_path, "rb") as f:
-            return eqx.tree_deserialise_leaves(f, self)
+    def load(cls, file_path: str) -> Self:
+        """Returns the agent stored in `file_path` which was saved with `save`, trainer included.
+        Requires `jaxon` to be installed, which is not installed by default.
+        """
+        from jaxnasium.algorithms.core import load_agent
+
+        return load_agent(file_path)
 
     @classmethod
     def __new_wrapped__(cls, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
