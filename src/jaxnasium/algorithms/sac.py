@@ -30,203 +30,6 @@ from .agent_networks import ActorNetwork, QValueNetwork
 logger = logging.getLogger(__name__)
 
 
-class SACAgent(RLAgent):
-    trainer: SAC
-
-    actor: ActorNetwork
-    critics: QValueNetwork
-    critics_target: QValueNetwork
-    alpha: Alpha
-    optimizer_state: dict[str, optax.OptState]
-    normalizer: Normalizer
-
-    def __init__(self, key, env: Environment, trainer: SAC):
-        self.trainer = trainer
-        actor_key, critics_key = jax.random.split(key, 2)
-
-        # Set default continuous distribution to tanhnormal if not specified
-        actor_kwargs = dict(trainer.actor_kwargs)
-        actor_kwargs.setdefault("continuous_output_layer", TanhNormalLayer)
-        self.actor = ActorNetwork(
-            env.observation_space,
-            env.action_space,
-            key=actor_key,
-            **actor_kwargs,
-        )
-        ensamble_critics_keys = jax.random.split(critics_key, 2)  # 2 critics
-        self.critics = jax.vmap(
-            lambda key: QValueNetwork(
-                env.observation_space,
-                env.action_space,
-                key=key,
-                **trainer.critic_kwargs,
-            )
-        )(ensamble_critics_keys)
-
-        self.critics_target = jax.tree.map(lambda x: x, self.critics)
-        self.alpha = Alpha(jnp.log(trainer.init_alpha))
-
-        self.optimizer_state = jym.tree.map_one_level(
-            lambda opt, params: opt.init(eqx.filter(params, eqx.is_inexact_array)),
-            trainer.optimizer,
-            {
-                "actor": self.actor,
-                "critics": self.critics,
-                "alpha": self.alpha,
-            },
-        )
-
-        self.normalizer = Normalizer(
-            obs_space=env.observation_space,
-            normalize_obs=trainer.normalize_observations,
-            normalize_rew=trainer.normalize_rewards,
-            gamma=trainer.gamma,
-            rew_shape=(trainer.num_envs,),
-        )
-
-    def get_action(
-        self, key: PRNGKeyArray, observation, deterministic: bool = False
-    ) -> Array:
-        observation = self.normalizer.normalize_obs(observation)
-        action_dist = self.actor(observation)
-        if deterministic:
-            return action_dist.mode()
-        return action_dist.sample(seed=key)
-
-    def update_normalizer(self, batch: Transition):
-        return self.replace(normalizer=self.normalizer.update(batch))
-
-    def normalize_observation(self, observations: PyTree):
-        return self.normalizer.normalize_obs(observations)
-
-    def normalize_reward(self, rewards: PyTree):
-        return self.normalizer.normalize_reward(rewards)
-
-    def _compute_soft_target(self, action_dist, q, action_log_prob=None):
-        min_q = q.min(axis=0)
-        if _is_categorical_distribution(action_dist):
-            # for wrapped in Independent:
-            action_dist = getattr(action_dist, "distribution", action_dist)
-            action_log_prob = jax.nn.log_softmax(action_dist.logits)
-            target = min_q - self.alpha() * action_log_prob
-            weighted_target = (action_dist.probs * target).sum(axis=-1)
-            return weighted_target
-        assert action_log_prob is not None
-        min_q = jym.tree.batch_sum(min_q)
-        target = min_q - self.alpha() * action_log_prob
-        return target
-
-    def update_actor_params(self, key, batch: Transition):
-        @eqx.filter_grad
-        def __sac_actor_loss(params, train_batch: Transition):
-            action_dist = jax.vmap(params)(train_batch.observation)
-            action_dist = _unwrap_joint(action_dist)
-            keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
-            action, action_log_prob = jym.tree.map_distribution(
-                lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
-            )
-            q = ensambled_vmap(self.critics, train_batch.observation, action)
-            target = jym.tree.map_distribution(
-                self._compute_soft_target, action_dist, q, action_log_prob
-            )
-            target = jym.tree.batch_sum(target)
-            return -jym.tree.mean(target)
-
-        trainer = self.trainer
-
-        actor_grads = __sac_actor_loss(self.actor, batch)
-
-        updates, optimizer_state = trainer.optimizer["actor"].update(
-            actor_grads, self.optimizer_state["actor"]
-        )
-        new_actor = eqx.apply_updates(self.actor, updates)
-        optimizer_state = {**self.optimizer_state, "actor": optimizer_state}
-        return self.replace(actor=new_actor, optimizer_state=optimizer_state)
-
-    def update_critics_params(self, key, batch: Transition):
-        @eqx.filter_grad
-        def __sac_qnet_loss(params, train_batch: Transition):
-            q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
-            q_taken = jym.tree.gather_actions(q_out, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
-            q_loss = optax.losses.squared_error(q_taken, q_target)
-            return jym.tree.mean(q_loss)
-
-        trainer = self.trainer
-
-        action_dist = jax.vmap(self.actor)(batch.next_observation)
-        action_dist = _unwrap_joint(action_dist)
-        keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
-        action, action_log_prob = jym.tree.map_distribution(
-            lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
-        )
-        q = ensambled_vmap(self.critics_target, batch.next_observation, action)
-        target = jym.tree.map_distribution(
-            self._compute_soft_target, action_dist, q, action_log_prob
-        )
-        target = jym.tree.batch_sum(target)
-        q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
-        grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
-        updates, optimizer_state = trainer.optimizer["critics"].update(
-            grads, self.optimizer_state["critics"]
-        )
-        new_critics = eqx.apply_updates(self.critics, updates)
-
-        new_critics_target = jax.tree.map(
-            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
-            self.critics_target,
-            new_critics,
-        )
-        optimizer_state = {**self.optimizer_state, "critics": optimizer_state}
-        return self.replace(
-            critics=new_critics,
-            critics_target=new_critics_target,
-            optimizer_state=optimizer_state,
-        )
-
-    def update_alpha_params(self, key, batch: Transition):
-        @eqx.filter_grad
-        def __sac_alpha_loss(params: Alpha, train_batch: Transition):
-            def _compute_alpha_signal(action_dist: distrax.Distribution):
-                base_target = trainer.target_entropy
-                # NOTE: setting a fixed target entropy in mixed action spaces likely does not set a proper target entropy
-                if _is_categorical_distribution(action_dist):
-                    # for wrapped in Independent:
-                    action_dist = getattr(action_dist, "distribution", action_dist)
-                    action_probs = action_dist.probs  # type: ignore[Attribute]
-                    log_probs = jax.nn.log_softmax(action_dist.logits)  # type: ignore[Attribute]
-                    if base_target is None:
-                        base_target = 0.89 * jnp.log(log_probs.shape[-1])
-                    # Target is positive and scaling it toward 0 drives the policy deterministic.
-                    target_entropy = target_entropy_scale * base_target
-                    return (action_probs * (log_probs + target_entropy)).sum(axis=-1)
-                else:  # Continuous action space
-                    _, log_probs = action_dist.sample_and_log_prob(seed=key)
-                    if base_target is None:
-                        base_target = -max(1, int(np.prod(action_dist.event_shape)))
-                    # Target is negative and driving it to zero would increase stochasticity, hence we scale it here instead.
-                    target_entropy = base_target * (2.0 - target_entropy_scale)
-                    return log_probs + target_entropy
-
-            signals = jym.tree.map_distribution(_compute_alpha_signal, action_dist)
-            signals = jym.tree.batch_sum(signals)
-            return -jnp.mean(params() * signals)
-
-        trainer = self.trainer
-
-        count = jym.tree.get_first(self.optimizer_state["alpha"], "count")
-        target_entropy_scale = trainer.target_entropy_scale_schedule(count)
-        action_dist = jax.vmap(self.actor)(batch.observation)
-        alpha_grads = __sac_alpha_loss(self.alpha, batch)
-
-        updates, optimizer_state = trainer.optimizer["alpha"].update(
-            alpha_grads, self.optimizer_state["alpha"]
-        )
-        new_alpha = eqx.apply_updates(self.alpha, updates)
-        optimizer_state = {**self.optimizer_state, "alpha": optimizer_state}
-        return self.replace(alpha=new_alpha, optimizer_state=optimizer_state)
-
-
 @eqx.filter_vmap(in_axes=(eqx.if_array(0), None, None))
 def ensambled_vmap(model, *x):
     """Vmap the ensamble of critics."""
@@ -518,3 +321,200 @@ class SAC(RLAlgorithm):
             )
 
         return updated_agent
+
+
+class SACAgent(RLAgent):
+    trainer: SAC
+
+    actor: ActorNetwork
+    critics: QValueNetwork
+    critics_target: QValueNetwork
+    alpha: Alpha
+    optimizer_state: dict[str, optax.OptState]
+    normalizer: Normalizer
+
+    def __init__(self, key, env: Environment, trainer: SAC):
+        self.trainer = trainer
+        actor_key, critics_key = jax.random.split(key, 2)
+
+        # Set default continuous distribution to tanhnormal if not specified
+        actor_kwargs = dict(trainer.actor_kwargs)
+        actor_kwargs.setdefault("continuous_output_layer", TanhNormalLayer)
+        self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
+            key=actor_key,
+            **actor_kwargs,
+        )
+        ensamble_critics_keys = jax.random.split(critics_key, 2)  # 2 critics
+        self.critics = jax.vmap(
+            lambda key: QValueNetwork(
+                env.observation_space,
+                env.action_space,
+                key=key,
+                **trainer.critic_kwargs,
+            )
+        )(ensamble_critics_keys)
+
+        self.critics_target = jax.tree.map(lambda x: x, self.critics)
+        self.alpha = Alpha(jnp.log(trainer.init_alpha))
+
+        self.optimizer_state = jym.tree.map_one_level(
+            lambda opt, params: opt.init(eqx.filter(params, eqx.is_inexact_array)),
+            trainer.optimizer,
+            {
+                "actor": self.actor,
+                "critics": self.critics,
+                "alpha": self.alpha,
+            },
+        )
+
+        self.normalizer = Normalizer(
+            obs_space=env.observation_space,
+            normalize_obs=trainer.normalize_observations,
+            normalize_rew=trainer.normalize_rewards,
+            gamma=trainer.gamma,
+            rew_shape=(trainer.num_envs,),
+        )
+
+    def get_action(
+        self, key: PRNGKeyArray, observation, deterministic: bool = False
+    ) -> Array:
+        observation = self.normalizer.normalize_obs(observation)
+        action_dist = self.actor(observation)
+        if deterministic:
+            return action_dist.mode()
+        return action_dist.sample(seed=key)
+
+    def update_normalizer(self, batch: Transition):
+        return self.replace(normalizer=self.normalizer.update(batch))
+
+    def normalize_observation(self, observations: PyTree):
+        return self.normalizer.normalize_obs(observations)
+
+    def normalize_reward(self, rewards: PyTree):
+        return self.normalizer.normalize_reward(rewards)
+
+    def _compute_soft_target(self, action_dist, q, action_log_prob=None):
+        min_q = q.min(axis=0)
+        if _is_categorical_distribution(action_dist):
+            # for wrapped in Independent:
+            action_dist = getattr(action_dist, "distribution", action_dist)
+            action_log_prob = jax.nn.log_softmax(action_dist.logits)
+            target = min_q - self.alpha() * action_log_prob
+            weighted_target = (action_dist.probs * target).sum(axis=-1)
+            return weighted_target
+        assert action_log_prob is not None
+        min_q = jym.tree.batch_sum(min_q)
+        target = min_q - self.alpha() * action_log_prob
+        return target
+
+    def update_actor_params(self, key, batch: Transition):
+        @eqx.filter_grad
+        def __sac_actor_loss(params, train_batch: Transition):
+            action_dist = jax.vmap(params)(train_batch.observation)
+            action_dist = _unwrap_joint(action_dist)
+            keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
+            action, action_log_prob = jym.tree.map_distribution(
+                lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
+            )
+            q = ensambled_vmap(self.critics, train_batch.observation, action)
+            target = jym.tree.map_distribution(
+                self._compute_soft_target, action_dist, q, action_log_prob
+            )
+            target = jym.tree.batch_sum(target)
+            return -jym.tree.mean(target)
+
+        trainer = self.trainer
+
+        actor_grads = __sac_actor_loss(self.actor, batch)
+
+        updates, optimizer_state = trainer.optimizer["actor"].update(
+            actor_grads, self.optimizer_state["actor"]
+        )
+        new_actor = eqx.apply_updates(self.actor, updates)
+        optimizer_state = {**self.optimizer_state, "actor": optimizer_state}
+        return self.replace(actor=new_actor, optimizer_state=optimizer_state)
+
+    def update_critics_params(self, key, batch: Transition):
+        @eqx.filter_grad
+        def __sac_qnet_loss(params, train_batch: Transition):
+            q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
+            q_taken = jym.tree.gather_actions(q_out, train_batch.action)
+            q_taken = jym.tree.batch_sum(q_taken)
+            q_loss = optax.losses.squared_error(q_taken, q_target)
+            return jym.tree.mean(q_loss)
+
+        trainer = self.trainer
+
+        action_dist = jax.vmap(self.actor)(batch.next_observation)
+        action_dist = _unwrap_joint(action_dist)
+        keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
+        action, action_log_prob = jym.tree.map_distribution(
+            lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
+        )
+        q = ensambled_vmap(self.critics_target, batch.next_observation, action)
+        target = jym.tree.map_distribution(
+            self._compute_soft_target, action_dist, q, action_log_prob
+        )
+        target = jym.tree.batch_sum(target)
+        q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
+        grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
+        updates, optimizer_state = trainer.optimizer["critics"].update(
+            grads, self.optimizer_state["critics"]
+        )
+        new_critics = eqx.apply_updates(self.critics, updates)
+
+        new_critics_target = jax.tree.map(
+            lambda x, y: (1 - trainer.tau) * x + trainer.tau * y,
+            self.critics_target,
+            new_critics,
+        )
+        optimizer_state = {**self.optimizer_state, "critics": optimizer_state}
+        return self.replace(
+            critics=new_critics,
+            critics_target=new_critics_target,
+            optimizer_state=optimizer_state,
+        )
+
+    def update_alpha_params(self, key, batch: Transition):
+        @eqx.filter_grad
+        def __sac_alpha_loss(params: Alpha, train_batch: Transition):
+            def _compute_alpha_signal(action_dist: distrax.Distribution):
+                base_target = trainer.target_entropy
+                # NOTE: setting a fixed target entropy in mixed action spaces likely does not set a proper target entropy
+                if _is_categorical_distribution(action_dist):
+                    # for wrapped in Independent:
+                    action_dist = getattr(action_dist, "distribution", action_dist)
+                    action_probs = action_dist.probs  # type: ignore[Attribute]
+                    log_probs = jax.nn.log_softmax(action_dist.logits)  # type: ignore[Attribute]
+                    if base_target is None:
+                        base_target = 0.89 * jnp.log(log_probs.shape[-1])
+                    # Target is positive and scaling it toward 0 drives the policy deterministic.
+                    target_entropy = target_entropy_scale * base_target
+                    return (action_probs * (log_probs + target_entropy)).sum(axis=-1)
+                else:  # Continuous action space
+                    _, log_probs = action_dist.sample_and_log_prob(seed=key)
+                    if base_target is None:
+                        base_target = -max(1, int(np.prod(action_dist.event_shape)))
+                    # Target is negative and driving it to zero would increase stochasticity, hence we scale it here instead.
+                    target_entropy = base_target * (2.0 - target_entropy_scale)
+                    return log_probs + target_entropy
+
+            signals = jym.tree.map_distribution(_compute_alpha_signal, action_dist)
+            signals = jym.tree.batch_sum(signals)
+            return -jnp.mean(params() * signals)
+
+        trainer = self.trainer
+
+        count = jym.tree.get_first(self.optimizer_state["alpha"], "count")
+        target_entropy_scale = trainer.target_entropy_scale_schedule(count)
+        action_dist = jax.vmap(self.actor)(batch.observation)
+        alpha_grads = __sac_alpha_loss(self.alpha, batch)
+
+        updates, optimizer_state = trainer.optimizer["alpha"].update(
+            alpha_grads, self.optimizer_state["alpha"]
+        )
+        new_alpha = eqx.apply_updates(self.alpha, updates)
+        optimizer_state = {**self.optimizer_state, "alpha": optimizer_state}
+        return self.replace(alpha=new_alpha, optimizer_state=optimizer_state)

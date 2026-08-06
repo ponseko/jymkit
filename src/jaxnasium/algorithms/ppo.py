@@ -28,131 +28,6 @@ from .agent_networks import ActorNetwork, ValueNetwork
 logger = logging.getLogger(__name__)
 
 
-class PPOAgent(RLAgent):
-    trainer: PPO
-
-    actor: ActorNetwork
-    critic: ValueNetwork
-    optimizer_state: optax.OptState
-    normalizer: Normalizer
-
-    def __init__(self, key, env: Environment, trainer: PPO):
-        self.trainer = trainer
-        actor_key, critic_key = jax.random.split(key)
-        self.actor = ActorNetwork(
-            env.observation_space,
-            env.action_space,
-            key=actor_key,
-            **trainer.actor_kwargs,
-        )
-        self.critic = ValueNetwork(
-            env.observation_space,
-            key=critic_key,
-            **trainer.critic_kwargs,
-        )
-        self.optimizer_state = trainer.optimizer.init(
-            eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
-        )
-
-        self.normalizer = Normalizer(
-            obs_space=env.observation_space,
-            normalize_obs=trainer.normalize_observations,
-            normalize_rew=trainer.normalize_rewards,
-            gamma=trainer.gamma,
-            rew_shape=(trainer.num_envs,),
-        )
-
-    def get_action(
-        self,
-        key: PRNGKeyArray,
-        observation: PyTree,
-        deterministic: bool = False,
-        get_log_prob: bool = False,
-    ) -> Array | tuple[Array, Array]:
-        observation = self.normalizer.normalize_obs(observation)
-        action_dist = self.actor(observation)
-        if deterministic:
-            assert not get_log_prob, "Cannot get log prob in deterministic mode"
-            return action_dist.mode()
-        if get_log_prob:
-            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
-        return action_dist.sample(seed=key)
-
-    def get_value(self, observation: PyTree):
-        observation = self.normalizer.normalize_obs(observation)
-        return self.critic(observation)
-
-    def update_normalizer(self, batch: Transition):
-        return self.replace(normalizer=self.normalizer.update(batch))
-
-    def normalize_observation(self, observations: PyTree):
-        return self.normalizer.normalize_obs(observations)
-
-    def normalize_reward(self, rewards: PyTree):
-        return self.normalizer.normalize_reward(rewards)
-
-    def update_params(self, batch: Transition):
-        @eqx.filter_grad
-        def __ppo_los_fn(
-            params: tuple[ActorNetwork, ValueNetwork],
-            train_batch: Transition,
-        ):
-            assert train_batch.advantage is not None
-            assert train_batch.return_ is not None
-            assert train_batch.log_prob is not None
-            assert train_batch.value is not None
-
-            actor, critic = params
-            action_dist = jax.vmap(actor)(train_batch.observation)
-            log_prob = action_dist.log_prob(train_batch.action)
-            entropy = action_dist.entropy()
-            value = jax.vmap(critic)(train_batch.observation)
-            init_log_prob = train_batch.log_prob
-
-            ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
-                train_batch.advantage.std() + 1e-8
-            )
-            actor_loss1 = _advantages * ratio
-
-            actor_loss2 = (
-                jnp.clip(ratio, 1.0 - trainer.clip_coef, 1.0 + trainer.clip_coef)
-                * _advantages
-            )
-            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-            # critic loss
-            value_pred_clipped = train_batch.value + (
-                jnp.clip(
-                    value - train_batch.value,
-                    -trainer.clip_coef_vf,
-                    trainer.clip_coef_vf,
-                )
-            )
-            value_losses = jnp.square(value - train_batch.return_)
-            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
-            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-            update_count = jym.tree.get_first(self.optimizer_state, "count")
-            ent_coef = trainer.ent_coef_schedule(update_count)
-
-            # Total loss
-            total_loss = (
-                actor_loss + trainer.vf_coef * value_loss - ent_coef * entropy.mean()
-            )
-            return total_loss  # , (actor_loss, value_loss, entropy)
-
-        trainer = self.trainer
-
-        actor, critic = self.actor, self.critic
-        grads = __ppo_los_fn((actor, critic), batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
-        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
-        return self.replace(
-            actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
-        )
-
-
 class PPO(RLAlgorithm):
     """Proximal Policy Optimization (PPO) algorithm implementation."""
 
@@ -358,3 +233,128 @@ class PPO(RLAlgorithm):
         )
         gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
         return gae, (gae, gae + transition.value)
+
+
+class PPOAgent(RLAgent):
+    trainer: PPO
+
+    actor: ActorNetwork
+    critic: ValueNetwork
+    optimizer_state: optax.OptState
+    normalizer: Normalizer
+
+    def __init__(self, key, env: Environment, trainer: PPO):
+        self.trainer = trainer
+        actor_key, critic_key = jax.random.split(key)
+        self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
+            key=actor_key,
+            **trainer.actor_kwargs,
+        )
+        self.critic = ValueNetwork(
+            env.observation_space,
+            key=critic_key,
+            **trainer.critic_kwargs,
+        )
+        self.optimizer_state = trainer.optimizer.init(
+            eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
+        )
+
+        self.normalizer = Normalizer(
+            obs_space=env.observation_space,
+            normalize_obs=trainer.normalize_observations,
+            normalize_rew=trainer.normalize_rewards,
+            gamma=trainer.gamma,
+            rew_shape=(trainer.num_envs,),
+        )
+
+    def get_action(
+        self,
+        key: PRNGKeyArray,
+        observation: PyTree,
+        deterministic: bool = False,
+        get_log_prob: bool = False,
+    ) -> Array | tuple[Array, Array]:
+        observation = self.normalizer.normalize_obs(observation)
+        action_dist = self.actor(observation)
+        if deterministic:
+            assert not get_log_prob, "Cannot get log prob in deterministic mode"
+            return action_dist.mode()
+        if get_log_prob:
+            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
+        return action_dist.sample(seed=key)
+
+    def get_value(self, observation: PyTree):
+        observation = self.normalizer.normalize_obs(observation)
+        return self.critic(observation)
+
+    def update_normalizer(self, batch: Transition):
+        return self.replace(normalizer=self.normalizer.update(batch))
+
+    def normalize_observation(self, observations: PyTree):
+        return self.normalizer.normalize_obs(observations)
+
+    def normalize_reward(self, rewards: PyTree):
+        return self.normalizer.normalize_reward(rewards)
+
+    def update_params(self, batch: Transition):
+        @eqx.filter_grad
+        def __ppo_los_fn(
+            params: tuple[ActorNetwork, ValueNetwork],
+            train_batch: Transition,
+        ):
+            assert train_batch.advantage is not None
+            assert train_batch.return_ is not None
+            assert train_batch.log_prob is not None
+            assert train_batch.value is not None
+
+            actor, critic = params
+            action_dist = jax.vmap(actor)(train_batch.observation)
+            log_prob = action_dist.log_prob(train_batch.action)
+            entropy = action_dist.entropy()
+            value = jax.vmap(critic)(train_batch.observation)
+            init_log_prob = train_batch.log_prob
+
+            ratio = jnp.exp(log_prob - init_log_prob)
+            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
+                train_batch.advantage.std() + 1e-8
+            )
+            actor_loss1 = _advantages * ratio
+
+            actor_loss2 = (
+                jnp.clip(ratio, 1.0 - trainer.clip_coef, 1.0 + trainer.clip_coef)
+                * _advantages
+            )
+            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
+
+            # critic loss
+            value_pred_clipped = train_batch.value + (
+                jnp.clip(
+                    value - train_batch.value,
+                    -trainer.clip_coef_vf,
+                    trainer.clip_coef_vf,
+                )
+            )
+            value_losses = jnp.square(value - train_batch.return_)
+            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
+            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
+
+            update_count = jym.tree.get_first(self.optimizer_state, "count")
+            ent_coef = trainer.ent_coef_schedule(update_count)
+
+            # Total loss
+            total_loss = (
+                actor_loss + trainer.vf_coef * value_loss - ent_coef * entropy.mean()
+            )
+            return total_loss  # , (actor_loss, value_loss, entropy)
+
+        trainer = self.trainer
+
+        actor, critic = self.actor, self.critic
+        grads = __ppo_los_fn((actor, critic), batch)
+        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+        return self.replace(
+            actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
+        )
