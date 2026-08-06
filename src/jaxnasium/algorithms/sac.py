@@ -42,8 +42,14 @@ def _is_categorical_distribution(action_dist: distrax.Distribution) -> bool:
     return False
 
 
-def is_dist(d):
-    return isinstance(d, distrax.Distribution)
+def _unwrap(action_dist):
+    if isinstance(action_dist, distrax.Joint):
+        return action_dist.distributions
+    return action_dist
+
+
+def _is_dist(x):
+    return isinstance(x, distrax.Distribution)
 
 
 class Alpha(eqx.Module):
@@ -143,7 +149,8 @@ class SACAgent(RLAgent):
         @eqx.filter_grad
         def __sac_actor_loss(params, train_batch: Transition):
             action_dist = jax.vmap(params)(train_batch.observation)
-            keys = jym.tree.split_key_like(key, action_dist, is_leaf=is_dist)
+            action_dist = _unwrap(action_dist)
+            keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
             action, action_log_prob = jym.tree.map_distribution(
                 lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
             )
@@ -173,7 +180,8 @@ class SACAgent(RLAgent):
             return jym.tree.mean(q_loss)
 
         action_dist = jax.vmap(self.actor)(batch.next_observation)
-        keys = jym.tree.split_key_like(key, action_dist, is_leaf=is_dist)
+        action_dist = _unwrap(action_dist)
+        keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
         action, action_log_prob = jym.tree.map_distribution(
             lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
         )

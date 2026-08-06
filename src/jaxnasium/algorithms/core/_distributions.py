@@ -6,7 +6,7 @@ import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jaxtyping import PyTree
+from jaxtyping import Array, PyTree
 
 
 def _transpose_tree_of_tuples(r, outer_treedef):
@@ -111,7 +111,17 @@ class DistraxContainer(eqx.Module):
 
 
 class TanhNormal(distrax.Transformed):
-    def __init__(self, mean, std, shift=0.0, scale=1.0):
+    """Normal squashed through `tanh`, affinely rescaled to `[low, high]`.
+
+    NOTE: obtain log-probs with `sample_and_log_prob`, instead of `sample` followed by `log_prob`.
+
+    https://github.com/google-deepmind/distrax/issues/7
+    https://github.com/google-deepmind/distrax/issues/216
+    """
+
+    def __init__(
+        self, mean, std, shift: float | Array = 0.0, scale: float | Array = 1.0
+    ):
         mean = jnp.asarray(mean)
         std = jnp.asarray(std)
         target_shape = jnp.shape(mean)
