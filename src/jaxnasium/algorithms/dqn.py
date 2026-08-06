@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import logging
-from dataclasses import replace
 from functools import partial
-from typing import Any, Self
+from typing import Any
 
 import distrax
 import equinox as eqx
@@ -28,12 +29,15 @@ logger = logging.getLogger(__name__)
 
 
 class DQNAgent(RLAgent):
+    trainer: DQN
+
     critic: QValueNetwork
     critic_target: QValueNetwork
     optimizer_state: optax.OptState
     normalizer: Normalizer
 
-    def __init__(self, key, env: Environment, trainer: "DQN"):
+    def __init__(self, key, env: Environment, trainer: DQN):
+        self.trainer = trainer
         self.critic = QValueNetwork(
             env.observation_space,
             env.action_space,
@@ -83,7 +87,7 @@ class DQNAgent(RLAgent):
     def update_normalizer(self, batch: Transition):
         return self.replace(normalizer=self.normalizer.update(batch))
 
-    def update_params(self, batch: Transition, trainer: "DQN"):
+    def update_params(self, batch: Transition):
         @eqx.filter_grad
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
@@ -91,6 +95,8 @@ class DQNAgent(RLAgent):
             q_taken = jym.tree.batch_sum(q_taken)
             q_loss = optax.losses.squared_error(q_taken, target)
             return jym.tree.mean(q_loss)
+
+        trainer = self.trainer
 
         # Compute target
         q_target_output = jax.vmap(self.critic_target)(batch.next_observation)
@@ -123,9 +129,6 @@ class DQN(RLAlgorithm):
     This implementation uses target networks with soft updates (polyak averaging),
     a replay buffer and epsilon-greedy exploration with optional annealing.
     """
-
-    agent: DQNAgent = eqx.field(default=None)
-    "State of the DQN agent, containing the networks, optimizer state and optional normalization running statistics."
 
     learning_rate_start: float = 2.5e-3
     learning_rate_end: float | None = eqx.field(static=True, default=2.5e-4)
@@ -180,25 +183,26 @@ class DQN(RLAlgorithm):
 
     @property
     def num_training_updates(self):
-        return self.num_iterations  # * num_epochs
+        return self.num_iterations
 
     @eqx.filter_jit
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
-        return replace(self, agent=DQNAgent(key=key, env=env, trainer=self))
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> DQNAgent:
+        return DQNAgent(key=key, env=env, trainer=self)
 
     @eqx.filter_jit
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
+    def train(
+        self, key: PRNGKeyArray, env: Environment, agent: DQNAgent | None = None
+    ) -> DQNAgent:
         env = self.__check_env__(env, vectorized=True)
-        self = replace(self, **hyperparams)
 
-        if not self.is_initialized:
-            self = self.init_agent(key, env)
+        if agent is None:
+            agent = self.init_agent(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
         warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
-            (env_state, obsv, key), env, length=warmup_length
+            agent, (env_state, obsv, key), env, length=warmup_length
         )
         buffer = TransitionBuffer(
             max_size=self.replay_buffer_size,
@@ -208,7 +212,7 @@ class DQN(RLAlgorithm):
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
         # Update the normalizer with the warmup data. After this, the normalizer is frozen.
-        self = replace(self, agent=self.agent.update_normalizer(dummy_trajectory))
+        agent = agent.update_normalizer(dummy_trajectory)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
         train_iteration_fn = scan_callback(
@@ -218,15 +222,14 @@ class DQN(RLAlgorithm):
             n=self.num_iterations,
         )
 
-        runner_state = (self, buffer, *warmup_state)
+        runner_state = (agent, buffer, *warmup_state)
         runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
-        updated_self = runner_state[0]
-        return updated_self
+        updated_agent = runner_state[0]
+        return updated_agent
 
-    @staticmethod
-    def train_iteration(runner_state, train_iter, *, env: Environment):
+    def train_iteration(self, runner_state, train_iter, *, env: Environment):
         """
         Performs a single training iteration (A single `Collect data + Update` run).
 
@@ -234,11 +237,11 @@ class DQN(RLAlgorithm):
         and scanned over until the total number of timesteps is reached.
         """
         # Do rollout of single trajactory
-        self: DQN = runner_state[0]
+        agent: DQNAgent = runner_state[0]
         buffer: TransitionBuffer = runner_state[1]
         rollout_state = runner_state[2:]
         (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-            rollout_state, env
+            agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
 
@@ -246,25 +249,26 @@ class DQN(RLAlgorithm):
         buffer = buffer.insert(trajectory_batch)
         train_batch = buffer.sample(rng)
 
-        train_batch = train_batch.normalize(self.agent.normalizer)
+        train_batch = train_batch.normalize(agent.normalizer)
 
         # Update
-        updated_agent = self.agent.update_params(train_batch, self)
-        self = replace(self, agent=updated_agent)
+        agent = agent.update_params(train_batch)
 
-        runner_state = (self, buffer, env_state, last_obs, rng)
+        runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _collect_rollout(self, rollout_state, env: Environment, length=None):
+    def _collect_rollout(
+        self, agent: DQNAgent, rollout_state, env: Environment, length=None
+    ):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            update_count = jym.tree.get_first(self.agent, "count")
+            update_count = jym.tree.get_first(agent.optimizer_state, "count")
             get_action = partial(
-                self.get_action, epsilon=self.epsilon_schedule(update_count)
+                agent.get_action, epsilon=self.epsilon_schedule(update_count)
             )
             action = jax.vmap(get_action, in_axes=(0, 0))(sample_key, last_obs)
 

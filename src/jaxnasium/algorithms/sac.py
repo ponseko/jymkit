@@ -1,7 +1,8 @@
+from __future__ import annotations
+
 import logging
-from dataclasses import replace
 from functools import partial
-from typing import Any, Self
+from typing import Any
 
 import distrax
 import equinox as eqx
@@ -29,41 +30,9 @@ from .agent_networks import ActorNetwork, QValueNetwork
 logger = logging.getLogger(__name__)
 
 
-@eqx.filter_vmap(in_axes=(eqx.if_array(0), None, None))
-def ensambled_vmap(model, *x):
-    """Vmap the ensamble of critics."""
-    return jax.vmap(model)(*x)
-
-
-def _is_categorical_distribution(action_dist: distrax.Distribution) -> bool:
-    if isinstance(action_dist, distrax.Categorical):
-        return True
-    elif isinstance(action_dist, distrax.Independent):
-        return _is_categorical_distribution(action_dist.distribution)
-    return False
-
-
-def _unwrap(action_dist):
-    if isinstance(action_dist, distrax.Joint):
-        return action_dist.distributions
-    return action_dist
-
-
-def _is_dist(x):
-    return isinstance(x, distrax.Distribution)
-
-
-class Alpha(eqx.Module):
-    ent_coef: jnp.ndarray
-
-    def __init__(self, ent_coef_init=jnp.log(0.2)):
-        self.ent_coef = jnp.array(ent_coef_init)
-
-    def __call__(self) -> jnp.ndarray:
-        return jnp.exp(self.ent_coef)
-
-
 class SACAgent(RLAgent):
+    trainer: SAC
+
     actor: ActorNetwork
     critics: QValueNetwork
     critics_target: QValueNetwork
@@ -71,7 +40,8 @@ class SACAgent(RLAgent):
     optimizer_state: dict[str, optax.OptState]
     normalizer: Normalizer
 
-    def __init__(self, key, env: Environment, trainer: "SAC"):
+    def __init__(self, key, env: Environment, trainer: SAC):
+        self.trainer = trainer
         actor_key, critics_key = jax.random.split(key, 2)
 
         # Set default continuous distribution to tanhnormal if not specified
@@ -146,11 +116,11 @@ class SACAgent(RLAgent):
         target = min_q - self.alpha() * action_log_prob
         return target
 
-    def update_actor_params(self, key, batch: Transition, trainer: "SAC"):
+    def update_actor_params(self, key, batch: Transition):
         @eqx.filter_grad
         def __sac_actor_loss(params, train_batch: Transition):
             action_dist = jax.vmap(params)(train_batch.observation)
-            action_dist = _unwrap(action_dist)
+            action_dist = _unwrap_joint(action_dist)
             keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
             action, action_log_prob = jym.tree.map_distribution(
                 lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
@@ -162,6 +132,8 @@ class SACAgent(RLAgent):
             target = jym.tree.batch_sum(target)
             return -jym.tree.mean(target)
 
+        trainer = self.trainer
+
         actor_grads = __sac_actor_loss(self.actor, batch)
 
         updates, optimizer_state = trainer.optimizer["actor"].update(
@@ -171,7 +143,7 @@ class SACAgent(RLAgent):
         optimizer_state = {**self.optimizer_state, "actor": optimizer_state}
         return self.replace(actor=new_actor, optimizer_state=optimizer_state)
 
-    def update_critics_params(self, key, batch: Transition, trainer: "SAC"):
+    def update_critics_params(self, key, batch: Transition):
         @eqx.filter_grad
         def __sac_qnet_loss(params, train_batch: Transition):
             q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
@@ -180,8 +152,10 @@ class SACAgent(RLAgent):
             q_loss = optax.losses.squared_error(q_taken, q_target)
             return jym.tree.mean(q_loss)
 
+        trainer = self.trainer
+
         action_dist = jax.vmap(self.actor)(batch.next_observation)
-        action_dist = _unwrap(action_dist)
+        action_dist = _unwrap_joint(action_dist)
         keys = jym.tree.split_key_like(key, action_dist, is_leaf=_is_dist)
         action, action_log_prob = jym.tree.map_distribution(
             lambda d, k: d.sample_and_log_prob(seed=k), action_dist, keys
@@ -210,7 +184,7 @@ class SACAgent(RLAgent):
             optimizer_state=optimizer_state,
         )
 
-    def update_alpha_params(self, key, batch: Transition, trainer: "SAC"):
+    def update_alpha_params(self, key, batch: Transition):
         @eqx.filter_grad
         def __sac_alpha_loss(params: Alpha, train_batch: Transition):
             def _compute_alpha_signal(action_dist: distrax.Distribution):
@@ -238,6 +212,8 @@ class SACAgent(RLAgent):
             signals = jym.tree.batch_sum(signals)
             return -jnp.mean(params() * signals)
 
+        trainer = self.trainer
+
         count = jym.tree.get_first(self.optimizer_state["alpha"], "count")
         target_entropy_scale = trainer.target_entropy_scale_schedule(count)
         action_dist = jax.vmap(self.actor)(batch.observation)
@@ -251,13 +227,45 @@ class SACAgent(RLAgent):
         return self.replace(alpha=new_alpha, optimizer_state=optimizer_state)
 
 
+@eqx.filter_vmap(in_axes=(eqx.if_array(0), None, None))
+def ensambled_vmap(model, *x):
+    """Vmap the ensamble of critics."""
+    return jax.vmap(model)(*x)
+
+
+def _is_categorical_distribution(action_dist: distrax.Distribution) -> bool:
+    if isinstance(action_dist, distrax.Categorical):
+        return True
+    elif isinstance(action_dist, distrax.Independent):
+        return _is_categorical_distribution(action_dist.distribution)
+    return False
+
+
+def _unwrap_joint(action_dist):
+    if isinstance(action_dist, distrax.Joint):
+        return action_dist.distributions
+    return action_dist
+
+
+def _is_dist(x):
+    return isinstance(x, distrax.Distribution)
+
+
+class Alpha(eqx.Module):
+    ent_coef: jnp.ndarray
+
+    def __init__(self, ent_coef_init=jnp.log(0.2)):
+        self.ent_coef = jnp.array(ent_coef_init)
+
+    def __call__(self) -> jnp.ndarray:
+        return jnp.exp(self.ent_coef)
+
+
 class SAC(RLAlgorithm):
     """Soft Actor-Critic (SAC) algorithm implementation.
 
     This implementation uses soft target updates, a replay buffer, and a target entropy scale with optional annealing.
     """
-
-    agent: SACAgent = eqx.field(default=None)
 
     learning_rate_actor_start: float = 3e-3
     learning_rate_actor_end: float | None = eqx.field(static=True, default=None)
@@ -358,22 +366,23 @@ class SAC(RLAlgorithm):
         return self.num_iterations * self.alpha_num_updates
 
     @eqx.filter_jit
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
-        return replace(self, agent=SACAgent(key=key, env=env, trainer=self))
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> SACAgent:
+        return SACAgent(key=key, env=env, trainer=self)
 
     @eqx.filter_jit
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
+    def train(
+        self, key: PRNGKeyArray, env: Environment, agent: SACAgent | None = None
+    ) -> SACAgent:
         env = self.__check_env__(env, vectorized=True)
-        self = replace(self, **hyperparams)
 
-        if not self.is_initialized:
-            self = self.init_agent(key, env)
+        if agent is None:
+            agent = self.init_agent(key, env)
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
         warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
-            (env_state, obsv, key), env, length=warmup_length
+            agent, (env_state, obsv, key), env, length=warmup_length
         )
         buffer = TransitionBuffer(
             max_size=self.replay_buffer_size,
@@ -383,7 +392,7 @@ class SAC(RLAlgorithm):
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
         # Update the normalizer with the warmup data. After this, the normalizer is frozen.
-        self = replace(self, agent=self.agent.update_normalizer(dummy_trajectory))
+        agent = agent.update_normalizer(dummy_trajectory)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
         train_iteration_fn = scan_callback(
@@ -393,15 +402,14 @@ class SAC(RLAlgorithm):
             n=self.num_iterations,
         )
 
-        runner_state = (self, buffer, *warmup_state)
+        runner_state = (agent, buffer, *warmup_state)
         runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
-        updated_self = runner_state[0]
-        return updated_self
+        updated_agent = runner_state[0]
+        return updated_agent
 
-    @staticmethod
-    def train_iteration(runner_state, train_iter, *, env: Environment):
+    def train_iteration(self, runner_state, train_iter, *, env: Environment):
         """
         Performs a single training iteration (A single `Collect data + Update` run).
 
@@ -409,30 +417,31 @@ class SAC(RLAlgorithm):
         and scanned over until the total number of timesteps is reached.
         """
         # Do rollout of single trajactory
-        self: SAC = runner_state[0]
+        agent: SACAgent = runner_state[0]
         buffer: TransitionBuffer = runner_state[1]
         rollout_state = runner_state[2:]
         (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-            rollout_state, env
+            agent, rollout_state, env
         )
 
         buffer = buffer.insert(trajectory_batch)
 
         # Update
-        updated_agent = self._update_agent_state(rng, self.agent, buffer)
+        agent = self._update_agent_state(rng, agent, buffer)
         metric = trajectory_batch.info or {}
-        self = replace(self, agent=updated_agent)
-        runner_state = (self, buffer, env_state, last_obs, rng)
+        runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _collect_rollout(self, rollout_state, env: Environment, length=None):
+    def _collect_rollout(
+        self, agent: SACAgent, rollout_state, env: Environment, length=None
+    ):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            action = jax.vmap(self.get_action, in_axes=(0, 0))(sample_key, last_obs)
+            action = jax.vmap(agent.get_action, in_axes=(0, 0))(sample_key, last_obs)
 
             # take a step in the environment
             step_key = jax.random.split(step_key, self.num_envs)
@@ -474,7 +483,7 @@ class SAC(RLAlgorithm):
                 rng, sample_key, update_step_key = jax.random.split(rng, 3)
                 minibatch = buffer.sample(sample_key, batch_size=batch_size)
                 minibatch = minibatch.normalize(agent.normalizer)
-                agent = update_fn(agent, update_step_key, minibatch, self)
+                agent = update_fn(agent, update_step_key, minibatch)
                 return (agent, rng), None
 
             (updated_agent, _), _ = jax.lax.scan(

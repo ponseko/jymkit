@@ -28,8 +28,8 @@ def test_saving_loading(tmp_path, test_alg_cls: type[jxalgs.RLAlgorithm]):
     load_agent = load_agent.init_agent(jax.random.PRNGKey(42), env)
     load_agent = load_agent.load_state(save_path)
 
-    agent_weight = jym.tree.get_first(agent.agent, "weight")
-    load_agent_weight = jym.tree.get_first(load_agent.agent, "weight")
+    agent_weight = jym.tree.get_first(agent, "weight")
+    load_agent_weight = jym.tree.get_first(load_agent, "weight")
     assert jnp.all(agent_weight == load_agent_weight), (
         "Weights do not match after loading."
     )
@@ -58,8 +58,8 @@ def test_cloudpickle_saving(tmp_path, test_alg_cls: type[jxalgs.RLAlgorithm]):
     with open(save_path, "rb") as f:
         load_agent = cloudpickle.load(f)
 
-    agent_weight = jym.tree.get_first(agent.agent, "weight")
-    load_agent_weight = jym.tree.get_first(load_agent.agent, "weight")
+    agent_weight = jym.tree.get_first(agent, "weight")
+    load_agent_weight = jym.tree.get_first(load_agent, "weight")
     assert jnp.all(agent_weight == load_agent_weight), (
         "Weights do not match after loading."
     )

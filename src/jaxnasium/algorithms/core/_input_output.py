@@ -596,11 +596,12 @@ class PyTreeActionNetwork(_PyTreeOutputNetwork):
 
         # Policy heads return distributions; Q/value heads return raw arrays.
         dist_list = jax.tree.leaves(outputs, is_leaf=_is_distribution)
-        if dist_list and all(_is_distribution(o) for o in dist_list):
-            if self.assume_independent:
-                outputs = jax.tree.map(
-                    _make_independent, outputs, is_leaf=_is_distribution
-                )
+        if (
+            self.assume_independent
+            and dist_list
+            and all(_is_distribution(o) for o in dist_list)
+        ):
+            outputs = jax.tree.map(_make_independent, outputs, is_leaf=_is_distribution)
             if len(dist_list) > 1:
                 return distrax.Joint(outputs)
 
