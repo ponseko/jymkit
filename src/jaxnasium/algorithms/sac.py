@@ -18,6 +18,7 @@ from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
     Normalizer,
     Schedule,
+    TanhNormalLayer,
     Transition,
     TransitionBuffer,
     scan_callback,
@@ -75,7 +76,7 @@ class SACAgent(RLAgent):
 
         # Set default continuous distribution to tanhnormal if not specified
         actor_kwargs = dict(trainer.actor_kwargs)
-        actor_kwargs.setdefault("continuous_distribution", "tanhnormal")
+        actor_kwargs.setdefault("continuous_output_layer", TanhNormalLayer)
         self.actor = ActorNetwork(
             env.observation_space,
             env.action_space,
