@@ -82,6 +82,7 @@ markers = [
     "learn: full algorithm training loops",
     "external: smoke tests for third-party env packages",
     "cli: test the create-rl-app cli tooling",
+    "saving_loading: test_saving_loading seperated due to higher python requirement"
 ]
 testpaths = ["tests"]
 addopts = "-m 'not learn and not external'"
