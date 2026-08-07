@@ -107,7 +107,7 @@ jobs:
           uv run pip install -r tests/requirements.txt
 
       - name: Run saving/loading tests
-        run: uv run pytest -m "saving_loading" -v -s
+        run: uv run --no-sync pytest -m "saving_loading" -v -s
 
   test-cli:
     needs: lint
@@ -151,7 +151,7 @@ jobs:
 
       - name: Install external dependencies
         run: |
-          uv run pip install -r tests/requirements.txt
+          uv pip install -r tests/requirements.txt
 
       - name: Run external tests
         run: uv run --no-sync pytest -m "external" -v -s
