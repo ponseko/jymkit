@@ -13,6 +13,19 @@ aren't found in used higher-level libraries (equinox / jax).
 """
 
 
+def _transpose_tree_of_tuples(r, outer_treedef):
+    """
+    Some functions may return tuples and pytree operations may return these
+    as a pytree of tuples, rather than a possibly desired tuple of pytrees.
+    Here, we convert these with a `jax.tree.transpose`
+    """
+    flat = outer_treedef.flatten_up_to(r)
+    if not flat or not isinstance(flat[0], tuple):
+        return r
+    inner_treedef = jax.tree.structure(tuple(range(len(flat[0]))))
+    return jax.tree.transpose(outer_treedef, inner_treedef, r)
+
+
 def _tree_size(tree):
     r"""Get the total number of elements (size of each leaf) in a pytree.
     Ported from: https://github.com/google-deepmind/optax/pull/1321/files/cadb2bca89e2af6af0e70cf0007080d5f68794a4
@@ -27,7 +40,7 @@ def tree_sum(tree: Any, axis: int | tuple[int, ...] | None = None):
     then adds adds the resulting leafs.
     """
     sums = jax.tree.map(lambda x: jnp.sum(x, axis=axis), tree)
-    return jax.tree.reduce_associative(operator.add, sums)
+    return jax.tree.reduce_associative(operator.add, sums)  # type: ignore[reportGeneralTypeIssues]
 
 
 def _is_child_of(root: PyTree) -> Callable[[PyTree], bool]:
@@ -90,9 +103,14 @@ def tree_map_distribution(fn: Callable, tree, *rest):
         tree = tree.distributions
     rest = tuple(r.distributions if isinstance(r, distrax.Joint) else r for r in rest)
 
-    return jax.tree.map(
-        fn, tree, *rest, is_leaf=lambda x: isinstance(x, distrax.Distribution)
-    )
+    is_dist = lambda x: isinstance(x, distrax.Distribution)
+    result = jax.tree.map(fn, tree, *rest, is_leaf=is_dist)
+
+    # e.g. sample_and_log_prob returns a (sample, log_prob) tuple,
+    # rather than returning a [(sample1, log_prob1), (sample2, log_prob2), ...] pytree,
+    # we return a ([sample1, sample2, ...], [log_prob1, log_prob2, ...]) tuple of pytrees.
+    structure = jax.tree.structure(tree, is_leaf=is_dist)
+    return _transpose_tree_of_tuples(result, structure)
 
 
 def tree_concatenate(trees: PyTree) -> Array:
@@ -331,6 +349,18 @@ def tree_split_key_like_structure(key: PRNGKeyArray, structure: PyTreeDef):  # p
     return jax.tree.unflatten(structure, keys)
 
 
+def tree_split_key_like(key: PRNGKeyArray, tree: PyTree, is_leaf: PyTreeDef):  # pyright: ignore[reportInvalidTypeForm]
+    """Split a JAX PRNGKey into a pytree of keys with the same structure as `tree`.
+
+    *Arguments*:
+        `key`: A PRNGKeyArray to be split.
+        `tree`: A pytree whose structure will be used to determine the number of keys to split.
+        `is_leaf`: A function that determines which nodes in the tree are leaves.
+    """
+    structure = jax.tree.structure(tree, is_leaf=is_leaf)
+    return tree_split_key_like_structure(key, structure)
+
+
 def tree_zeros_like(tree: PyTree, dtype: DTypeLike | None = None) -> PyTree:
     """
     Creates an all-zeros PyTree with the same structure as `tree`.
@@ -403,6 +433,19 @@ def tree_mul(tree_A: PyTree, tree_B_or_prefix: PyTree | float | Array) -> PyTree
     return jax.tree.map(jnp.multiply, tree_A, tree_B)
 
 
+def tree_clip(
+    tree: PyTree, min_value: float | Array, max_value: float | Array
+) -> PyTree:
+    """Clip the leaves of a pytree to a specified range.
+
+    **Arguments**:
+        `tree`: A pytree whose leaves are array-like.
+        `min_value`: Minimum value to clip to (scalar or array).
+        `max_value`: Maximum value to clip to (scalar or array).
+    """
+    return jax.tree.map(lambda x: jnp.clip(x, min_value, max_value), tree)
+
+
 batch_sum = tree_batch_sum
 get_first = tree_get_first
 gather_actions = tree_gather_actions
@@ -413,8 +456,10 @@ unstack = tree_unstack
 concatenate = tree_concatenate
 map_distribution = tree_map_distribution
 split_key_like_structure = tree_split_key_like_structure
+split_key_like = tree_split_key_like
 zeros_like = tree_zeros_like
 ones_like = tree_ones_like
 add = tree_add
 mul = tree_mul
 sum = tree_sum
+clip = tree_clip

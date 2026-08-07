@@ -103,6 +103,7 @@ class CNN(eqx.Module):
         kernel_sizes: Sequence[int] = (3, 3, 2),
         strides: Sequence[int] = (1, 1, 1),
         padding: Sequence[int] = (0, 0, 0),
+        channels_axis: Literal["first", "last"] = "first",
         activation: Callable = jax.nn.relu,
     ) -> Callable[..., Self]:
         return partial(
@@ -111,5 +112,6 @@ class CNN(eqx.Module):
             kernel_sizes=kernel_sizes,
             strides=strides,
             padding=padding,
+            channels_axis=channels_axis,
             activation=activation,
         )

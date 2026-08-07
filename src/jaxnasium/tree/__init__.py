@@ -1,6 +1,7 @@
 from ._tree import (
     add as add,
     batch_sum as batch_sum,
+    clip as clip,
     concatenate as concatenate,
     gather_actions as gather_actions,
     get_first as get_first,
@@ -9,6 +10,7 @@ from ._tree import (
     mean as mean,
     mul as mul,
     ones_like as ones_like,
+    split_key_like as split_key_like,
     split_key_like_structure as split_key_like_structure,
     stack as stack,
     sum as sum,

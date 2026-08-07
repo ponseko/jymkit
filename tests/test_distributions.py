@@ -6,8 +6,8 @@ from jaxnasium.algorithms.core import TanhNormalFactory
 from jaxnasium.algorithms.core._distributions import (
     DistraxContainer,
     TanhNormal,
-    _transpose_tree_of_tuples,
 )
+from jaxnasium.tree._tree import _transpose_tree_of_tuples
 
 SEED = jax.random.PRNGKey(0)
 
@@ -195,20 +195,6 @@ def test_mode_matches_shifted_scaled_tanh():
     mean = jnp.array([0.5, -1.0, 0.0])
     dist = TanhNormal(mean=mean, std=jnp.ones((3,)), shift=1.0, scale=2.0)
     assert jnp.allclose(dist.mode(), 1.0 + 2.0 * jnp.tanh(mean))
-
-
-def test_log_prob_is_finite_even_at_boundary():
-    dist = TanhNormal(mean=jnp.zeros((3,)), std=jnp.ones((3,)))
-    # Values exactly at the tanh boundary would blow up without clipping.
-    lp = dist.log_prob(jnp.array([-1.0, 0.0, 1.0]))
-    assert lp.shape == (3,)
-    assert jnp.all(jnp.isfinite(lp))
-
-
-def test_sample_and_log_prob_consistent_with_log_prob():
-    dist = TanhNormal(mean=jnp.zeros((5,)), std=jnp.ones((5,)))
-    sample, log_prob = dist.sample_and_log_prob(seed=SEED)
-    assert jnp.allclose(log_prob, dist.log_prob(sample), atol=1e-4)
 
 
 def test_batch_and_event_shape():
