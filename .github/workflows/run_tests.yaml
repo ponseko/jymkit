@@ -104,7 +104,7 @@ jobs:
 
       - name: Install external dependencies
         run: |
-          uv run pip install -r tests/requirements.txt
+          uv pip install -r tests/requirements.txt
 
       - name: Run saving/loading tests
         run: uv run --no-sync pytest -m "saving_loading" -v -s
