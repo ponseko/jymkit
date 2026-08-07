@@ -4,7 +4,13 @@ from functools import partial
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PRNGKeyArray, PyTree
+
+DEFAULT_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, np.sqrt(2))
+POLICY_HEAD_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, 0.01)
+VALUE_HEAD_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, 1.0)
+DEFAULT_BIAS_INIT = 0.0
 
 
 @eqx.filter_jit
@@ -12,8 +18,8 @@ def set_weight_bias(
     key: PRNGKeyArray,
     network: PyTree[eqx.Module],
     weight_init: Callable[..., jax.nn.initializers.Initializer]
-    | None = jax.nn.initializers.orthogonal,
-    bias_init: float | None = 0.0,
+    | None = DEFAULT_WEIGHT_INIT,
+    bias_init: float | None = DEFAULT_BIAS_INIT,
 ):
     """Sets all `eqx.nn.Linear` and `eqx.nn.Conv` layers in
     a network to a given weight and bias initialization.
@@ -56,5 +62,5 @@ def set_weight_bias(
 
 
 rl_initialization = partial(
-    set_weight_bias, weight_init=jax.nn.initializers.orthogonal, bias_init=0.0
+    set_weight_bias, weight_init=DEFAULT_WEIGHT_INIT, bias_init=DEFAULT_BIAS_INIT
 )
