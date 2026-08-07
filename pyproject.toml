@@ -85,4 +85,4 @@ markers = [
     "saving_loading: test_saving_loading seperated due to higher python requirement"
 ]
 testpaths = ["tests"]
-addopts = "-m 'not learn and not external'"
+addopts = "-m 'not learn and not external and not saving_loading'"
