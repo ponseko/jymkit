@@ -299,3 +299,128 @@ def test_combined_wrappers():
         timestep, state = env.step(step_keys, state, actions)
         assert jnp.all(jnp.isfinite(timestep.observation))
         assert jnp.all(jnp.isfinite(timestep.reward))
+
+
+def _stack_action_env(action_space, obs_space=None, multi_agent=False):
+    return make_proxy_env(
+        obs_space or obs_box_vector, lambda: action_space, multi_agent=multi_agent
+    )
+
+
+def test_stack_action_space_wrapper_stacks_homogeneous_spaces():
+    env = _stack_action_env(tuple(Discrete(20) for _ in range(4)))
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    space = wrapped.action_space
+    assert isinstance(space, MultiDiscrete)
+    assert list(np.asarray(space.nvec)) == [20, 20, 20, 20]
+
+    # the wrapped environment still sees its own action structure
+    _, _, timestep = _run_single_reset_step(wrapped)
+    received = timestep.info["received_action"]
+    assert jax.tree.structure(received) == jax.tree.structure(env.action_space)
+
+
+def test_stack_action_space_wrapper_flattens_nesting():
+    """Arbitrary nesting collapses onto one axis; `MultiDiscrete` leaves keep their dims."""
+    env = _stack_action_env(
+        {
+            "move": (Discrete(3), Discrete(3)),
+            "look": MultiDiscrete(np.array([3, 3])),
+        }
+    )
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    assert list(np.asarray(wrapped.action_space.nvec)) == [3, 3, 3, 3]  # type: ignore
+
+    _, _, timestep = _run_single_reset_step(wrapped)
+    received = timestep.info["received_action"]
+    assert received["move"][0].shape == () and received["move"][1].shape == ()
+    assert received["look"].shape == (2,)
+
+
+def test_stack_action_space_wrapper_round_trips_actions():
+    env = _stack_action_env(tuple(Discrete(9) for _ in range(3)))
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    _, state = wrapped.reset(SEED)
+    timestep, _ = wrapped.step(SEED, state, jnp.array([3, 0, 8]))
+
+    assert tuple(int(a) for a in timestep.info["received_action"]) == (3, 0, 8)
+
+
+@pytest.mark.parametrize(
+    "action_space",
+    [
+        Discrete(7),  # a single space: nothing to stack
+        (Discrete(4), Discrete(9)),  # different number of actions
+        (Box(low=-1.0, high=1.0, shape=(3,)),) * 2,  # not discrete
+    ],
+    ids=["single", "heterogeneous", "continuous"],
+)
+def test_stack_action_space_wrapper_passes_through_unstackable_spaces(action_space):
+    env = _stack_action_env(action_space)
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    assert jax.tree.structure(wrapped.action_space) == jax.tree.structure(action_space)
+    _, _, timestep = _run_single_reset_step(wrapped)
+    received = timestep.info["received_action"]
+    assert jax.tree.structure(received) == jax.tree.structure(action_space)
+
+
+def test_stack_action_space_wrapper_multi_agent():
+    action_space = {
+        "agent_0": (Discrete(6), Discrete(6), Discrete(6)),
+        "agent_1": (Discrete(6), Discrete(6), Discrete(6)),
+    }
+    obs_space = {"agent_0": obs_box_vector(), "agent_1": obs_box_vector()}
+    env = _stack_action_env(action_space, lambda: obs_space, multi_agent=True)
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    space = wrapped.action_space
+    assert set(space) == {"agent_0", "agent_1"}  # type: ignore
+    for agent_space in space.values():  # type: ignore
+        assert isinstance(agent_space, MultiDiscrete)
+        assert list(np.asarray(agent_space.nvec)) == [6, 6, 6]
+
+    _, _, timestep = _run_single_reset_step(wrapped)
+    assert jax.tree.structure(timestep.info["received_action"]) == jax.tree.structure(
+        action_space
+    )
+
+
+def test_stack_action_space_wrapper_stacks_action_masks():
+    """Action mask must survive as well !"""
+    mask_space = Box(
+        low=np.zeros(4, bool), high=np.ones(4, bool), shape=(4,), dtype=bool
+    )
+    obs_space = jym.AgentObservation(
+        observation=obs_box_vector(), action_mask=(mask_space, mask_space)
+    )
+    env = _stack_action_env((Discrete(4), Discrete(4)), lambda: obs_space)
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    assert wrapped.observation_space.action_mask.shape == (2, 4)  # type: ignore
+    obs, _ = wrapped.reset(SEED)
+    assert obs.action_mask.shape == (2, 4)
+
+
+def test_stack_action_space_wrapper_leaves_passed_through_masks_alone():
+    def mask_space(n):
+        return Box(low=np.zeros(n, bool), high=np.ones(n, bool), shape=(n,), dtype=bool)
+
+    obs_space = jym.AgentObservation(
+        observation=obs_box_vector(),
+        action_mask=(mask_space(4), mask_space(4), mask_space(4), mask_space(6)),
+    )
+    env = _stack_action_env(
+        (Discrete(4), Discrete(4), Discrete(4), Discrete(6)), lambda: obs_space
+    )
+    wrapped = jym.StackActionSpaceWrapper(env)
+
+    declared = jax.tree.map(lambda s: s.shape, wrapped.observation_space.action_mask)  # type: ignore
+    obs, _ = wrapped.reset(SEED)
+    actual = jax.tree.map(lambda m: m.shape, obs.action_mask)
+
+    assert declared == ((3, 4), (6,))
+    assert actual == declared

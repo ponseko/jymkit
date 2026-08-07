@@ -117,7 +117,7 @@ class Registry:
         """
         try:
             if package == "gymnax":
-                import gymnax
+                import gymnax  # type: ignore
 
                 env, _ = gymnax.make(env_name, **env_kwargs)
                 if wrap:

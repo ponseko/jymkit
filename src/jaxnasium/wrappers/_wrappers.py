@@ -2,7 +2,8 @@ import logging
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from functools import partial
+from typing import Any, Literal, overload
 
 import equinox as eqx
 import jax
@@ -13,12 +14,13 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 import jaxnasium as jym
 from jaxnasium._environment import (
     ORIGINAL_OBSERVATION_KEY,
+    AgentObservation,
     Environment,
     TEnvState,
     TimeStep,
     TObservation,
 )
-from jaxnasium._spaces import Discrete, MultiDiscrete, Space
+from jaxnasium._spaces import Box, Discrete, MultiDiscrete, Space
 
 from ._util import partition_obs_and_masks
 
@@ -574,20 +576,35 @@ class MetaParamsWrapper(Wrapper):
         return env.step(key, state, action)
 
 
+@overload
+def _actions_per_dimension(space: Space, error: Literal[True]) -> list[int]: ...
+
+
+@overload
+def _actions_per_dimension(space: Space, error: Literal[False]) -> list[int] | None: ...
+
+
+def _actions_per_dimension(space: Space, error: bool = True) -> list[int] | None:
+    """Number of actions along each dimension of a (multi-)discrete space, else `None`.
+
+    `Discrete(n)` has the single dimension `[n]`; `MultiDiscrete(nvec)` has one per entry of `nvec` [n, n, n].
+
+    Raises an error if `error` is `True` and the space is not (multi-)discrete.
+    """
+    if hasattr(space, "n"):  # Discrete
+        return [int(space.n)]  # type: ignore
+    if hasattr(space, "nvec"):  # MultiDiscrete
+        return [int(n) for n in np.atleast_1d(space.nvec)]  # type: ignore
+    if error:
+        raise ValueError(f"Space {space} is not (multi-)discrete.")
+    return None
+
+
 def _to_single_discrete_space(spaces):
     """Combines a PyTree of (multi-)discrete spaces to a single discrete space."""
 
-    n_values = []
     spaces = jax.tree.leaves(spaces)
-    for space in spaces:
-        if hasattr(space, "n"):
-            n_values.append(int(space.n))
-        elif hasattr(space, "nvec"):
-            n_values.append(int(np.prod(np.array(space.nvec))))
-        else:
-            raise ValueError(
-                f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
-            )
+    n_values = [int(np.prod(_actions_per_dimension(s, error=True))) for s in spaces]
 
     combined_num_actions = int(np.prod(np.array(n_values)))
     logger.info(
@@ -602,19 +619,12 @@ def _from_single_discrete_space(target_action_space: PyTree[Space], action: int)
     original_actions = []
     spaces, space_structure = jax.tree.flatten(target_action_space)
     for space in spaces:
-        if hasattr(space, "n"):
-            original_actions.append(action % space.n)
-            action = action // space.n
-        elif hasattr(space, "nvec"):
-            _actions = []
-            for n in space.nvec:
-                _actions.append(action % n)
-                action = action // n
-            original_actions.append(jnp.array(_actions))
-        else:
-            raise ValueError(
-                f"Cannot flatten space: {space}. Only (Multi-)Discrete spaces are supported."
-            )
+        actions = []
+        for n in _actions_per_dimension(space, error=True):
+            actions.append(action % n)
+            action = action // n
+        # a `Discrete` leaf is a scalar; a `MultiDiscrete` stays as array
+        original_actions.append(actions[0] if space.shape == () else jnp.array(actions))
 
     return jax.tree.unflatten(space_structure, original_actions)
 
@@ -663,5 +673,206 @@ class FlattenActionSpaceWrapper(Wrapper):
 
     @property
     def original_action_space(self) -> Space:
+        """Return the original action space of the environment."""
+        return self._env.action_space
+
+
+def _stackable_groups(space_tree: PyTree[Space]) -> list[list[int]]:
+    """We group action spaces into groups of homogeneous spaces, such that these
+    can be stacked into a single `MultiDiscrete` space and ungrouped into
+    the original space later.
+
+    We cannot just flatten and unflatten, because we want to
+    flatten -> group homogeneous -> stack in MultiDiscrete.
+    So we need to keep track of the original indices of the groupings.
+    """
+    groups: list[list[int]] = []
+    by_num_actions: dict[int, list[int]] = {}
+    for index, space in enumerate(jax.tree.leaves(space_tree)):
+        dimensions = _actions_per_dimension(space, error=False)
+        if dimensions is None or len(set(dimensions)) != 1:  # cont or heterogeneous
+            groups.append([index])
+            continue
+        group = by_num_actions.setdefault(dimensions[0], [])
+        if not group:
+            groups.append(group)  # first member
+        group.append(index)
+    return groups
+
+
+def _stacks_anything(space_tree: PyTree[Space]) -> bool:
+    """Checks if there are any groups in the action space that can be stacked.
+    Else, we typically just ignore operations."""
+    return any(len(group) > 1 for group in _stackable_groups(space_tree))
+
+
+def _stack_action_space(space_tree: PyTree[Space]) -> PyTree[Space]:
+    """Merge each group of `space_tree`'s leaves into a single `MultiDiscrete`."""
+    spaces = jax.tree.leaves(space_tree)
+
+    stacked = []
+    for group in _stackable_groups(space_tree):
+        members = [spaces[index] for index in group]
+        if len(group) == 1:
+            stacked.append(members[0])
+            continue
+        # lay every member's dimensions end to end in one `nvec`
+        nvec = [n for s in members for n in _actions_per_dimension(s, error=True)]
+        stacked.append(MultiDiscrete(nvec=np.array(nvec), dtype=members[0].dtype))
+
+    return stacked[0] if len(stacked) == 1 else tuple(stacked)
+
+
+def _stack_action_masks(space_tree: PyTree[Space], mask_tree: PyTree) -> PyTree[Array]:
+    masks = jax.tree.leaves(mask_tree)
+
+    stacked = []
+    for group in _stackable_groups(space_tree):
+        members = [masks[index] for index in group]
+        if len(group) == 1:
+            stacked.append(members[0])
+            continue
+        rows = [jnp.reshape(m, (-1, m.shape[-1])) for m in members]
+        stacked.append(jnp.concatenate(rows, axis=0))
+
+    return stacked[0] if len(stacked) == 1 else tuple(stacked)
+
+
+def _stack_mask_spaces(space_tree: PyTree[Space], _=None) -> PyTree[Box]:
+    """The action-mask *spaces* mirroring the stacked action space."""
+
+    def mask_space(space):
+        dimensions = _actions_per_dimension(space, error=False)
+        # continuous will now also get a mask; but algorithms should just ignore it
+        shape = (*space.shape, dimensions[0]) if dimensions else space.shape
+        return Box(
+            low=np.zeros(shape, dtype=bool),
+            high=np.ones(shape, dtype=bool),
+            shape=shape,
+            dtype=bool,
+        )
+
+    return jax.tree.map(mask_space, _stack_action_space(space_tree))
+
+
+def _unstack_action(space_tree: PyTree[Space], action) -> PyTree[Array]:
+    """Split a stacked action back into the the original environment's action pytree."""
+    spaces, structure = jax.tree.flatten(space_tree)
+    groups = _stackable_groups(space_tree)
+    # a single group was returned bare rather than in a tuple, so re-wrap it
+    per_group = list(action) if len(groups) > 1 else [action]
+
+    actions: list[Any] = [None] * len(spaces)
+    for group, group_action in zip(groups, per_group):
+        if len(group) == 1:
+            actions[group[0]] = group_action
+            continue
+        offset = 0
+        for index in group:
+            space = spaces[index]
+            if space.shape == ():  # Discrete
+                chunk = group_action[..., offset]
+                offset += 1
+            else:  # MultiDiscrete
+                size = space.shape[0]
+                chunk = group_action[..., offset : offset + size]
+                offset += size
+            actions[index] = chunk.astype(space.dtype)
+
+    return jax.tree.unflatten(structure, actions)
+
+
+class StackActionSpaceWrapper(Wrapper):
+    """Wrapper to stack homogeneous discrete action spaces into a single `MultiDiscrete`.
+
+    As an example:
+    ```python
+    (Discrete(20), Discrete(20), Discrete(20))  # -> MultiDiscrete([20, 20, 20])
+    (Discrete(10), Discrete(10), Discrete(10), Discrete(5)) -> (MultiDiscrete([10, 10, 10]), Discrete(5))
+    ```
+
+    This may be useful because Jaxnasium algorithms will vmap homogenous MultiDiscrete spaces, while
+    homogeneous Discrete spaces in a pytree are simply jax.tree.mapped over. Combining them into
+    a single MultiDiscrete may then allow for more performance during runtime and compilation.
+    Noteably, the environment could also define their action space as a single MultiDiscrete,
+    but this wrapper allows for a more flexible definition of the action space, while preserving
+    performance benefits.
+
+    Continuous spaces are not stacked, and are passed through as a no-op.
+    NOTE: continuous could be stacked as well, it is currently just not implemented.
+
+    **Arguments:**
+
+    - `_env`: Environment to wrap.
+    """
+
+    def _per_agent(self, fn: Callable, *trees):
+        if self.multi_agent:
+            return jym.tree.map_one_level(fn, *trees)
+        return fn(*trees)
+
+    def _replace_masks(self, observation, action_space, *, new_mask_fn: Callable):
+        """Apply `new_mask(action_space, mask)` to every mask (where present)"""
+
+        if not isinstance(observation, AgentObservation):
+            return observation
+        if observation.action_mask is None:
+            return observation
+        if not _stacks_anything(action_space):
+            return observation
+        return observation._replace(
+            action_mask=new_mask_fn(action_space, observation.action_mask)
+        )
+
+    def __check_init__(self):
+        stacks = self._per_agent(_stacks_anything, self._env.action_space)
+        if not any(jax.tree.leaves(stacks)):
+            logger.warning(
+                f"{self.__class__.__name__} left the action space unchanged "
+                f"({self._env.action_space}): no two of its leaves are discrete "
+                "over the same number of actions. The wrapper is a no-op."
+            )
+
+    def reset(self, key: PRNGKeyArray) -> tuple[TObservation, Any]:  # pyright: ignore[reportInvalidTypeVarUse]
+        obs, env_state = self._env.reset(key)
+        replace_mask_fn = partial(self._replace_masks, new_mask_fn=_stack_action_masks)
+        obs = self._per_agent(replace_mask_fn, obs, self._env.action_space)
+        return obs, env_state
+
+    def step(
+        self, key: PRNGKeyArray, state: TEnvState, action: PyTree[Real[Array, "..."]]
+    ) -> tuple[TimeStep, TEnvState]:
+        def restore(action_space, agent_action):
+            if not _stacks_anything(action_space):
+                return agent_action  # unchanged space -> unchanged action
+            return _unstack_action(action_space, agent_action)
+
+        action = self._per_agent(restore, self.original_action_space, action)
+        timestep, env_state = self._env.step(key, state, action)
+        replace_mask_fn = partial(self._replace_masks, new_mask_fn=_stack_action_masks)
+        observation = self._per_agent(
+            replace_mask_fn, timestep.observation, self._env.action_space
+        )
+        return timestep._replace(observation=observation), env_state
+
+    @property
+    def action_space(self) -> Space | PyTree[Space]:
+        def stack(action_space):
+            if not _stacks_anything(action_space):
+                return action_space  # No changes
+            return _stack_action_space(action_space)
+
+        return self._per_agent(stack, self._env.action_space)
+
+    @property
+    def observation_space(self) -> Space | PyTree[Space]:
+        # Have to adjust the mask if present for every agent:
+        replace_mask_fn = partial(self._replace_masks, new_mask_fn=_stack_mask_spaces)
+        return self._per_agent(
+            replace_mask_fn, self._env.observation_space, self._env.action_space
+        )
+
+    @property
+    def original_action_space(self) -> Space | PyTree[Space]:
         """Return the original action space of the environment."""
         return self._env.action_space

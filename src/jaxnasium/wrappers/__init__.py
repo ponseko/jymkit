@@ -17,6 +17,7 @@ from ._wrappers import (
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
     ScaleRewardWrapper as ScaleRewardWrapper,
+    StackActionSpaceWrapper as StackActionSpaceWrapper,
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     Wrapper as Wrapper,
