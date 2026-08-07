@@ -11,6 +11,9 @@ from _test_utils import get_valid_test_algs
 import jaxnasium as jym
 import jaxnasium.algorithms as jxalgs
 
+pytestmark = pytest.mark.saving_loading
+
+
 TEST_ENV = jym.make("CartPole-v1")
 
 

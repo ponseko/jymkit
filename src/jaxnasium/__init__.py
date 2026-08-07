@@ -31,6 +31,7 @@ from .wrappers import (
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
     PgxWrapper as PgxWrapper,
     ScaleRewardWrapper as ScaleRewardWrapper,
+    StackActionSpaceWrapper as StackActionSpaceWrapper,
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     Wrapper as Wrapper,

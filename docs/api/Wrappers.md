@@ -16,6 +16,8 @@
 
 ::: src.jaxnasium.FlattenActionSpaceWrapper
 
+::: src.jaxnasium.StackActionSpaceWrapper
+
 ## Utility functions
 
 ::: src.jaxnasium.is_wrapped 
