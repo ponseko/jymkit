@@ -1,6 +1,7 @@
 from typing import Any
 
 import equinox as eqx
+import jax
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import (
@@ -64,12 +65,15 @@ class BraxWrapper(Wrapper):
     def observation_space(self) -> Any:
         from brax.envs.wrappers import gym as braxGym
 
-        obs_space = braxGym.GymWrapper(self._env).observation_space
+        # ensuring space properties are not tracers:
+        with jax.ensure_compile_time_eval():
+            obs_space = braxGym.GymWrapper(self._env).observation_space
         return gymnasium_to_jaxnasium_space(obs_space)
 
     @property
     def action_space(self) -> Any:
         from brax.envs.wrappers import gym as braxGym
 
-        action_space = braxGym.GymWrapper(self._env).action_space
+        with jax.ensure_compile_time_eval():
+            action_space = braxGym.GymWrapper(self._env).action_space
         return gymnasium_to_jaxnasium_space(action_space)

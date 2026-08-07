@@ -2,6 +2,7 @@ from typing import Any
 
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import AgentObservation, TEnvState, TimeStep, TObservation
@@ -67,8 +68,8 @@ class PgxWrapper(Wrapper):
         num_players = self._env.num_players
         shape = self._env.observation_shape
         obs_space = Box(
-            low=jnp.full(shape, -10),
-            high=jnp.full(shape, 10),
+            low=np.full(shape, -10),
+            high=np.full(shape, 10),
             shape=shape,
             dtype=jnp.int32,
         )

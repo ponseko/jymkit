@@ -74,24 +74,27 @@ class JaxMARLWrapper(Wrapper):
     def observation_space(self) -> dict[str, Space]:
         # Extract the observation space for each agent and return it as a dictionary
         agents = self._env.agents
-        try:
-            obs_spaces = {str(a): self._env.observation_space(a) for a in agents}
-        except TypeError:
-            # space does not accept an agent argument
-            # in those cases, JaxMARL uses the same space for all agents
-            obs_space = self._env.observation_space()
-            obs_spaces = {str(a): obs_space for a in agents}
+        # Ensure that the space properties are not tracers:
+        with jax.ensure_compile_time_eval():
+            try:
+                obs_spaces = {str(a): self._env.observation_space(a) for a in agents}
+            except TypeError:
+                # space does not accept an agent argument
+                # in those cases, JaxMARL uses the same space for all agents
+                obs_space = self._env.observation_space()
+                obs_spaces = {str(a): obs_space for a in agents}
         return gymnasium_to_jaxnasium_space(obs_spaces)  # type: ignore[reportGeneralTypeIssues]
 
     @property
     def action_space(self) -> dict[str, Space]:
         # Extract the action space for each agent and return it as a dictionary
         agents = self._env.agents
-        try:
-            spaces = {str(a): self._env.action_space(a) for a in agents}
-        except TypeError:
-            # space does not accept an agent argument
-            # in those cases, JaxMARL uses the same space for all agents
-            action_space = self._env.action_space()
-            spaces = {str(a): action_space for a in agents}
+        with jax.ensure_compile_time_eval():
+            try:
+                spaces = {str(a): self._env.action_space(a) for a in agents}
+            except TypeError:
+                # space does not accept an agent argument
+                # in those cases, JaxMARL uses the same space for all agents
+                action_space = self._env.action_space()
+                spaces = {str(a): action_space for a in agents}
         return gymnasium_to_jaxnasium_space(spaces)  # type: ignore[reportGeneralTypeIssues]

@@ -11,7 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class MLP(eqx.Module):
-    """Simple MLP architecture. Final hidden size is the output features."""
+    """Simple MLP architecture. Final hidden size is the output features.
+    Final outputs are non-linear (unless the activation is set to identity).
+    Attach additional layers if a different final activation is desired.
+    """
 
     layers: list[eqx.nn.Linear]
     in_features: int = eqx.field(static=True)
@@ -44,9 +47,9 @@ class MLP(eqx.Module):
             in_features = hidden_dim
 
     def __call__(self, x, *, key: PRNGKeyArray | None = None):
-        for layer in self.layers[:-1]:
+        for layer in self.layers:
             x = self.activation(layer(x, key=key))
-        return self.layers[-1](x, key=key)
+        return x
 
     @classmethod
     def with_params(
