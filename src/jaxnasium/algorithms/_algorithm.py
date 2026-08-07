@@ -327,7 +327,10 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
             trainers = jax.tree.unflatten(agent_structure, trainers)
 
             return MultiAgentWrapper(
-                map_multi_agent(lambda k, e, t: cls(k, e, t), key, envs, trainers),
+                # don't vmap during construction
+                map_multi_agent(
+                    lambda k, e, t: cls(k, e, t), key, envs, trainers, vmap=False
+                ),
                 trainer=trainer,  # the wrapper keeps the full trainer
             )
         return None  # continue with regular __call__

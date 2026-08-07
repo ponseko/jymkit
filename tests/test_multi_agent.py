@@ -1,10 +1,14 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from _proxy_test_envs import make_proxy_env, obs_ma_dict_homogeneous
+from _proxy_test_envs import (
+    make_proxy_env,
+    obs_ma_dict_heterogeneous,
+    obs_ma_dict_homogeneous,
+)
 
 from jaxnasium.algorithms import DQN
-from jaxnasium.algorithms.core import Transition
+from jaxnasium.algorithms.core import Transition, _multi_agent
 from jaxnasium.algorithms.core._multi_agent import MultiAgentWrapper, map_multi_agent
 
 SEED = jax.random.PRNGKey(0)
@@ -210,3 +214,107 @@ def test_with_hyperparams_splits_per_agent_values():
 
     assert {k: a.trainer.gamma for k, a in agent.agents.items()} == gamma
     assert agent.trainer.gamma == gamma
+
+
+def _count_traces(states, **kwargs):
+    """How many times `f` is traced when mapped over `states`."""
+    traces = []
+    result = map_multi_agent(
+        lambda s, *a: (traces.append(1), s * 2)[1], states, **kwargs
+    )
+    return len(traces), result
+
+
+def test_map_multi_agent_vmaps_homogeneous_agents():
+    """The point of the vmap path: one trace of `f` regardless of agent count."""
+    states = {f"a{i}": jnp.array([float(i)]) for i in range(6)}
+    assert _count_traces(states)[0] == 1
+    assert _count_traces(states, vmap=False)[0] == 6
+
+
+def test_map_multi_agent_loops_over_heterogeneous_agents():
+    """Differing shapes have no shared agent axis, so `f` is traced per agent."""
+    states = [jnp.array([1.0, 2.0]), jnp.array([3.0, 4.0, 5.0])]
+
+    traces, result = _count_traces(states)
+
+    assert traces == 2
+    assert jnp.allclose(result[0], jnp.array([2.0, 4.0]))
+    assert jnp.allclose(result[1], jnp.array([6.0, 8.0, 10.0]))
+
+
+def test_map_multi_agent_vmap_matches_the_loop():
+    states = {"a0": jnp.array([1.0, 2.0]), "a1": jnp.array([3.0, 4.0])}
+    obs = {"a0": jnp.array([0.1, 0.2]), "a1": jnp.array([0.3, 0.4])}
+
+    def add(s, o, shared):
+        return s + o + shared
+
+    looped = map_multi_agent(add, states, obs, 10.0, vmap=False)
+    vmapped = map_multi_agent(add, states, obs, 10.0)
+
+    for key in states:
+        assert jnp.allclose(looped[key], vmapped[key])
+
+
+def test_map_multi_agent_vmap_keeps_the_special_cased_arguments():
+    """Key splitting, `Transition` transposition and tuple returns survive the vmap path."""
+    states = {"a0": jnp.array(0), "a1": jnp.array(0)}
+    keyed = map_multi_agent(
+        lambda key, s: s + jax.random.randint(key, (), 0, 100_000), SEED, states
+    )
+    assert keyed["a0"] != keyed["a1"]
+
+    merged = map_multi_agent(
+        lambda t: t.replace(reward=t.reward * 2.0), _multi_agent_transition()
+    )
+    assert isinstance(merged, Transition)
+    assert jnp.allclose(merged.reward["a0"], 2.0)
+    assert jnp.allclose(merged.reward["a1"], 4.0)
+
+    plus, minus = map_multi_agent(lambda s: (s + 1, s - 1), states)
+    assert plus["a0"] == 1 and minus["a1"] == -1
+
+
+def test_map_multi_agent_batch_size_env_var_chunks_the_vmap(monkeypatch):
+    states = {f"a{i}": jnp.array([float(i)]) for i in range(6)}
+    reference = map_multi_agent(lambda s: s * 2, states, vmap=False)
+
+    monkeypatch.setenv("JAXNASIUM_MULTI_AGENT_BATCH_SIZE", "2")
+    chunked = map_multi_agent(lambda s: s * 2, states)
+
+    for key in states:
+        assert jnp.allclose(reference[key], chunked[key])
+
+
+def test_multi_agent_train_vmaps_homogeneous_agents(monkeypatch):
+    """Homogeneous agents are vmapped."""
+    calls = []
+    original = _multi_agent._vmap_over_agents
+    monkeypatch.setattr(
+        _multi_agent,
+        "_vmap_over_agents",
+        lambda *a, **k: (calls.append(1), original(*a, **k))[1],
+    )
+
+    agent = DQN(**SMALL_DQN).train(SEED, _ma_env())
+
+    assert calls, "homogeneous agents should have taken the vmap path"
+    assert isinstance(agent, MultiAgentWrapper)
+
+
+def test_multi_agent_train_loops_over_heterogeneous_agents(monkeypatch):
+    """Agents with differing observation are not vmapped"""
+    calls = []
+    original = _multi_agent._vmap_over_agents
+    monkeypatch.setattr(
+        _multi_agent,
+        "_vmap_over_agents",
+        lambda *a, **k: (calls.append(1), original(*a, **k))[1],
+    )
+
+    env = make_proxy_env(obs_ma_dict_heterogeneous, multi_agent=True)
+    agent = DQN(**SMALL_DQN).train(SEED, env)
+
+    assert not calls, "heterogeneous agents must fall back to the per-agent loop"
+    assert isinstance(agent, MultiAgentWrapper)
