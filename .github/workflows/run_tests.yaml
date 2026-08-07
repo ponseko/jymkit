@@ -104,7 +104,7 @@ jobs:
 
       - name: Install external dependencies
         run: |
-          uv pip install -r tests/requirements.txt
+          uv pip install jaxon==2.0.0
 
       - name: Run saving/loading tests
         run: uv run --no-sync pytest -m "saving_loading" -v -s
@@ -147,7 +147,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: uv sync --group dev --extra algs
+        run: uv sync --group dev --extra algs --group external
 
       - name: Install external dependencies
         run: |
