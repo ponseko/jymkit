@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any, Self
+from typing import Any
 
 import equinox as eqx
 import jax
@@ -26,130 +28,8 @@ from .agent_networks import ActorNetwork, ValueNetwork
 logger = logging.getLogger(__name__)
 
 
-class PPOAgent(RLAgent):
-    actor: ActorNetwork
-    critic: ValueNetwork
-    optimizer_state: optax.OptState
-    normalizer: Normalizer
-
-    def __init__(self, key, env: Environment, trainer: "PPO"):
-        actor_key, critic_key = jax.random.split(key)
-        self.actor = ActorNetwork(
-            env.observation_space,
-            env.action_space,
-            key=actor_key,
-            **trainer.actor_kwargs,
-        )
-        self.critic = ValueNetwork(
-            env.observation_space,
-            key=critic_key,
-            **trainer.critic_kwargs,
-        )
-        self.optimizer_state = trainer.optimizer.init(
-            eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
-        )
-
-        self.normalizer = Normalizer(
-            obs_space=env.observation_space,
-            normalize_obs=trainer.normalize_observations,
-            normalize_rew=trainer.normalize_rewards,
-            gamma=trainer.gamma,
-            rew_shape=(trainer.num_envs,),
-        )
-
-    def get_action(
-        self,
-        key: PRNGKeyArray,
-        observation: PyTree,
-        deterministic: bool = False,
-        get_log_prob: bool = False,
-    ) -> Array | tuple[Array, Array]:
-        observation = self.normalizer.normalize_obs(observation)
-        action_dist = self.actor(observation)
-        if deterministic:
-            assert not get_log_prob, "Cannot get log prob in deterministic mode"
-            return action_dist.mode()
-        if get_log_prob:
-            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
-        return action_dist.sample(seed=key)
-
-    def get_value(self, observation: PyTree):
-        observation = self.normalizer.normalize_obs(observation)
-        return self.critic(observation)
-
-    def update_normalizer(self, batch: Transition):
-        return self.replace(normalizer=self.normalizer.update(batch))
-
-    def normalize_observation(self, observations: PyTree):
-        return self.normalizer.normalize_obs(observations)
-
-    def normalize_reward(self, rewards: PyTree):
-        return self.normalizer.normalize_reward(rewards)
-
-    def update_params(self, batch: Transition, trainer: "PPO"):
-        @eqx.filter_grad
-        def __ppo_los_fn(
-            params: tuple[ActorNetwork, ValueNetwork],
-            train_batch: Transition,
-        ):
-            assert train_batch.advantage is not None
-            assert train_batch.return_ is not None
-            assert train_batch.log_prob is not None
-            assert train_batch.value is not None
-
-            actor, critic = params
-            action_dist = jax.vmap(actor)(train_batch.observation)
-            log_prob = action_dist.log_prob(train_batch.action)
-            entropy = action_dist.entropy()
-            value = jax.vmap(critic)(train_batch.observation)
-            init_log_prob = train_batch.log_prob
-
-            ratio = jnp.exp(log_prob - init_log_prob)
-            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
-                train_batch.advantage.std() + 1e-8
-            )
-            actor_loss1 = _advantages * ratio
-
-            actor_loss2 = (
-                jnp.clip(ratio, 1.0 - trainer.clip_coef, 1.0 + trainer.clip_coef)
-                * _advantages
-            )
-            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
-
-            # critic loss
-            value_pred_clipped = train_batch.value + (
-                jnp.clip(
-                    value - train_batch.value,
-                    -trainer.clip_coef_vf,
-                    trainer.clip_coef_vf,
-                )
-            )
-            value_losses = jnp.square(value - train_batch.return_)
-            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
-            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
-
-            update_count = jym.tree.get_first(self.optimizer_state, "count")
-            ent_coef = trainer.ent_coef_schedule(update_count)
-
-            # Total loss
-            total_loss = (
-                actor_loss + trainer.vf_coef * value_loss - ent_coef * entropy.mean()
-            )
-            return total_loss  # , (actor_loss, value_loss, entropy)
-
-        actor, critic = self.actor, self.critic
-        grads = __ppo_los_fn((actor, critic), batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
-        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
-        return self.replace(
-            actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
-        )
-
-
 class PPO(RLAlgorithm):
     """Proximal Policy Optimization (PPO) algorithm implementation."""
-
-    agent: PPOAgent = eqx.field(default=None)
 
     learning_rate_start: float = 2.5e-4
     learning_rate_end: float | None = eqx.field(static=True, default=None)
@@ -214,16 +94,17 @@ class PPO(RLAlgorithm):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
     @eqx.filter_jit
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
-        return replace(self, agent=PPOAgent(key=key, env=env, trainer=self))
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> PPOAgent:
+        return PPOAgent(key=key, env=env, trainer=self)
 
     @eqx.filter_jit
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
+    def train(
+        self, key: PRNGKeyArray, env: Environment, agent: PPOAgent | None = None
+    ) -> PPOAgent:
         env = self.__check_env__(env, vectorized=True)
-        self = replace(self, **hyperparams)
 
-        if not self.is_initialized:
-            self = self.init_agent(key, env)
+        if agent is None:
+            agent = self.init_agent(key, env)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
         train_iteration_fn = scan_callback(
@@ -234,15 +115,14 @@ class PPO(RLAlgorithm):
         )
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (self, env_state, obsv, key)
+        runner_state = (agent, env_state, obsv, key)
         runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
-        updated_self = runner_state[0]
-        return updated_self
+        updated_agent = runner_state[0]
+        return updated_agent
 
-    @staticmethod
-    def train_iteration(runner_state, train_iter, *, env: Environment):
+    def train_iteration(self, runner_state, train_iter, *, env: Environment):
         """
         Performs a single training iteration (A single `Collect data + Update` run).
 
@@ -251,16 +131,16 @@ class PPO(RLAlgorithm):
         """
 
         # Do rollout of single trajactory
-        self: PPO = runner_state[0]
+        agent: PPOAgent = runner_state[0]
         rollout_state = runner_state[1:]
         (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-            rollout_state, env
+            agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
 
-        # Normalize the train_batch before updating the normalizer
-        train_batch = trajectory_batch.normalize(self.agent.normalizer)
-        agent = self.agent.update_normalizer(trajectory_batch)
+        # Normalize the train_batch before updating the normalizer so stats are the same as during rollout
+        train_batch = trajectory_batch.normalize(agent.normalizer)
+        agent = agent.update_normalizer(trajectory_batch)
 
         # Calculate GAE and returns, add to trajectory batch
         _, (advantages, returns) = (
@@ -281,27 +161,28 @@ class PPO(RLAlgorithm):
 
         # Update agent over multiple epochs x minibatches
         key, rng = jax.random.split(rng)
-        updated_agent, _ = scan_minibatch_epoch(
-            lambda agent, minibatch: (agent.update_params(minibatch, self), None),
+        agent, _ = scan_minibatch_epoch(
+            lambda agent, minibatch: (agent.update_params(minibatch), None),
             agent,
             train_batch,
             minibatch_rng=key,
             num_epochs=self.num_epochs,
             num_minibatches=self.num_minibatches,
         )
-        self = replace(self, agent=updated_agent)
 
-        runner_state = (self, env_state, last_obs, rng)
+        runner_state = (agent, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _collect_rollout(self, rollout_state, env: Environment, length=None):
+    def _collect_rollout(
+        self, agent: PPOAgent, rollout_state, env: Environment, length=None
+    ):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            get_action_and_log_prob = partial(self.agent.get_action, get_log_prob=True)
+            get_action_and_log_prob = partial(agent.get_action, get_log_prob=True)
 
             action, log_prob = jax.vmap(get_action_and_log_prob)(sample_key, last_obs)
 
@@ -310,8 +191,8 @@ class PPO(RLAlgorithm):
             (obsv, reward, terminated, truncated, info), env_state = env.step(
                 step_key, env_state, action
             )
-            value = jax.vmap(self.agent.get_value)(last_obs)
-            next_value = jax.vmap(self.agent.get_value)(info[ORIGINAL_OBSERVATION_KEY])
+            value = jax.vmap(agent.get_value)(last_obs)
+            next_value = jax.vmap(agent.get_value)(info[ORIGINAL_OBSERVATION_KEY])
 
             # Build a single transition. Jax.lax.scan will build the batch
             # returning num_steps transitions.
@@ -352,3 +233,128 @@ class PPO(RLAlgorithm):
         )
         gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
         return gae, (gae, gae + transition.value)
+
+
+class PPOAgent(RLAgent):
+    trainer: PPO
+
+    actor: ActorNetwork
+    critic: ValueNetwork
+    optimizer_state: optax.OptState
+    normalizer: Normalizer
+
+    def __init__(self, key, env: Environment, trainer: PPO):
+        self.trainer = trainer
+        actor_key, critic_key = jax.random.split(key)
+        self.actor = ActorNetwork(
+            env.observation_space,
+            env.action_space,
+            key=actor_key,
+            **trainer.actor_kwargs,
+        )
+        self.critic = ValueNetwork(
+            env.observation_space,
+            key=critic_key,
+            **trainer.critic_kwargs,
+        )
+        self.optimizer_state = trainer.optimizer.init(
+            eqx.filter((self.actor, self.critic), eqx.is_inexact_array)
+        )
+
+        self.normalizer = Normalizer(
+            obs_space=env.observation_space,
+            normalize_obs=trainer.normalize_observations,
+            normalize_rew=trainer.normalize_rewards,
+            gamma=trainer.gamma,
+            rew_shape=(trainer.num_envs,),
+        )
+
+    def get_action(
+        self,
+        key: PRNGKeyArray,
+        observation: PyTree,
+        deterministic: bool = False,
+        get_log_prob: bool = False,
+    ) -> Array | tuple[Array, Array]:
+        observation = self.normalizer.normalize_obs(observation)
+        action_dist = self.actor(observation)
+        if deterministic:
+            assert not get_log_prob, "Cannot get log prob in deterministic mode"
+            return action_dist.mode()
+        if get_log_prob:
+            return action_dist.sample_and_log_prob(seed=key)  # type: ignore
+        return action_dist.sample(seed=key)
+
+    def get_value(self, observation: PyTree):
+        observation = self.normalizer.normalize_obs(observation)
+        return self.critic(observation)
+
+    def update_normalizer(self, batch: Transition):
+        return self.replace(normalizer=self.normalizer.update(batch))
+
+    def normalize_observation(self, observations: PyTree):
+        return self.normalizer.normalize_obs(observations)
+
+    def normalize_reward(self, rewards: PyTree):
+        return self.normalizer.normalize_reward(rewards)
+
+    def update_params(self, batch: Transition):
+        @eqx.filter_grad
+        def __ppo_los_fn(
+            params: tuple[ActorNetwork, ValueNetwork],
+            train_batch: Transition,
+        ):
+            assert train_batch.advantage is not None
+            assert train_batch.return_ is not None
+            assert train_batch.log_prob is not None
+            assert train_batch.value is not None
+
+            actor, critic = params
+            action_dist = jax.vmap(actor)(train_batch.observation)
+            log_prob = action_dist.log_prob(train_batch.action)
+            entropy = action_dist.entropy()
+            value = jax.vmap(critic)(train_batch.observation)
+            init_log_prob = train_batch.log_prob
+
+            ratio = jnp.exp(log_prob - init_log_prob)
+            _advantages = (train_batch.advantage - train_batch.advantage.mean()) / (
+                train_batch.advantage.std() + 1e-8
+            )
+            actor_loss1 = _advantages * ratio
+
+            actor_loss2 = (
+                jnp.clip(ratio, 1.0 - trainer.clip_coef, 1.0 + trainer.clip_coef)
+                * _advantages
+            )
+            actor_loss = -jnp.minimum(actor_loss1, actor_loss2).mean()
+
+            # critic loss
+            value_pred_clipped = train_batch.value + (
+                jnp.clip(
+                    value - train_batch.value,
+                    -trainer.clip_coef_vf,
+                    trainer.clip_coef_vf,
+                )
+            )
+            value_losses = jnp.square(value - train_batch.return_)
+            value_losses_clipped = jnp.square(value_pred_clipped - train_batch.return_)
+            value_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
+
+            update_count = jym.tree.get_first(self.optimizer_state, "count")
+            ent_coef = trainer.ent_coef_schedule(update_count)
+
+            # Total loss
+            total_loss = (
+                actor_loss + trainer.vf_coef * value_loss - ent_coef * entropy.mean()
+            )
+            return total_loss  # , (actor_loss, value_loss, entropy)
+
+        trainer = self.trainer
+
+        actor, critic = self.actor, self.critic
+        grads = __ppo_los_fn((actor, critic), batch)
+        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
+        return self.replace(
+            actor=new_actor, critic=new_critic, optimizer_state=optimizer_state
+        )

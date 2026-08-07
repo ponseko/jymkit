@@ -1,7 +1,7 @@
 from importlib.metadata import version
 
 __version__ = version("jaxnasium")
-from jaxnasium import _registry, envs as envs, tree as tree
+from jaxnasium import _registry, envs as envs, sweep as sweep, tree as tree
 
 from ._environment import (
     ORIGINAL_OBSERVATION_KEY as ORIGINAL_OBSERVATION_KEY,

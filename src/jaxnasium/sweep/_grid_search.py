@@ -13,11 +13,11 @@ class GridSearch:
     """Sets up a grid search over the given parameter values. All
     combinations of the parameter values are created in its configs.
 
-    Pass as a stage to [`Sweep`][jaxnasium.algorithms.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
     chained with other searches. For only performing this grid search,
     `GridSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
     A `Sweep` object allows batching jobs together in various `vmap` calls. See
-    [`Sweep`][jaxnasium.algorithms.sweep.Sweep] for more details.
+    [`Sweep`][jaxnasium.sweep.Sweep] for more details.
 
     **Arguments**:
         `params`: A dict of param names mapping to a non-empty list of values.
@@ -79,7 +79,7 @@ class GridSearch:
         batch_size: int | None = None,
         print_cost_estimate: bool = False,
     ) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.algorithms.sweep.Sweep] object with this grid search"""
+        """Create a [`Sweep`][jaxnasium.sweep.Sweep] object with this grid search"""
         return Sweep(
             fn,
             self,

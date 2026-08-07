@@ -6,8 +6,8 @@ import jax.numpy as jnp
 import pytest
 
 import jaxnasium as jym
-from jaxnasium.algorithms.sweep import GridSearch, RandomSearch, SobolSearch, Sweep
-from jaxnasium.algorithms.sweep._probe import split_static_dynamic_params
+from jaxnasium.sweep import GridSearch, RandomSearch, SobolSearch, Sweep
+from jaxnasium.sweep._probe import split_static_dynamic_params
 
 
 def test_split_static_dynamic_params():
@@ -180,7 +180,7 @@ def test_with_cost_size_estimate(capsys):
 
 
 def test_log_cost_estimate_returns_dataclass():
-    from jaxnasium.algorithms.sweep._probe import CostEstimate, log_cost_estimate
+    from jaxnasium.sweep._probe import CostEstimate, log_cost_estimate
 
     def fn(lr):
         return (jnp.ones(8) * lr).sum()

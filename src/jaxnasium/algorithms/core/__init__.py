@@ -2,7 +2,8 @@ from ._buffer import (
     PrioritizedTransitionBuffer as PrioritizedTransitionBuffer,
     TransitionBuffer as TransitionBuffer,
 )
-from ._distributions import TanhNormalFactory as TanhNormalFactory
+from ._checkpointing import load_agent as load_agent, save_agent as save_agent
+from ._distributions import EpsilonGreedy as EpsilonGreedy
 from ._initialization import (
     DEFAULT_BIAS_INIT as DEFAULT_BIAS_INIT,
     DEFAULT_WEIGHT_INIT as DEFAULT_WEIGHT_INIT,

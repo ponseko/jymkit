@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import replace
 from functools import partial
-from typing import Any, Self
+from typing import Any
 
-import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -15,6 +16,7 @@ from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
+    EpsilonGreedy,
     Normalizer,
     Schedule,
     Transition,
@@ -27,80 +29,8 @@ from .agent_networks import QValueNetwork
 logger = logging.getLogger(__name__)
 
 
-class PQNAgent(RLAgent):
-    critic: QValueNetwork
-    optimizer_state: optax.OptState
-    normalizer: Normalizer
-
-    def __init__(self, key, env: Environment, trainer: "PQN"):
-        self.critic = QValueNetwork(
-            env.observation_space,
-            env.action_space,
-            key=key,
-            **trainer.critic_kwargs,
-        )
-
-        self.optimizer_state = trainer.optimizer.init(
-            eqx.filter(self.critic, eqx.is_inexact_array)
-        )
-
-        self.normalizer = Normalizer(
-            obs_space=env.observation_space,
-            normalize_obs=trainer.normalize_observations,
-            normalize_rew=trainer.normalize_rewards,
-            gamma=trainer.gamma,
-            rew_shape=(trainer.num_envs,),
-        )
-
-    def get_action(
-        self,
-        key: PRNGKeyArray,
-        observation: PyTree,
-        deterministic: bool = False,
-        epsilon: float = 0.0,
-    ):
-        if deterministic:
-            assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
-        observation = self.normalizer.normalize_obs(observation)
-        q_values = self.critic(observation)
-        action_dist = distrax.Joint(
-            jax.tree.map(lambda x: distrax.EpsilonGreedy(x, epsilon=epsilon), q_values)
-        )
-        return action_dist.sample(seed=key)
-
-    def get_value(self, observation: PyTree):
-        observation = self.normalizer.normalize_obs(observation)
-        return self.critic(observation)
-
-    def normalize_observation(self, observations: PyTree):
-        return self.normalizer.normalize_obs(observations)
-
-    def normalize_reward(self, rewards: PyTree):
-        return self.normalizer.normalize_reward(rewards)
-
-    def update_normalizer(self, batch: Transition):
-        return self.replace(normalizer=self.normalizer.update(batch))
-
-    def update_params(self, batch: Transition, trainer: "PQN"):
-        @eqx.filter_grad
-        def __dqn_loss(params: QValueNetwork, train_batch: Transition):
-            q_out_1 = jax.vmap(params)(train_batch.observation)
-            q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
-            q_loss = optax.losses.squared_error(q_taken, train_batch.return_)
-            return jym.tree.mean(q_loss)
-
-        grads = __dqn_loss(self.critic, batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
-        new_critic = eqx.apply_updates(self.critic, updates)
-
-        return self.replace(critic=new_critic, optimizer_state=optimizer_state)
-
-
 class PQN(RLAlgorithm):
     """Parallel Q-Network (PQN) algorithm implementation."""
-
-    agent: PQNAgent = eqx.field(default=None)
 
     learning_rate_start: float = 2.5e-4
     learning_rate_end: float | None = eqx.field(static=True, default=None)
@@ -161,16 +91,17 @@ class PQN(RLAlgorithm):
         return self.num_iterations * self.num_epochs * self.num_minibatches
 
     @eqx.filter_jit
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self:
-        return replace(self, agent=PQNAgent(key=key, env=env, trainer=self))
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> PQNAgent:
+        return PQNAgent(key=key, env=env, trainer=self)
 
     @eqx.filter_jit
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
+    def train(
+        self, key: PRNGKeyArray, env: Environment, agent: PQNAgent | None = None
+    ) -> PQNAgent:
         env = self.__check_env__(env, vectorized=True)
-        self = replace(self, **hyperparams)
 
-        if not self.is_initialized:
-            self = self.init_agent(key, env)
+        if agent is None:
+            agent = self.init_agent(key, env)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
         train_iteration_fn = scan_callback(
@@ -181,15 +112,14 @@ class PQN(RLAlgorithm):
         )
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (self, env_state, obsv, key)
+        runner_state = (agent, env_state, obsv, key)
         runner_state, _metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
-        updated_self = runner_state[0]
-        return updated_self
+        updated_agent = runner_state[0]
+        return updated_agent
 
-    @staticmethod
-    def train_iteration(runner_state, train_iter, *, env: Environment):
+    def train_iteration(self, runner_state, train_iter, *, env: Environment):
         """
         Performs a single training iteration (A single `Collect data + Update` run).
 
@@ -198,16 +128,16 @@ class PQN(RLAlgorithm):
         """
 
         # Do rollout of single trajactory
-        self: PQN = runner_state[0]
+        agent: PQNAgent = runner_state[0]
         rollout_state = runner_state[1:]
         (env_state, last_obs, rng), trajectory_batch = self._collect_rollout(
-            rollout_state, env
+            agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
 
-        # Normalize the train_batch before updating the normalizer
-        train_batch = trajectory_batch.normalize(self.agent.normalizer)
-        agent = self.agent.update_normalizer(trajectory_batch)
+        # Normalize the train_batch before updating the normalizer so stats are the same as during rollout
+        train_batch = trajectory_batch.normalize(agent.normalizer)
+        agent = agent.update_normalizer(trajectory_batch)
 
         # Calculate Qlambda returns, add to trajectory batch
         _, returns = (
@@ -228,29 +158,30 @@ class PQN(RLAlgorithm):
 
         # Update agent over multiple epochs x minibatches
         key, rng = jax.random.split(rng)
-        updated_agent, _ = scan_minibatch_epoch(
-            lambda agent, minibatch: (agent.update_params(minibatch, self), None),
+        agent, _ = scan_minibatch_epoch(
+            lambda agent, minibatch: (agent.update_params(minibatch), None),
             agent,
             train_batch,
             minibatch_rng=key,
             num_epochs=self.num_epochs,
             num_minibatches=self.num_minibatches,
         )
-        self = replace(self, agent=updated_agent)
 
-        runner_state = (self, env_state, last_obs, rng)
+        runner_state = (agent, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _collect_rollout(self, rollout_state, env: Environment, length=None):
+    def _collect_rollout(
+        self, agent: PQNAgent, rollout_state, env: Environment, length=None
+    ):
         def env_step(rollout_state, _):
             env_state, last_obs, rng = rollout_state
             rng, sample_key, step_key = jax.random.split(rng, 3)
 
             # select an action
             sample_key = jax.random.split(sample_key, self.num_envs)
-            update_count = jym.tree.get_first(self.agent, "count")
+            update_count = jym.tree.get_first(agent.optimizer_state, "count")
             current_epsilon = self.epsilon_schedule(update_count)
-            get_action = partial(self.get_action, epsilon=current_epsilon)
+            get_action = partial(agent.get_action, epsilon=current_epsilon)
             action = jax.vmap(get_action)(sample_key, last_obs)
 
             # take a step in the environment
@@ -259,9 +190,7 @@ class PQN(RLAlgorithm):
                 step_key, env_state, action
             )
 
-            next_q_value = jax.vmap(self.agent.get_value)(
-                info[ORIGINAL_OBSERVATION_KEY]
-            )
+            next_q_value = jax.vmap(agent.get_value)(info[ORIGINAL_OBSERVATION_KEY])
 
             # Build a single transition. jax.lax.scan builds a batch of transitions.
             transition = Transition(
@@ -298,3 +227,76 @@ class PQN(RLAlgorithm):
             self.q_lambda * next_return + (1 - self.q_lambda) * next_q_values
         )
         return return_this_step, return_this_step
+
+
+class PQNAgent(RLAgent):
+    trainer: PQN
+
+    critic: QValueNetwork
+    optimizer_state: optax.OptState
+    normalizer: Normalizer
+
+    def __init__(self, key, env: Environment, trainer: PQN):
+        self.trainer = trainer
+        self.critic = QValueNetwork(
+            env.observation_space,
+            env.action_space,
+            key=key,
+            **trainer.critic_kwargs,
+        )
+
+        self.optimizer_state = trainer.optimizer.init(
+            eqx.filter(self.critic, eqx.is_inexact_array)
+        )
+
+        self.normalizer = Normalizer(
+            obs_space=env.observation_space,
+            normalize_obs=trainer.normalize_observations,
+            normalize_rew=trainer.normalize_rewards,
+            gamma=trainer.gamma,
+            rew_shape=(trainer.num_envs,),
+        )
+
+    def get_action(
+        self,
+        key: PRNGKeyArray,
+        observation: PyTree,
+        deterministic: bool = False,
+        epsilon: float = 0.0,
+    ):
+        if deterministic:
+            assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
+        observation = self.normalizer.normalize_obs(observation)
+        q_values = self.critic(observation)
+        action_dist = EpsilonGreedy(q_values, epsilon=epsilon)
+        return action_dist.sample(seed=key)
+
+    def get_value(self, observation: PyTree):
+        observation = self.normalizer.normalize_obs(observation)
+        return self.critic(observation)
+
+    def normalize_observation(self, observations: PyTree):
+        return self.normalizer.normalize_obs(observations)
+
+    def normalize_reward(self, rewards: PyTree):
+        return self.normalizer.normalize_reward(rewards)
+
+    def update_normalizer(self, batch: Transition):
+        return self.replace(normalizer=self.normalizer.update(batch))
+
+    def update_params(self, batch: Transition):
+        @eqx.filter_grad
+        def __dqn_loss(params: QValueNetwork, train_batch: Transition):
+            q_out_1 = jax.vmap(params)(train_batch.observation)
+            q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
+            q_taken = jym.tree.batch_sum(q_taken)
+            q_loss = optax.losses.squared_error(q_taken, train_batch.return_)
+            return jym.tree.mean(q_loss)
+
+        trainer = self.trainer
+
+        grads = __dqn_loss(self.critic, batch)
+        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        new_critic = eqx.apply_updates(self.critic, updates)
+
+        return self.replace(critic=new_critic, optimizer_state=optimizer_state)

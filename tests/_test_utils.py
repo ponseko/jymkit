@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import replace
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -12,7 +12,7 @@ import pytest
 from _consts import AGENT_MIN_CONFIG, SKIP_AGENT_ENVS, SKIP_ENVS
 
 import jaxnasium as jym
-from jaxnasium.algorithms import DQN, PPO, PQN, SAC, RLAlgorithm
+from jaxnasium.algorithms import DQN, PPO, PQN, SAC, RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import Transition
 
 
@@ -94,13 +94,13 @@ def get_valid_test_algs(env: jym.Environment) -> list[type[RLAlgorithm]]:
 
 
 def _make_dummy_update_batch(
-    alg: RLAlgorithm, env: jym.Environment, key: jax.Array
+    agent: RLAgent, env: jym.Environment, key: jax.Array
 ) -> Transition:
     obs_key, action_key, next_obs_key = jax.random.split(key, 3)
 
     observation = env.sample_observation(obs_key)
     next_observation = env.sample_observation(next_obs_key)
-    action = alg.get_action(action_key, observation)
+    action = agent.get_action(action_key, observation)
 
     if env.multi_agent:
         reward = jym.tree.map_one_level(lambda x: jnp.array(0.0), action)
@@ -127,15 +127,13 @@ def _make_dummy_update_batch(
     return batch
 
 
-def _run_agent_update(
-    alg: RLAlgorithm, batch: Transition, key: jax.Array
-) -> RLAlgorithm:
-    if isinstance(alg, SAC):
-        agent = alg.agent.update_critics_params(key, batch, alg)
-        agent = agent.update_actor_params(key, batch, alg)
+def _run_agent_update(agent: Any, batch: Transition, key: jax.Array) -> RLAgent:
+    if isinstance(agent.trainer, SAC):
+        agent = agent.update_critics_params(key, batch)
+        agent = agent.update_actor_params(key, batch)
     else:
-        agent = alg.agent.update_params(batch, alg)
-    return replace(alg, agent=agent)
+        agent = agent.update_params(batch)
+    return agent
 
 
 def run_env_and_agent_env_test(
@@ -183,8 +181,8 @@ def run_env_and_agent_env_test(
     algs = get_valid_test_algs(env)
     for alg_cls in algs:
         alg: RLAlgorithm = alg_cls()  # type: ignore
-        alg = alg.init_agent(init_key, env)  # type: ignore
-        agent_action = alg.get_action(a_agent_key, sampled_obs)
+        agent: RLAgent = alg.init_agent(init_key, env)
+        agent_action = agent.get_action(a_agent_key, sampled_obs)
         _assert_equal_pytrees(
             sampled_action, agent_action, "sampled_action != agent_action"
         )
@@ -194,5 +192,5 @@ def run_env_and_agent_env_test(
                 f"ORIGINAL_OBSERVATION_KEY not in timestep.info for {env_id}"
             )
         if test_train_runs:
-            batch = _make_dummy_update_batch(alg, env, a_sample_key)
-            alg = _run_agent_update(alg, batch, a_agent_key)
+            batch = _make_dummy_update_batch(agent, env, a_sample_key)
+            agent = _run_agent_update(agent, batch, a_agent_key)

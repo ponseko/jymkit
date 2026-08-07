@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import logging
 import warnings
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 import equinox as eqx
 import jax
@@ -19,12 +21,12 @@ logger = logging.getLogger(__name__)
 class RLAlgorithm(eqx.Module):
     """Base class for reinforcement learning algorithms in JAXnasium.
 
-    This abstract base class provides a common interface for implementing RL algorithms
-    in JAX. It supports both single-agent and multi-agent scenarios, with automatic
-    multi-agent transformation capabilities.
+    This object can also be refered to as the "trainer" of an `RLAgent`. It contains the
+    hyperparameters and collective methods such as `train` and `evaluate`. The trainable state
+    lives in the `RLAgent`, which `init_agent` and `train` return.
 
     The philosophy of Jaxnasium algorithms is to maintain close to single-file implementations. All training
-    logic is therefor implemented in the algorithms themselves, and are designed for single-agent settings.
+    logic is therefor implemented in the files themselves, and are designed for single-agent settings.
     This base class provides only a default evaluation loop, environment compatibility checks, and
     automatic multi-agent transformation capabilities.
 
@@ -34,7 +36,6 @@ class RLAlgorithm(eqx.Module):
     - Evaluation: Standardized evaluation interface for comparing algorithm performance
 
     Attributes:
-        agent_state: Abstract variable representing the algorithm's internal state (PyTree of modules)
         multi_agent: Whether this algorithm instance operates in multi-agent mode
         auto_upgrade_multi_agent: Whether to automatically upgrade single-agent methods to multi-agent
         log_function: Logging function to use ("simple", "tqdm", or custom callable)
@@ -42,51 +43,37 @@ class RLAlgorithm(eqx.Module):
 
     """
 
-    agent: eqx.AbstractVar[PyTree[eqx.Module]]
-    "Trainable state of the algorithm, usually containing the networks, optimizer state and optional normalization running statistics."
-
-    multi_agent: bool = eqx.field(static=True, default=False)
-    auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True)
+    multi_agent: bool = eqx.field(static=True, default=False, kw_only=True)
+    auto_upgrade_multi_agent: bool = eqx.field(static=True, default=True, kw_only=True)
     log_function: Callable | Literal["simple", "tqdm"] | None = eqx.field(
-        static=True, default="simple"
+        static=True, default="simple", kw_only=True
     )
-    log_interval: int | float = eqx.field(static=True, default=0.05)
-
-    @property
-    def is_initialized(self) -> bool:
-        return self.agent is not None
-
-    def save_state(self, file_path: str):
-        with open(file_path, "wb") as f:
-            eqx.tree_serialise_leaves(f, self.agent)
-
-    def load_state(self, file_path: str) -> Self:
-        with open(file_path, "rb") as f:
-            agent = eqx.tree_deserialise_leaves(f, self.agent)
-        algorithm = replace(self, agent=agent)
-        return algorithm
-
-    def get_action(
-        self,
-        key: PRNGKeyArray,
-        observation: PyTree,
-        deterministic: bool = False,
-        **kwargs,
-    ):
-        return self.agent.get_action(key, observation, deterministic, **kwargs)
+    log_interval: int | float = eqx.field(static=True, default=0.05, kw_only=True)
 
     @abstractmethod
-    def train(self, key: PRNGKeyArray, env: Environment) -> Self: ...
+    def train(self, key: PRNGKeyArray, env: Environment, agent: Any = None) -> RLAgent:
+        """Runs the training loop and returns the trained agent.
+
+        `agent=None` builds a fresh agent; passing an existing agent continues training it.
+        """
+        ...
 
     @abstractmethod
-    def init_agent(self, key: PRNGKeyArray, env: Environment) -> Self: ...
+    def init_agent(self, key: PRNGKeyArray, env: Environment) -> RLAgent:
+        """Builds and returns an agent for `env`."""
+        ...
 
     def evaluate(
-        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
+        self,
+        key: PRNGKeyArray,
+        agent: RLAgent,
+        env: Environment,
+        num_eval_episodes: int = 10,
     ) -> Float[Array, " num_eval_episodes"]:
-        assert self.is_initialized, (
-            "Agent state is not initialized. Create one via e.g. train() or init_state()."
-        )
+        """`num_eval_episodes` over the environment with the provided agent.
+
+        Can also be called through an agent via `agent.evaluate(key, env, ...)`.
+        """
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
@@ -97,19 +84,22 @@ class RLAlgorithm(eqx.Module):
                 episode_reward, rng, obs, env_state, done = carry
                 rng, action_key, step_key = jax.random.split(rng, 3)
 
-                action = self.get_action(action_key, obs, deterministic=True)
+                action = agent.get_action(action_key, obs, deterministic=True)
                 (obs, reward, terminated, truncated, _info), env_state = env.step(
                     step_key, env_state, action
                 )
                 done = jax.tree.map(jnp.logical_or, terminated, truncated)
                 done = jnp.all(jnp.array(jax.tree.leaves(done)))
-                episode_reward += jym.tree.mean(reward)
+                episode_reward = jym.tree.add(episode_reward, reward)
                 return (episode_reward, rng, obs, env_state, done)
 
             key, reset_key = jax.random.split(key)
             obs, env_state = env.reset(reset_key)
             done = False
-            episode_reward = 0.0
+
+            # get reward structure
+            timestep, _ = env.step(reset_key, env_state, env.sample_action(reset_key))
+            episode_reward = jym.tree.zeros_like(timestep.reward, dtype=float)
 
             episode_reward, key, obs, env_state, done = jax.lax.while_loop(
                 lambda carry: jnp.logical_not(carry[-1]),
@@ -183,6 +173,36 @@ class RLAlgorithm(eqx.Module):
 
         return env
 
+    @staticmethod
+    def load(file_path: str) -> RLAgent:
+        """Convenience method for `RLAgent.load(file_path)`.
+
+        Returns the algorithm stored in `file_path` which was saved with `save`
+        on an `RLAgent`, trainer included. Requires `jaxon` to be installed, which is not installed by default.
+        """
+        return RLAgent.load(file_path)
+
+
+def per_agent(method):
+    """Decorator to mark an RLAgent method as per-agent; only applicable in multi-agent settings.
+    This is purely documentation, as it is the default behavior.
+    """
+    method.__per_agent__ = True
+    return method
+
+
+def collective(method):
+    """Decorator to mark an RLAgent method as collective; only applicable in multi-agent settings.
+    This means that, in multi-agent environments, this method will be called on the entire pytree
+    of agents, rather than mapped to each agent individually.
+
+    In MA, this means that `self` of this method refers to the `MultiAgentWrapper` of all agents.
+    This is in contrast to `@per_agent`, where the method is written as a single-agent method
+    and `self` refers to a single `RLAgent` object.
+    """
+    method.__per_agent__ = False
+    return method
+
 
 class HackuinoxModule(type(eqx.Module)):
     # Temporary name.
@@ -203,13 +223,59 @@ class HackuinoxModule(type(eqx.Module)):
 
 
 class RLAgent(eqx.Module, metaclass=HackuinoxModule):
+    """Trainable state, along with the trainer that produced it (hyperparameters and training logic)."""
+
+    trainer: eqx.AbstractVar[Any]
+    "The hyperparameters this agent was built with, and which its updates read."
+
     @abstractmethod
     def __init__(self, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
         pass
 
-    def replace(self, **updates):
+    def replace(self, **updates) -> Self:
         keys, values = zip(*updates.items())
         return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
+
+    def with_hyperparams(self, **hyperparams) -> Self:
+        """Overrides this agent's trainer hyperparameters."""
+        return self.replace(trainer=replace(self.trainer, **hyperparams))
+
+    @abstractmethod
+    def get_action(self, *args, **kwargs) -> Any: ...
+
+    @collective
+    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
+        """Continues training this agent."""
+        self = self.with_hyperparams(**hyperparams)
+        return self.trainer.train(key, env, agent=self)
+
+    @collective
+    def evaluate(
+        self, key: PRNGKeyArray, env: Environment, num_eval_episodes: int = 10
+    ) -> Float[Array, " num_eval_episodes"]:
+        return self.trainer.evaluate(key, self, env, num_eval_episodes)
+
+    @collective
+    def save(self, file_path: str):
+        """Save the current state (along with the trainer) to `file_path`. This uses `jaxon`
+        internally to save the agent. `jaxon` is not installed by default, so must be installed manually.
+
+        Alternatively, serialization can be done like any other eqx.Module as described here:
+        https://docs.kidger.site/equinox/examples/serialisation/
+        """
+        from jaxnasium.algorithms.core import save_agent
+
+        save_agent(file_path, self)
+
+    @classmethod
+    @collective
+    def load(cls, file_path: str) -> Self:
+        """Returns the agent stored in `file_path` which was saved with `save`, trainer included.
+        Requires `jaxon` to be installed, which is not installed by default.
+        """
+        from jaxnasium.algorithms.core import load_agent
+
+        return load_agent(file_path)
 
     @classmethod
     def __new_wrapped__(cls, key: PRNGKeyArray, env: Environment, trainer: RLAlgorithm):
@@ -241,7 +307,8 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
             ]
             envs = jax.tree.unflatten(agent_structure, envs)
 
-            # Also create a per-agent trainer that may have per agent hyperparemeters
+            # Also create a per-agent trainer that may have per agent hyperparemeters.
+            # I.e. with `gamma={"agent_0": 0.9, ...}`, each agent's trainer will have its own `gamma` value.
             trainer_args = {}
             for k, value in trainer.__dict__.items():
                 if k == "auto_upgrade_multi_agent":
@@ -260,6 +327,7 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
             trainers = jax.tree.unflatten(agent_structure, trainers)
 
             return MultiAgentWrapper(
-                map_multi_agent(lambda k, e, t: cls(k, e, t), key, envs, trainers)
+                map_multi_agent(lambda k, e, t: cls(k, e, t), key, envs, trainers),
+                trainer=trainer,  # the wrapper keeps the full trainer
             )
         return None  # continue with regular __call__

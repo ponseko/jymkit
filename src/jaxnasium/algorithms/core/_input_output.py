@@ -21,7 +21,7 @@ from ..types import (
     Network,
     SpaceLike,
 )
-from ._distributions import TanhNormal
+from ._distributions import TanhNormal, make_independent
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +41,6 @@ def _is_callable_module(x) -> bool:
 
 def _is_distribution(x: Any) -> bool:
     return isinstance(x, distrax.Distribution)
-
-
-def _make_independent(dist: distrax.Distribution) -> distrax.Distribution:
-    """Wraps a distrax distribution in an Independent distribution if the
-    output space is multi-dimensional and sets the event shape accordingly."""
-    ndims = len(dist.batch_shape)
-    if ndims == 0:
-        return dist  # Discrete, MultiDiscrete([n]), scalar Box
-    return distrax.Independent(dist, reinterpreted_batch_ndims=ndims)
 
 
 def _assert_homogeneous_output_space(num_outputs: list[int]):
@@ -169,7 +160,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
     networks: PyTree[Network]
 
     num_observation_spaces: int = eqx.field(static=True)
-    input_structure: Any = eqx.field(static=True)
     out_features: int = eqx.field(static=True)
 
     def __init__(
@@ -213,7 +203,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             action_input = obs_space.pop("_ACTION", None)
 
         self.num_observation_spaces = len(jax.tree.leaves(obs_space))
-        self.input_structure = jax.tree.structure(obs_space)
 
         keys = optax.tree.split_key_like(key, obs_space)
         self.networks = jax.tree.map(
@@ -365,22 +354,6 @@ class _ConstantLogStd(eqx.Module):
         return self.log_std
 
 
-class _BoundedLogStdHead(eqx.Module):
-    """A state-dependent `log_std` head, squashed into `[log_std_min, log_std_max]`."""
-
-    layer: Network
-
-    output_shape: tuple[int, ...] = eqx.field(static=True)
-    log_std_min: float = eqx.field(static=True)
-    log_std_max: float = eqx.field(static=True)
-
-    def __call__(self, x, *, key: PRNGKeyArray | None = None) -> Array:
-        raw = self.layer(x, key=key).reshape(self.output_shape)
-        return self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
-            jnp.tanh(raw) + 1.0
-        )
-
-
 class _GaussianOutputLayer(eqx.Module):
     """Shared class for Gaussian-family output layers over a `Box` space.
 
@@ -437,7 +410,7 @@ class _GaussianOutputLayer(eqx.Module):
             logger.debug("Action mask provided for continuous space, ignoring.")
         mean = self.mean(x, key=key).reshape(self.output_shape)
         log_std = self.log_std(x, key=key).reshape(self.output_shape)
-        if not isinstance(self.log_std, _ConstantLogStd):
+        if not isinstance(self.log_std, _ConstantLogStd):  # NOTE: we could squash this?
             log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
                 jnp.tanh(log_std) + 1.0
             )  # tanh squash to [log_std_min, log_std_max]
@@ -535,7 +508,6 @@ class _PyTreeOutputNetwork(eqx.Module):
     heads: PyTree[Network]
 
     num_output_spaces: int = eqx.field(static=True)
-    output_structure: Any = eqx.field(static=True)
 
 
 class PyTreeActionNetwork(_PyTreeOutputNetwork):
@@ -575,7 +547,6 @@ class PyTreeActionNetwork(_PyTreeOutputNetwork):
             raise ValueError(f"Unsupported output space: {space}")
 
         self.num_output_spaces = len(jax.tree.leaves(output_space))
-        self.output_structure = jax.tree.structure(output_space)
 
         keys = optax.tree.split_key_like(key, output_space)
         self.heads = jax.tree.map(lambda o, k: create_head(k, o), output_space, keys)
@@ -596,11 +567,12 @@ class PyTreeActionNetwork(_PyTreeOutputNetwork):
 
         # Policy heads return distributions; Q/value heads return raw arrays.
         dist_list = jax.tree.leaves(outputs, is_leaf=_is_distribution)
-        if dist_list and all(_is_distribution(o) for o in dist_list):
-            if self.assume_independent:
-                outputs = jax.tree.map(
-                    _make_independent, outputs, is_leaf=_is_distribution
-                )
+        if (
+            self.assume_independent
+            and dist_list
+            and all(_is_distribution(o) for o in dist_list)
+        ):
+            outputs = jax.tree.map(make_independent, outputs, is_leaf=_is_distribution)
             if len(dist_list) > 1:
                 return distrax.Joint(outputs)
 
@@ -644,7 +616,6 @@ class PyTreeQValueNetwork(_PyTreeOutputNetwork):
         layer_type: Callable[..., Network] = eqx.nn.Linear,
     ):
         self.num_output_spaces = len(jax.tree.leaves(output_space))
-        self.output_structure = jax.tree.structure(output_space)
 
         keys = optax.tree.split_key_like(key, output_space)
         Q_layer = QLayer.with_params(layer_type=layer_type)

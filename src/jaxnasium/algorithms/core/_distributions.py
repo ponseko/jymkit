@@ -1,12 +1,22 @@
 import warnings
 from collections.abc import Callable
 from functools import partial
+from typing import Any
 
 import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
+
+
+def make_independent(dist: distrax.Distribution) -> distrax.Distribution:
+    """Wraps a distrax distribution in an Independent distribution if the
+    output space is multi-dimensional and sets the event shape accordingly."""
+    ndims = len(dist.batch_shape)
+    if ndims == 0:
+        return dist  # Discrete, MultiDiscrete([n]), scalar Box
+    return distrax.Independent(dist, reinterpreted_batch_ndims=ndims)
 
 
 def _transpose_tree_of_tuples(r, outer_treedef):
@@ -154,3 +164,21 @@ def TanhNormalFactory(low, high) -> Callable[..., TanhNormal]:
     shift = (high + low) / 2.0
 
     return partial(TanhNormal, shift=shift, scale=scale)
+
+
+class EpsilonGreedy(distrax.Joint):
+    """`distrax.EpsilonGreedy` but wrapped in a `Joint` and `Independent` for PyTree support.
+    Assumes independent actions.
+    """
+
+    def __init__(
+        self, preference, *, epsilon: float = 0.0, dtype: jnp.dtype | type[Any] = int
+    ):
+        super().__init__(
+            jax.tree.map(
+                lambda dist: make_independent(
+                    distrax.EpsilonGreedy(dist, epsilon=epsilon)
+                ),
+                preference,
+            )
+        )

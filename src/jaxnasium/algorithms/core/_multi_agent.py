@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Any
 
 import equinox as eqx
@@ -80,6 +81,9 @@ def map_multi_agent(
     # infer agent structure if not provided
     if agent_structure is None:
         first_arg = next((arg for arg in arguments if not _is_prng_key(arg)), None)
+        if isinstance(first_arg, MultiAgentWrapper):
+            # a wrapper's own first level is its fields (`agents`, `trainer`), not agents
+            first_arg = first_arg.agents
         _, agent_structure = eqx.tree_flatten_one_level(first_arg)
 
     def _process_item(el):
@@ -125,11 +129,14 @@ def map_multi_agent(
 
     out = _result_tuple_to_tuple_result(result)
 
+    source_wrapper = next(
+        (x for x in arguments if isinstance(x, MultiAgentWrapper)), None
+    )
+
     def _process_output(o):
-        if any(
-            isinstance(x, MultiAgentWrapper) for x in arguments
-        ) and _is_pytree_of_agents(o):
-            return MultiAgentWrapper(o)
+        if source_wrapper is not None and _is_pytree_of_agents(o):
+            # carry the team trainer through, so the re-wrapped agents keep it
+            return MultiAgentWrapper(o, trainer=source_wrapper.trainer)
 
         if _is_pytree_of_transitions(o):
             return Transition.from_transposed(o)
@@ -144,6 +151,10 @@ def map_multi_agent(
 
 class MultiAgentWrapper(eqx.Module):
     agents: PyTree
+    trainer: Any = None
+    """The team's trainer: the `RLAlgorithm` the agents were built from, unsplit.
+     `None` for a wrapper over plain modules rather than agents (e.g. `agent.critic` in multi-agent mode), which has no trainer.
+    """
 
     @property
     def _structure(self) -> PyTreeDef:  # pyright: ignore[reportInvalidTypeForm]
@@ -158,6 +169,16 @@ class MultiAgentWrapper(eqx.Module):
         except Exception:
             return False
 
+    def with_hyperparams(self, **hyperparams) -> "MultiAgentWrapper":
+        """Override the hyperparameters of every agent's trainer *and* the wrapper trainer."""
+        agents = map_multi_agent(
+            lambda agent, **kw: agent.with_hyperparams(**kw),
+            self.agents,
+            **hyperparams,
+            agent_structure=self._structure,
+        )
+        return MultiAgentWrapper(agents, trainer=replace(self.trainer, **hyperparams))
+
     def __call__(self, *args, **kwargs):
         return self.__getattr__("__call__")(*args, **kwargs)
 
@@ -171,6 +192,10 @@ class MultiAgentWrapper(eqx.Module):
             return hasattr(x, "__self__") and hasattr(x, "__func__")
 
         if _is_bound_method(first_attr):
+            # Methods on an agent are per-agent by default;
+            # methods decorated with `@collective` are opted-out, and are called on the wrapper itself.
+            if getattr(first_attr.__func__, "__per_agent__", True) is False:
+                return first_attr.__func__.__get__(self)
 
             def multi_agent_dispatcher(*args, **kwargs):
                 return map_multi_agent(
