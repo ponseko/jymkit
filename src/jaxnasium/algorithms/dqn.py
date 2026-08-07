@@ -4,7 +4,6 @@ import logging
 from functools import partial
 from typing import Any
 
-import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -16,6 +15,7 @@ from jaxnasium import Environment
 from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
+    EpsilonGreedy,
     Normalizer,
     Schedule,
     Transition,
@@ -249,9 +249,7 @@ class DQNAgent(RLAgent):
             assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
-        action_dist = distrax.Joint(  # support pytrees of output distributions
-            jax.tree.map(lambda x: distrax.EpsilonGreedy(x, epsilon=epsilon), q_values)
-        )
+        action_dist = EpsilonGreedy(q_values, epsilon=epsilon)
         return action_dist.sample(seed=key)
 
     def get_value(self, observation: PyTree):

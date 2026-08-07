@@ -2,10 +2,10 @@ import distrax
 import jax
 import jax.numpy as jnp
 
-from jaxnasium.algorithms.core import TanhNormalFactory
 from jaxnasium.algorithms.core._distributions import (
     DistraxContainer,
     TanhNormal,
+    TanhNormalFactory,
 )
 from jaxnasium.tree._tree import _transpose_tree_of_tuples
 
