@@ -210,7 +210,11 @@ class Sweep:
                     raise ValueError(f"Param {name!r} is swept by more than one stage")
                 all_params[name] = values
 
-        static_params, dynamic_params = split_static_dynamic_params(fn, all_params)
+        if batch_size is None:
+            static_params = all_params
+            dynamic_params = {}
+        else:
+            static_params, dynamic_params = split_static_dynamic_params(fn, all_params)
 
         # Order each stage so its static params vary slowest, keeping configurations
         # that can share a job (equal static args) adjacent in the expansion below.
