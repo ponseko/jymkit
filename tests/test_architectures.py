@@ -1,10 +1,8 @@
-"""Smoke tests for the core network architectures (MLP, CNN, BroNet)."""
-
 import jax
 import jax.numpy as jnp
 import pytest
 
-from jaxnasium.algorithms.architectures import CNN, MLP, BroNet
+from jaxnasium.algorithms.architectures import CNN, MLP, BroNet, SimBa
 
 SEED = jax.random.PRNGKey(0)
 
@@ -61,3 +59,22 @@ def test_bronet_with_params_factory():
     assert isinstance(net, BroNet)
     assert len(net.layers) == 2 + 3
     assert net(jnp.ones((5,))).shape == (16,)
+
+
+def test_simba_forward_and_out_features():
+    net = SimBa(in_features=6, key=SEED, depth=2, width_size=32)
+    assert net.out_features == 32
+    assert net.depth == 2
+    assert len(net.blocks) == 2
+
+    y = net(jnp.ones((6,)))
+    assert y.shape == (32,)
+    assert jnp.all(jnp.isfinite(y))
+
+
+def test_simba_defaults():
+    net = SimBa(in_features=4, key=SEED)
+    assert net.depth == 1
+    assert net.width_size == 128
+    assert len(net.blocks) == 1
+    assert net(jnp.ones((4,))).shape == (128,)
