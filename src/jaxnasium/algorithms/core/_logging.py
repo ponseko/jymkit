@@ -1,18 +1,58 @@
 import functools
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import numpy as np
+from jaxtyping import Array, Float, PyTree
+
+_LOGWRAPPER_REQ_KEYS = ("returned_episode", "returned_episode_returns", "timestep")
+
+
+def mean_episode_returns(metrics: dict[str, Any]) -> PyTree[Float[Array, ""]]:
+    """mean episode return across all vectorized environments in a single batch of metrics
+     produces a single scalar (per agent) per scan iteration.
+    Requires LogWrapper on the environment.
+    """
+    missing = [key for key in _LOGWRAPPER_REQ_KEYS if key not in metrics]
+    if missing:
+        raise ValueError(
+            f"Missing keys {missing} in the training metrics. "
+            "Is the environment wrapped with LogWrapper?"
+        )
+
+    finished = metrics["returned_episode"]
+    num_finished = jnp.sum(finished)
+
+    def _mean(returns):
+        total = jnp.sum(jnp.where(finished, returns, 0.0))
+        return jnp.where(num_finished > 0, total / num_finished, jnp.nan)
+
+    # map due to possible Multi-Agent reward structure
+    return jax.tree.map(_mean, metrics["returned_episode_returns"])
 
 
 def scan_callback(
     func: Callable | None = None,
     callback_fn: Callable | Literal["tqdm", "simple"] | None = None,
-    callback_interval: float = 20,
+    callback_interval: int | float = 20,
     n: int | None = None,
+    reduce_ys_fn: Callable | Literal["mean"] | None = None,
 ) -> Callable:
+    """Wrap a scan body so its per-iteration metrics can be logged and shrunk.
+
+    **Arguments**:
+        `func`: function to wrap
+        `callback_fn`: function to call on the ys of the scan
+        `callback_interval`: how often to call the callback in iterations. Can be a fraction of `n`.
+        `n`: total number of iterations, required if `callback_interval` 0.0 < 1.0.
+        `reduce_ys_fn`: optional function to reduce the metrics *after* the callback is called,
+            but before they are returned to the scan. May be used to aggregate metrics to reduce
+            memory consumption. Set this to `mean` (default) to average `LogWrapper` returned
+            returned returns across the current iteration of data.
+    """
     assert callable(func) or func is None
 
     assert callback_interval > 0, "callback_interval must be greater than 0"
@@ -25,7 +65,7 @@ def scan_callback(
             import tqdm.auto
         except ImportError:
             raise ImportError(
-                "Ltqdm is not installed. Please install it with `pip install tqdm`."
+                "tqdm is not installed. Please install it with `pip install tqdm`."
             )
 
         progress_bar = []
@@ -41,11 +81,12 @@ def scan_callback(
             progress_bar[0].update(callback_interval)
 
     def simple_reward_logger(data, iteration):
-        assert (
-            "returned_episode_returns" in data
-            and "returned_episode" in data
-            and "timestep" in data
-        ), "Missing keys in logging data. Is the environment wrapped with LogWrapper?"
+        missing = [key for key in _LOGWRAPPER_REQ_KEYS if key not in data]
+        if missing:
+            raise ValueError(
+                f"Missing keys {missing} in the training metrics. "
+                "Is the environment wrapped with LogWrapper?"
+            )
 
         returned_episode = np.asarray(data["returned_episode"])
         returned_episode_returns = np.asarray(data["returned_episode_returns"])
@@ -91,10 +132,16 @@ def scan_callback(
             else:
                 iter_num = x
 
-            result = func(carry, x)
-            this_iter_metrics = result[1]
+            carry, this_iter_metrics = func(carry, x)
             maybe_log(iter_num, this_iter_metrics)
-            return result
+
+            if reduce_ys_fn is not None:
+                reduce_fn = (
+                    mean_episode_returns if reduce_ys_fn == "mean" else reduce_ys_fn
+                )
+                this_iter_metrics = reduce_fn(this_iter_metrics)
+
+            return carry, this_iter_metrics
 
         return wrapper
 

@@ -99,7 +99,7 @@ def test_loaded_agent_can_resume_training(
 
     loaded = jxalgs.RLAgent.load(save_path)
     before = jym.tree.get_first(loaded, "weight")
-    trained = loaded.train(jax.random.PRNGKey(2), env)
+    trained, _ = loaded.train(jax.random.PRNGKey(2), env)
 
     assert not jnp.allclose(before, jym.tree.get_first(trained, "weight")), (
         "resumed training changed nothing"

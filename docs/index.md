@@ -38,7 +38,7 @@ For existing projects, you can simply install Jaxnasium via `pip` and import the
 > env = jaxnasium.LogWrapper(env)
 > rng = jax.random.PRNGKey(0)
 > agent = PPO(total_timesteps=5e5, learning_rate=2.5e-3)
-> agent = agent.train(rng, env)
+> agent, metrics = agent.train(rng, env)
 > ```
 
 ## 🏠 Environments
@@ -55,7 +55,7 @@ env = jym.FlattenObservationWrapper(env)
 env = jym.LogWrapper(env)
 
 agent = PPO(**some_good_hyperparameters)
-agent = agent.train(jax.random.PRNGKey(0), env)
+agent, metrics = agent.train(jax.random.PRNGKey(0), env)
 
 # > Using an environment from Gymnax via gymnax.make(Breakout-MinAtar).
 # > Wrapping Gymnax environment with GymnaxWrapper
@@ -92,7 +92,7 @@ import jax
 
 env = ...
 agent = PPO(**some_good_hyperparameters)
-agent = agent.train(jax.random.PRNGKey(0), env)
+agent, metrics = agent.train(jax.random.PRNGKey(0), env)
 ```
 
 See the [Algorithms](./algorithms/Algorithms.md) for more details on the included algorithms..

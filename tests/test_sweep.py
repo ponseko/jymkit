@@ -373,6 +373,7 @@ def test_mixed_fixed_and_unfixed_sampling_searches():
         ),
         RandomSearch({"dropout": (0.0, 0.5)}, num_samples=2),
         seed=jax.random.PRNGKey(0),
+        batch_size=0,
     )
 
     # 2 envs * 2 lrs * 2 dropouts = 8 configs, all dynamic except env.
@@ -506,7 +507,7 @@ def test_real_ppo_env_and_hparams_sweep():
             **hparams,
         )
         key_train, key_eval = jax.random.split(jax.random.PRNGKey(0))
-        agent = agent.train(key_train, environment)
+        agent, _ = agent.train(key_train, environment)
         return agent.evaluate(key_eval, environment, num_eval_episodes=2).mean()
 
     sweep = Sweep(
@@ -521,17 +522,16 @@ def test_real_ppo_env_and_hparams_sweep():
             fixed_seed=jax.random.PRNGKey(1),
         ),
         seed=jax.random.PRNGKey(0),
+        batch_size=0,
     )
 
     # env is static; each sampled hparam set is its own job (default: no batching).
-    assert len(sweep) == 4  # 2 envs × 2 samples
+    assert len(sweep) == 2  # 2 envs × 2 samples
     assert [job.static_args["env"] for job in sweep.jobs] == [
         "CartPole-v1",
-        "CartPole-v1",
-        "Acrobot-v1",
         "Acrobot-v1",
     ]
-    assert all(job.num_runs == 1 for job in sweep.jobs)
+    assert all(job.num_runs == 2 for job in sweep.jobs)
     assert all(
         set(job.dynamic_args) == {"learning_rate_start", "gamma"} for job in sweep.jobs
     )
@@ -548,7 +548,7 @@ def test_real_ppo_env_and_hparams_sweep():
 
     results = [result for job in sweep.jobs for result in sweep.fn(job)]
     assert len(results) == 4
-    assert all(r.num_runs == 1 for r in results)
+    assert all(r.num_runs == 2 for r in results)
     assert all(jnp.isfinite(r.result) for r in results)
     assert {r.arguments["env"] for r in results} == {"CartPole-v1", "Acrobot-v1"}
     assert all(1e-4 <= r.arguments["learning_rate_start"] <= 1e-2 for r in results)

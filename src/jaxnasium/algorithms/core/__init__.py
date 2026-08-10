@@ -21,6 +21,7 @@ from ._input_output import (
     TanhNormalLayer as TanhNormalLayer,
 )
 from ._logging import (
+    mean_episode_returns as mean_episode_returns,
     pretty_print_network as pretty_print_network,
     scan_callback as scan_callback,
 )

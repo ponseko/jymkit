@@ -9,7 +9,6 @@ from jaxtyping import PyTree, PyTreeDef
 
 import jaxnasium as jym
 
-from .._algorithm import RLAgent
 from ._transition import Transition
 
 AGENT_BATCH_SIZE_ENV_VAR = "JAXNASIUM_MULTI_AGENT_BATCH_SIZE"
@@ -57,6 +56,8 @@ def _result_tuple_to_tuple_result(r, outer_def=None):
 
 def _is_pytree_of_agents(x):
     """Check if *x* is a pytree whose first-level leaves are all RLAgents."""
+    from .._algorithm import RLAgent
+
     try:
         leaves, _ = eqx.tree_flatten_one_level(x)
         return all(isinstance(leaf, RLAgent) for leaf in leaves)

@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from jaxtyping import Array, PRNGKeyArray, PyTree
+from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium import Environment
@@ -175,7 +175,7 @@ class SAC(RLAlgorithm):
     @eqx.filter_jit
     def train(
         self, key: PRNGKeyArray, env: Environment, agent: SACAgent | None = None
-    ) -> SACAgent:
+    ) -> tuple[SACAgent, PyTree[Float[Array, " num_iterations"]]]:
         env = self.__check_env__(env, vectorized=True)
 
         if agent is None:
@@ -203,14 +203,15 @@ class SAC(RLAlgorithm):
             callback_fn=self.log_function,
             callback_interval=self.log_interval,
             n=self.num_iterations,
+            reduce_ys_fn=self.reduce_metrics_fn,
         )
 
         runner_state = (agent, buffer, *warmup_state)
-        runner_state, _metrics = jax.lax.scan(
+        runner_state, metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
         updated_agent = runner_state[0]
-        return updated_agent
+        return updated_agent, metrics
 
     def train_iteration(self, runner_state, train_iter, *, env: Environment):
         """
