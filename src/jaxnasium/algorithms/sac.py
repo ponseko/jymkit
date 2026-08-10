@@ -194,7 +194,7 @@ class SAC(RLAlgorithm):
         )
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
-        # Update the normalizer with the warmup data. After this, the normalizer is frozen.
+        # Update the normalizer with the warmup data.
         agent = agent.update_normalizer(dummy_trajectory)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
@@ -229,6 +229,7 @@ class SAC(RLAlgorithm):
         )
 
         buffer = buffer.insert(trajectory_batch)
+        agent = agent.update_normalizer(trajectory_batch)
 
         # Update
         agent = self._update_agent_state(rng, agent, buffer)

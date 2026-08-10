@@ -116,7 +116,7 @@ class DQN(RLAlgorithm):
         )
         buffer = buffer.insert(dummy_trajectory)  # Add minimum data to the buffer
 
-        # Update the normalizer with the warmup data. After this, the normalizer is frozen.
+        # Update the normalizer with the warmup data.
         agent = agent.update_normalizer(dummy_trajectory)
 
         train_iteration_fn = partial(self.train_iteration, env=env)
@@ -154,6 +154,7 @@ class DQN(RLAlgorithm):
         # Add new data to buffer & Sample update batch from the buffer
         buffer = buffer.insert(trajectory_batch)
         train_batch = buffer.sample(rng)
+        agent = agent.update_normalizer(trajectory_batch)
 
         train_batch = train_batch.normalize(agent.normalizer)
 
