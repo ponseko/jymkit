@@ -72,6 +72,17 @@ class SweepResult:
             **kwargs,
         )
 
+    def to_json_no_result(self, **kwargs: Any) -> str:
+        """Serialize to JSON, stringifying anything not natively serializable, excluding the result."""
+        return json.dumps(
+            {
+                field.name: _jsonify(getattr(self, field.name))
+                for field in fields(self)
+                if field.name != "result"
+            },
+            **kwargs,
+        )
+
 
 @dataclass
 class SweepJob:
@@ -102,13 +113,13 @@ class SweepJob:
 @dataclass(frozen=True)
 class Sweep:
     """Build a parameter sweep over function `fn` from one or more stages of parameter
-    space search, like `GridSearch`, `RandomSearch`, or `SobolSearch`.
+    space search, like `GridSearch`, `OneAtATimeSearch`, `RandomSearch`, or `SobolSearch`.
 
     For a single stage, `RandomSearch(...).sweep(fn, ...)` is equivalent.
 
     **Arguments**:
         `fn`: The function to sweep. Must accept all swept params as keywords.
-        `*stages`: `GridSearch` / `RandomSearch` / `SobolSearch` stages to nest.
+        `*stages`: `GridSearch` / `OneAtATimeSearch` / `RandomSearch` / `SobolSearch` stages to nest.
         `seed`: Randomness for configs from sampling stages that omit `fixed_seed`.
             Required unless every sampling stage sets `fixed_seed` (or there are none).
         `batch_size`: How many configurations to `vmap` in one job. Defaults to
@@ -300,27 +311,37 @@ class Sweep:
                 for i in range(job.num_runs)
             ]
 
+        largest_batch = max(job.num_runs for job in jobs)
+        requested = "unlimited" if max_batch is None else max_batch
         logger.info(
             f"Created {len(jobs)} sweep jobs for {len(configs)} configurations "
-            f"(per job: {list(static_params)} fixed, {list(dynamic_params)} vmapped)"
+            f"(per job: {list(static_params)} fixed, {list(dynamic_params)} vmapped). "
+            f"Largest job batches {largest_batch} configuration(s), of {requested} allowed."
         )
+        if batch_size is not None and dynamic_params and largest_batch == 1:
+            logger.warning(
+                f"Batching was requested (batch_size={batch_size}) but no configurations "
+                "could be batched, so nothing is vmapped. A job batches configurations "
+                f"that agree on the fixed parameters {list(static_params)} and that are "
+                "adjacent, and stages are nested in the order given — so a stage varying "
+                "only vmappable parameters has to come last to end up adjacent. Try "
+                f"moving the stage(s) sweeping {list(dynamic_params)} to the end."
+            )
 
         if print_cost_estimate:
             first_job = jobs[0]
-            un_vmapped_first_job = SweepJob(
-                first_job.static_args,
-                {
-                    name: [first_job.dynamic_args[name][0]]
-                    for name in first_job.dynamic_args
-                },
-            )
+            # dynamic_args are lists of values for vmap; unwrap one config for the probe.
+            sample_args = {
+                **first_job.static_args,
+                **{name: values[0] for name, values in first_job.dynamic_args.items()},
+            }
             print(
                 "Estimating the cost of the first job without any arguments mapped over.",
                 " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
                 " especially when sweeping over different environments, num_envs etc.",
                 " Compiling...",
             )
-            print(log_cost_estimate(fn, **un_vmapped_first_job.arguments))
+            print(log_cost_estimate(fn, **sample_args))
             print("Done.")
             print(
                 "Proxied a single configuration. In this sweep, the largest job runs",

@@ -103,7 +103,7 @@ def test_discrete_is_learning(alg):
     seed = jax.random.PRNGKey(1)
     seed1, seed2 = jax.random.split(seed)
     agent = alg(total_timesteps=1_000_000, log_function=None)
-    agent = agent.train(seed1, env)
+    agent, _ = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
     avg_reward = jnp.mean(rewards)
@@ -123,7 +123,7 @@ def test_continuous_is_learning(alg):
     seed = jax.random.PRNGKey(0)
     seed1, seed2 = jax.random.split(seed)
     agent = alg(total_timesteps=500_000, log_function=None)
-    agent = agent.train(seed1, env)
+    agent, _ = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
     avg_reward = np.mean(rewards)

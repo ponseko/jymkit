@@ -157,7 +157,7 @@ def test_collective_methods_are_not_dispatched_per_agent():
 
 def test_multi_agent_train_runs_a_single_loop():
     env = _ma_env()
-    agent = DQN(**SMALL_DQN).train(SEED, env)
+    agent, _ = DQN(**SMALL_DQN).train(SEED, env)
 
     assert isinstance(agent, MultiAgentWrapper)
     assert sorted(agent.agents) == ["agent_0", "agent_1"]
@@ -168,11 +168,11 @@ def test_multi_agent_train_runs_a_single_loop():
 
 def test_multi_agent_train_continues_from_an_existing_agent():
     env = _ma_env()
-    agent = DQN(**SMALL_DQN).train(SEED, env)
+    agent, _ = DQN(**SMALL_DQN).train(SEED, env)
     assert isinstance(agent, MultiAgentWrapper)
     before = jax.tree.leaves(agent.agents["agent_0"].critic)[0]
 
-    agent = agent.train(jax.random.PRNGKey(1), env)
+    agent, _ = agent.train(jax.random.PRNGKey(1), env)
     after = jax.tree.leaves(agent.agents["agent_0"].critic)[0]
 
     assert not jnp.allclose(before, after), "continued training changed nothing"
@@ -185,7 +185,7 @@ def test_per_agent_hyperparameters_reach_each_agent():
     `self.trainer.gamma` inside an update is that agent's value.
     """
     gamma = {"agent_0": 0.999, "agent_1": 0.5}
-    agent = DQN(gamma=gamma, **SMALL_DQN).train(SEED, _ma_env())  # type: ignore
+    agent, _ = DQN(gamma=gamma, **SMALL_DQN).train(SEED, _ma_env())  # type: ignore
 
     assert isinstance(agent, MultiAgentWrapper)
     assert {k: a.trainer.gamma for k, a in agent.agents.items()} == gamma
@@ -297,7 +297,7 @@ def test_multi_agent_train_vmaps_homogeneous_agents(monkeypatch):
         lambda *a, **k: (calls.append(1), original(*a, **k))[1],
     )
 
-    agent = DQN(**SMALL_DQN).train(SEED, _ma_env())
+    agent, _ = DQN(**SMALL_DQN).train(SEED, _ma_env())
 
     assert calls, "homogeneous agents should have taken the vmap path"
     assert isinstance(agent, MultiAgentWrapper)
@@ -314,7 +314,7 @@ def test_multi_agent_train_loops_over_heterogeneous_agents(monkeypatch):
     )
 
     env = make_proxy_env(obs_ma_dict_heterogeneous, multi_agent=True)
-    agent = DQN(**SMALL_DQN).train(SEED, env)
+    agent, _ = DQN(**SMALL_DQN).train(SEED, env)
 
     assert not calls, "heterogeneous agents must fall back to the per-agent loop"
     assert isinstance(agent, MultiAgentWrapper)

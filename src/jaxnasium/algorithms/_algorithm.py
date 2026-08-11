@@ -13,7 +13,15 @@ import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium import Environment, Space, VecEnvWrapper, is_wrapped, remove_wrapper
+from jaxnasium import (
+    Environment,
+    LogWrapper,
+    Space,
+    VecEnvWrapper,
+    insert_wrapper,
+    is_wrapped,
+    unwrap_to,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +48,10 @@ class RLAlgorithm(eqx.Module):
         auto_upgrade_multi_agent: Whether to automatically upgrade single-agent methods to multi-agent
         log_function: Logging function to use ("simple", "tqdm", or custom callable)
         log_interval: Interval for logging (as fraction of total steps or absolute number)
-
+        reduce_metrics_fn: Reduces one training iteration's metrics to what `train`
+            returns alongside the agent. This function is called *after* log function on the
+            batch of iteration metrics. Defaults to `"mean"`, averaging the metrics across
+            the iteration. Set to `None` to return the full batch of metrics.
     """
 
     multi_agent: bool = eqx.field(static=True, default=False, kw_only=True)
@@ -49,10 +60,15 @@ class RLAlgorithm(eqx.Module):
         static=True, default="simple", kw_only=True
     )
     log_interval: int | float = eqx.field(static=True, default=0.05, kw_only=True)
+    reduce_metrics_fn: Callable | Literal["mean"] | None = eqx.field(
+        static=True, default="mean", kw_only=True
+    )
 
     @abstractmethod
-    def train(self, key: PRNGKeyArray, env: Environment, agent: Any = None) -> RLAgent:
-        """Runs the training loop and returns the trained agent.
+    def train(
+        self, key: PRNGKeyArray, env: Environment, agent: Any = None
+    ) -> tuple[RLAgent, PyTree[Float[Array, " iterations"]]]:
+        """Runs the training loop, returning the trained agent and its training metrics.
 
         `agent=None` builds a fresh agent; passing an existing agent continues training it.
         """
@@ -77,7 +93,7 @@ class RLAlgorithm(eqx.Module):
         if is_wrapped(env, VecEnvWrapper):
             # Cannot vectorize because terminations may occur at different times
             # use jax.vmap(agent.evaluate) if you can ensure episodes are of equal length
-            env = remove_wrapper(env, VecEnvWrapper)
+            env = unwrap_to(env, VecEnvWrapper)
 
         def eval_episode(key, _) -> tuple[PRNGKeyArray, PyTree[float]]:
             def step_env(carry):
@@ -168,6 +184,19 @@ class RLAlgorithm(eqx.Module):
                 "This likely leads to incorrect results. We recommend only using algorithm-side normalization, "
                 "as it allows for easier checkpointing and resuming training."
             )
+        if not is_wrapped(env, LogWrapper) and (
+            self.reduce_metrics_fn == "mean" or self.log_function == "simple"
+        ):
+            logger.warning(
+                f"Adding a `LogWrapper` to the environment, as {type(self).__name__} has "
+                "set 'reduce_metrics_fn=mean' or 'log_function=simple', which require "
+                "episode statistics from a `LogWrapper`."
+            )
+            if is_wrapped(env, VecEnvWrapper):
+                env = insert_wrapper(env, LogWrapper, inner_wrapper=VecEnvWrapper)
+            else:
+                env = LogWrapper(env)
+
         if vectorized and not is_wrapped(env, VecEnvWrapper):
             env = VecEnvWrapper(env)
 
@@ -244,8 +273,10 @@ class RLAgent(eqx.Module, metaclass=HackuinoxModule):
     def get_action(self, *args, **kwargs) -> Any: ...
 
     @collective
-    def train(self, key: PRNGKeyArray, env: Environment, **hyperparams) -> Self:
-        """Continues training this agent."""
+    def train(
+        self, key: PRNGKeyArray, env: Environment, **hyperparams
+    ) -> tuple[Self, PyTree[Float[Array, " iterations"]]]:
+        """Continues training this agent, returning it with its training metrics."""
         self = self.with_hyperparams(**hyperparams)
         return self.trainer.train(key, env, agent=self)
 

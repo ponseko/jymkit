@@ -266,9 +266,15 @@ def test_is_wrapped_and_remove_wrapper():
     assert not jym.is_wrapped(outer_removed, jym.ScaleRewardWrapper)
     assert jym.is_wrapped(outer_removed, jym.FlattenObservationWrapper)
 
+    # Removing an inner wrapper leaves the wrappers around it in place.
     inner_removed = jym.remove_wrapper(env, jym.FlattenObservationWrapper)
     assert not jym.is_wrapped(inner_removed, jym.FlattenObservationWrapper)
-    assert not jym.is_wrapped(inner_removed, jym.ScaleRewardWrapper)
+    assert jym.is_wrapped(inner_removed, jym.ScaleRewardWrapper)
+
+    # `unwrap_to` drops all wrappers outside of it as well.
+    unwrapped = jym.unwrap_to(env, jym.FlattenObservationWrapper)
+    assert not jym.is_wrapped(unwrapped, jym.FlattenObservationWrapper)
+    assert not jym.is_wrapped(unwrapped, jym.ScaleRewardWrapper)
 
 
 def test_combined_wrappers():

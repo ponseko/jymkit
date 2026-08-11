@@ -34,7 +34,7 @@ if __name__ == "__main__":
 
     # RL Training
     agent = Algo(total_timesteps=100000)
-    agent = agent.train(rng, env)
+    agent, metrics = agent.train(rng, env)
 
     print(f"Agent average reward: {agent.evaluate(rng, env)}")
 

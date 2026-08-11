@@ -21,7 +21,9 @@ from ._wrappers import (
     TransformRewardWrapper as TransformRewardWrapper,
     VecEnvWrapper as VecEnvWrapper,
     Wrapper as Wrapper,
+    insert_wrapper as insert_wrapper,
     is_wrapped as is_wrapped,
     remove_wrapper as remove_wrapper,
+    unwrap_to as unwrap_to,
 )
 from ._xminigrid import xMinigridWrapper as xMinigridWrapper

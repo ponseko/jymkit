@@ -84,15 +84,56 @@ def is_wrapped(wrapped_env: Environment, wrapper_class: type | str) -> bool:
 
 
 def remove_wrapper(wrapped_env: Environment, wrapper_class: type) -> Environment:
-    """
-    Remove a specific wrapper class from the environment.
-    """
+    """Remove every `wrapper_class` from the environment, keeping the rest of the stack."""
+
+    def rebuild(env: Environment) -> Environment:
+        if not isinstance(env, Wrapper):
+            return env
+        if isinstance(env, wrapper_class):
+            return rebuild(env._env)  # drop this one, keep looking further in
+        inner = env._env
+        replacement = rebuild(inner)
+        if replacement is inner:
+            return env
+        return eqx.tree_at(
+            lambda e: e._env, env, replacement, is_leaf=lambda x: x is inner
+        )
+
+    return rebuild(wrapped_env)
+
+
+def unwrap_to(wrapped_env: Environment, wrapper_class: type) -> Environment:
+    """The environment inside the outermost `wrapper_class`, dropping everything around it."""
     current_env = wrapped_env
     while isinstance(current_env, Wrapper):
         if isinstance(current_env, wrapper_class):
             return current_env._env
         current_env = current_env._env
     return wrapped_env
+
+
+def insert_wrapper(
+    wrapped_env: Environment,
+    new_wrapper: Callable[[Environment], Environment],
+    *,
+    inner_wrapper: type,
+) -> Environment:
+    """Insert a wrapper into a stack of wrappers at the position of a given inner wrapper."""
+
+    def rewrap(env: Environment) -> Environment:
+        if not isinstance(env, Wrapper):
+            return env
+        inner = env._env
+        replacement = (
+            new_wrapper(inner) if isinstance(env, inner_wrapper) else rewrap(inner)
+        )
+        if replacement is inner:
+            return env
+        return eqx.tree_at(
+            lambda e: e._env, env, replacement, is_leaf=lambda x: x is inner
+        )
+
+    return rewrap(wrapped_env)
 
 
 class VecEnvWrapper(Wrapper):

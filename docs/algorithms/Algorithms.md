@@ -47,7 +47,7 @@ from jaxnasium.algorithms import PPO
 algorithm = PPO(learning_rate=3e-4, total_timesteps=1_000_000, num_envs=8)
 
 # Train on environment
-trained_algorithm = algorithm.train(key, env)
+trained_algorithm, metrics = algorithm.train(key, env)
 
 # Evaluate
 rewards = trained_algorithm.evaluate(

@@ -6,7 +6,13 @@ import jax.numpy as jnp
 import pytest
 
 import jaxnasium as jym
-from jaxnasium.sweep import GridSearch, RandomSearch, SobolSearch, Sweep
+from jaxnasium.sweep import (
+    GridSearch,
+    OneAtATimeSearch,
+    RandomSearch,
+    SobolSearch,
+    Sweep,
+)
 from jaxnasium.sweep._probe import split_static_dynamic_params
 
 
@@ -373,6 +379,7 @@ def test_mixed_fixed_and_unfixed_sampling_searches():
         ),
         RandomSearch({"dropout": (0.0, 0.5)}, num_samples=2),
         seed=jax.random.PRNGKey(0),
+        batch_size=0,
     )
 
     # 2 envs * 2 lrs * 2 dropouts = 8 configs, all dynamic except env.
@@ -506,7 +513,7 @@ def test_real_ppo_env_and_hparams_sweep():
             **hparams,
         )
         key_train, key_eval = jax.random.split(jax.random.PRNGKey(0))
-        agent = agent.train(key_train, environment)
+        agent, _ = agent.train(key_train, environment)
         return agent.evaluate(key_eval, environment, num_eval_episodes=2).mean()
 
     sweep = Sweep(
@@ -521,17 +528,16 @@ def test_real_ppo_env_and_hparams_sweep():
             fixed_seed=jax.random.PRNGKey(1),
         ),
         seed=jax.random.PRNGKey(0),
+        batch_size=0,
     )
 
     # env is static; each sampled hparam set is its own job (default: no batching).
-    assert len(sweep) == 4  # 2 envs × 2 samples
+    assert len(sweep) == 2  # 2 envs × 2 samples
     assert [job.static_args["env"] for job in sweep.jobs] == [
         "CartPole-v1",
-        "CartPole-v1",
-        "Acrobot-v1",
         "Acrobot-v1",
     ]
-    assert all(job.num_runs == 1 for job in sweep.jobs)
+    assert all(job.num_runs == 2 for job in sweep.jobs)
     assert all(
         set(job.dynamic_args) == {"learning_rate_start", "gamma"} for job in sweep.jobs
     )
@@ -548,8 +554,112 @@ def test_real_ppo_env_and_hparams_sweep():
 
     results = [result for job in sweep.jobs for result in sweep.fn(job)]
     assert len(results) == 4
-    assert all(r.num_runs == 1 for r in results)
+    assert all(r.num_runs == 2 for r in results)
     assert all(jnp.isfinite(r.result) for r in results)
     assert {r.arguments["env"] for r in results} == {"CartPole-v1", "Acrobot-v1"}
     assert all(1e-4 <= r.arguments["learning_rate_start"] <= 1e-2 for r in results)
     assert all(r.arguments["gamma"] in (0.98, 0.99) for r in results)
+
+
+def test_one_at_a_time_search_configs():
+    search = OneAtATimeSearch(
+        {
+            "gamma": [0.99, 0.95, 0.999],
+            "lr": [0.1, 0.01],
+        }
+    )
+    configs = search.configs(jax.random.PRNGKey(0))
+    assert configs == [
+        {"gamma": 0.99, "lr": 0.1},
+        {"gamma": 0.95, "lr": 0.1},
+        {"gamma": 0.999, "lr": 0.1},
+        {"gamma": 0.99, "lr": 0.01},
+    ]
+
+
+def test_one_at_a_time_search_fewer_configs_than_grid():
+    params = {"a": [1, 2, 3], "b": ["x", "y"]}
+    oat = OneAtATimeSearch(params).configs(jax.random.PRNGKey(0))
+    grid = GridSearch(params).configs(jax.random.PRNGKey(0))
+    assert len(oat) == 1 + 2 + 1
+    assert len(grid) == 3 * 2
+    assert oat[0] in grid
+    assert all(c in grid for c in oat)
+
+
+def test_one_at_a_time_search_sweep():
+    def fn(gamma, lr):
+        return gamma * lr
+
+    sweep = OneAtATimeSearch({"gamma": [0.99, 0.95], "lr": [0.1, 0.01]}).sweep(fn)
+
+    assert len(sweep) == 3
+    results = [r for run in sweep for r in run()]
+    assert [r.arguments for r in results] == [
+        {"gamma": 0.99, "lr": 0.1},
+        {"gamma": 0.95, "lr": 0.1},
+        {"gamma": 0.99, "lr": 0.01},
+    ]
+    assert [r.result for r in results] == pytest.approx([0.099, 0.095, 0.0099])
+
+
+def test_one_at_a_time_search_single_valued_params():
+    search = OneAtATimeSearch({"a": [1], "b": [2]})
+    assert search.configs(jax.random.PRNGKey(0)) == [{"a": 1, "b": 2}]
+
+
+def test_one_at_a_time_vmaps_dynamic_params():
+    def fn(lr, gamma):
+        return lr * gamma
+
+    sweep = OneAtATimeSearch({"lr": [0.1, 0.2, 0.3], "gamma": [0.9, 0.99]}).sweep(
+        fn, batch_size=0
+    )
+
+    # Both params are vmappable, so all four configurations share one job.
+    assert len(sweep) == 1
+    assert sweep.jobs[0].num_runs == 4
+
+    results = sweep[0]()
+    assert all(
+        r.result == pytest.approx(r.arguments["lr"] * r.arguments["gamma"])
+        for r in results
+    )
+
+
+def test_grid_then_one_at_a_time_chains():
+    def fn(env_name, gamma, lr):
+        return lr
+
+    sweep = Sweep(
+        fn,
+        GridSearch({"env_name": ["a", "b"]}),
+        OneAtATimeSearch({"gamma": [0.99, 0.95], "lr": [0.1, 0.01]}),
+        batch_size=0,
+    )
+
+    # The same 3 one-at-a-time configurations are repeated within each env.
+    results = [r for run in sweep for r in run()]
+    assert len(results) == 6
+    per_env = {
+        env: sorted(
+            (r.arguments["gamma"], r.arguments["lr"])
+            for r in results
+            if r.arguments["env_name"] == env
+        )
+        for env in ("a", "b")
+    }
+    assert per_env["a"] == per_env["b"]
+    assert per_env["a"] == [(0.95, 0.1), (0.99, 0.01), (0.99, 0.1)]
+
+
+def test_cost_estimate_unwraps_dynamic_args(capsys):
+    def fn(seed, lr):
+        return lr * jax.random.normal(jax.random.PRNGKey(seed))
+
+    _sweep = GridSearch({"seed": [0, 1], "lr": [0.1, 0.2]}).sweep(
+        fn, batch_size=2, print_cost_estimate=True
+    )
+
+    out = capsys.readouterr().out
+    assert "Could not estimate" not in out
