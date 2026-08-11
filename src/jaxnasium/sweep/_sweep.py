@@ -330,20 +330,18 @@ class Sweep:
 
         if print_cost_estimate:
             first_job = jobs[0]
-            un_vmapped_first_job = SweepJob(
-                first_job.static_args,
-                {
-                    name: [first_job.dynamic_args[name][0]]
-                    for name in first_job.dynamic_args
-                },
-            )
+            # dynamic_args are lists of values for vmap; unwrap one config for the probe.
+            sample_args = {
+                **first_job.static_args,
+                **{name: values[0] for name, values in first_job.dynamic_args.items()},
+            }
             print(
                 "Estimating the cost of the first job without any arguments mapped over.",
                 " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
                 " especially when sweeping over different environments, num_envs etc.",
                 " Compiling...",
             )
-            print(log_cost_estimate(fn, **un_vmapped_first_job.arguments))
+            print(log_cost_estimate(fn, **sample_args))
             print("Done.")
             print(
                 "Proxied a single configuration. In this sweep, the largest job runs",

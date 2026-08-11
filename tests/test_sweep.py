@@ -651,3 +651,15 @@ def test_grid_then_one_at_a_time_chains():
     }
     assert per_env["a"] == per_env["b"]
     assert per_env["a"] == [(0.95, 0.1), (0.99, 0.01), (0.99, 0.1)]
+
+
+def test_cost_estimate_unwraps_dynamic_args(capsys):
+    def fn(seed, lr):
+        return lr * jax.random.normal(jax.random.PRNGKey(seed))
+
+    _sweep = GridSearch({"seed": [0, 1], "lr": [0.1, 0.2]}).sweep(
+        fn, batch_size=2, print_cost_estimate=True
+    )
+
+    out = capsys.readouterr().out
+    assert "Could not estimate" not in out
