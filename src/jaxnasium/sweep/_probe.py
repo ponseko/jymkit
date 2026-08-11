@@ -22,10 +22,13 @@ def _is_traceable(fn: Callable[..., Any], kwargs: dict[str, Any], name: str) -> 
             eqx.filter_make_jaxpr(lambda traced: fn(**{**kwargs, name: traced}))(
                 jnp.asarray(kwargs[name])
             )
+        return True
     except (ValueError, TypeError) as e:
         logger.debug(f"Param {name!r} is static: {type(e).__name__}: {e}")
         return False
-    return True
+    finally:
+        jax.clear_caches()
+        eqx.clear_caches()
 
 
 def _get_last(spec: list | tuple) -> Any:
@@ -51,6 +54,8 @@ def split_static_dynamic_params(
     mark the paramater as static. However, as probing every possible combination could be
     very expensive in large spaces, we only probe a subset.
 
+    parameters marked as static are never traced.
+
     **Arguments**:
         `fn`: Function to probe. Traced, never executed for real.
         `params`: param names to a sequence of values / range specs.
@@ -58,9 +63,18 @@ def split_static_dynamic_params(
     **Returns**:
         The static params and the dynamic params, as two dicts.
     """
+    declared_static: set[str] = set()
+    declare: Callable[..., set[str]] | None = getattr(fn, "static_params", None)
+    if callable(declare):
+        declared_static = set(declare(params))
+        logger.debug(f"Declared static, not probed: {sorted(declared_static)}")
+
     static_params: dict[str, list | tuple] = {}
     dynamic_candidates: dict[str, list | tuple] = {}
     for name, spec in params.items():
+        if name in declared_static:
+            static_params[name] = spec
+            continue
         try:
             jnp.asarray(spec[0] if isinstance(spec, tuple) else spec)
         except TypeError:
