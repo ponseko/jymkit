@@ -37,7 +37,7 @@ def mean_episode_returns(metrics: dict[str, Any]) -> PyTree[Float[Array, ""]]:
 def scan_callback(
     func: Callable | None = None,
     callback_fn: Callable | Literal["tqdm", "simple"] | None = None,
-    callback_interval: int | float = 20,
+    callback_interval: float = 20,
     n: int | None = None,
     reduce_ys_fn: Callable | Literal["mean"] | None = None,
 ) -> Callable:
