@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable, Sequence
-from functools import partial
 from typing import Literal, Self
 
 import equinox as eqx
@@ -106,7 +105,7 @@ class CNN(eqx.Module):
         channels_axis: Literal["first", "last"] = "first",
         activation: Callable = jax.nn.relu,
     ) -> Callable[..., Self]:
-        return partial(
+        return eqx.Partial(
             cls,
             out_channels=out_channels,
             kernel_sizes=kernel_sizes,

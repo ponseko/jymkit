@@ -1,7 +1,6 @@
 import logging
 import warnings
 from collections.abc import Callable
-from functools import partial
 from typing import Any
 
 import distrax
@@ -166,7 +165,7 @@ def TanhNormalFactory(low, high) -> Callable[..., TanhNormal]:
     scale = (high - low) / 2.0
     shift = (high + low) / 2.0
 
-    return partial(TanhNormal, shift=shift, scale=scale)
+    return eqx.Partial(TanhNormal, shift=shift, scale=scale)
 
 
 def _masked_epsilon_greedy(

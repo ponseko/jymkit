@@ -149,7 +149,7 @@ class PPO(RLAlgorithm):
                 lambda gae, transition: self._compute_gae_scan(gae, transition),
                 jnp.zeros(self.num_envs),
                 reverse=True,
-                unroll=16,
+                unroll=8,
             )
         )
         train_batch = replace(train_batch, advantage=advantages, return_=returns)

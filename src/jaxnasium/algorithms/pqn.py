@@ -157,7 +157,7 @@ class PQN(RLAlgorithm):
                 lambda re, transition: self._compute_q_lambda_scan(re, transition),
                 carry,
                 reverse=True,
-                unroll=16,
+                unroll=8,
             )
         )
         train_batch = replace(train_batch, return_=returns)

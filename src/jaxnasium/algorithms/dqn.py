@@ -43,10 +43,10 @@ class DQN(RLAlgorithm):
     """ Fraction of `total_timesteps` over which epsilon anneals from start to end. """
     gamma: float = 0.99
     max_grad_norm: float = 10.0
-    update_every: int = eqx.field(static=True, default=64)
+    update_every: int = eqx.field(static=True, default=256)
     num_updates: int = eqx.field(static=True, default=16)
-    replay_buffer_size: int = eqx.field(static=True, default=10_000)
-    batch_size: int = eqx.field(static=True, default=64)
+    replay_buffer_size: int = eqx.field(static=True, default=50_000)
+    batch_size: int = eqx.field(static=True, default=128)
     warmup_steps: int = eqx.field(static=True, default=5_000)
     tau: float = 0.005
 

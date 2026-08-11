@@ -1,7 +1,6 @@
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
-from functools import partial
 from typing import Any, Literal, Self
 
 import distrax
@@ -303,7 +302,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             padding=(0, 0, 0),
         ),
     ) -> Callable[..., Self]:
-        return partial(
+        return eqx.Partial(
             cls,
             architecture_1d=architecture_1d,
             architecture_2d=architecture_2d,
@@ -342,7 +341,7 @@ class CategoricalLayer(eqx.Module):
     def with_params(
         cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
     ) -> Callable[..., Self]:
-        return partial(cls, layer_type=layer_type)
+        return eqx.Partial(cls, layer_type=layer_type)
 
 
 class _ConstantLogStd(eqx.Module):
@@ -426,7 +425,7 @@ class _GaussianOutputLayer(eqx.Module):
         log_std_init: float = 0.0,
         layer_type: Callable[..., Network] = eqx.nn.Linear,
     ) -> Callable[..., Self]:
-        return partial(
+        return eqx.Partial(
             cls,
             state_dependent_std=state_dependent_std,
             log_std_min=log_std_min,
@@ -499,7 +498,7 @@ class QLayer(eqx.Module):
     def with_params(
         cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
     ) -> Callable[..., Self]:
-        return partial(cls, layer_type=layer_type)
+        return eqx.Partial(cls, layer_type=layer_type)
 
 
 class _PyTreeOutputNetwork(eqx.Module):
@@ -586,7 +585,7 @@ class PyTreeActionNetwork(_PyTreeOutputNetwork):
         continuous_output_layer: Callable[..., Network] = NormalLayer,
         assume_independent: bool = True,
     ) -> Callable[..., Self]:
-        return partial(
+        return eqx.Partial(
             cls,
             discrete_output_layer=discrete_output_layer,
             continuous_output_layer=continuous_output_layer,
@@ -641,4 +640,4 @@ class PyTreeQValueNetwork(_PyTreeOutputNetwork):
     def with_params(
         cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
     ) -> Callable[..., Self]:
-        return partial(cls, layer_type=layer_type)
+        return eqx.Partial(cls, layer_type=layer_type)

@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable
-from functools import partial
 from typing import Self
 
 import equinox as eqx
@@ -87,4 +86,4 @@ class SimBa(eqx.Module):
     def with_params(
         cls, *, depth: int = 1, width_size: int = 128
     ) -> Callable[..., Self]:
-        return partial(cls, depth=depth, width_size=width_size)
+        return eqx.Partial(cls, depth=depth, width_size=width_size)
