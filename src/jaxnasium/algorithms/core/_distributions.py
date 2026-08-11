@@ -1,3 +1,4 @@
+import logging
 import warnings
 from collections.abc import Callable
 from functools import partial
@@ -8,6 +9,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, PyTree
+
+logger = logging.getLogger(__name__)
 
 
 def make_independent(dist: distrax.Distribution) -> distrax.Distribution:
@@ -166,19 +169,60 @@ def TanhNormalFactory(low, high) -> Callable[..., TanhNormal]:
     return partial(TanhNormal, shift=shift, scale=scale)
 
 
+def _masked_epsilon_greedy(
+    preferences: Array,
+    epsilon: float,
+    action_mask: Array,
+    dtype: jnp.dtype | type[Any],
+) -> distrax.Categorical:
+    num_actions = preferences.shape[-1]
+    mask = jnp.asarray(action_mask, dtype=bool)
+    num_valid = jnp.count_nonzero(mask, axis=-1, keepdims=True)
+
+    uniform = jnp.where(
+        num_valid > 0,
+        mask.astype(preferences.dtype) / jnp.maximum(num_valid, 1),
+        1.0 / num_actions,
+    )
+
+    masked_preferences = jnp.where(mask, preferences, -jnp.inf)
+    # splitting ties
+    optimal = masked_preferences == masked_preferences.max(axis=-1, keepdims=True)
+    greedy = optimal / optimal.sum(axis=-1, keepdims=True)
+
+    probs = (1 - epsilon) * greedy + epsilon * uniform
+    return distrax.Categorical(probs=probs, dtype=dtype)
+
+
 class EpsilonGreedy(distrax.Joint):
-    """`distrax.EpsilonGreedy` but wrapped in a `Joint` and `Independent` for PyTree support.
-    Assumes independent actions.
+    """Like `distrax.EpsilonGreedy` but wrapped in a `Joint` and `Independent`
+    for PyTree support. Assumes independent actions.
+    Also supports action masking.
     """
 
     def __init__(
-        self, preference, *, epsilon: float = 0.0, dtype: jnp.dtype | type[Any] = int
+        self,
+        preference,
+        *,
+        epsilon: float = 0.0,
+        action_mask: PyTree | None = None,
+        dtype: jnp.dtype | type[Any] = int,
     ):
-        super().__init__(
-            jax.tree.map(
+        if action_mask is None:
+            distributions = jax.tree.map(
                 lambda dist: make_independent(
-                    distrax.EpsilonGreedy(dist, epsilon=epsilon)
+                    distrax.EpsilonGreedy(dist, epsilon=epsilon, dtype=dtype)
                 ),
                 preference,
             )
-        )
+
+        else:
+            distributions = jax.tree.map(
+                lambda dist, mask: make_independent(
+                    _masked_epsilon_greedy(dist, epsilon, mask, dtype)
+                ),
+                preference,
+                action_mask,
+            )
+
+        super().__init__(distributions)

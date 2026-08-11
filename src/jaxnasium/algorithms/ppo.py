@@ -226,12 +226,15 @@ class PPO(RLAlgorithm):
         assert transition.value is not None
         assert transition.next_value is not None
 
-        done = transition.terminated
+        # No bootstrap on terminated
         delta = (
             transition.reward
-            + self.gamma * transition.next_value * (1 - done)
+            + self.gamma * transition.next_value * (1 - transition.terminated)
             - transition.value
         )
+
+        # But cut off on any done (terminated or truncated)
+        done = jnp.logical_or(transition.terminated, transition.truncated)
         gae = delta + self.gamma * self.gae_lambda * (1 - done) * gae
         return gae, (gae, gae + transition.value)
 
@@ -301,7 +304,7 @@ class PPOAgent(RLAgent):
 
     def update_params(self, batch: Transition):
         @eqx.filter_grad
-        def __ppo_los_fn(
+        def __ppo_loss_fn(
             params: tuple[ActorNetwork, ValueNetwork],
             train_batch: Transition,
         ):
@@ -353,7 +356,7 @@ class PPOAgent(RLAgent):
         trainer = self.trainer
 
         actor, critic = self.actor, self.critic
-        grads = __ppo_los_fn((actor, critic), batch)
+        grads = __ppo_loss_fn((actor, critic), batch)
         updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
         new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
         return self.replace(

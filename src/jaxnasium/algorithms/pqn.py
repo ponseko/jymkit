@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import namedtuple
 from dataclasses import replace
 from functools import partial
 from typing import Any
@@ -28,14 +29,19 @@ from .agent_networks import QValueNetwork
 
 logger = logging.getLogger(__name__)
 
+# differentiates tuple carry from multi agent tuple agents
+QLambdaCarry = namedtuple("QLambdaCarry", ["next_return", "q_lambda"])
+
 
 class PQN(RLAlgorithm):
     """Parallel Q-Network (PQN) algorithm implementation."""
 
     learning_rate_start: float = 2.5e-4
     learning_rate_end: float | None = eqx.field(static=True, default=None)
-    epsilon_start: float = 0.1
-    epsilon_end: float | None = eqx.field(static=True, default=None)
+    epsilon_start: float = 1.0
+    epsilon_end: float | None = eqx.field(static=True, default=0.05)
+    exploration_fraction: float = eqx.field(static=True, default=0.5)
+    """ Fraction of `total_timesteps` over which epsilon anneals from start to end. """
     gamma: float = 0.99
     max_grad_norm: float = 10.0
     q_lambda: float = 0.65
@@ -61,10 +67,13 @@ class PQN(RLAlgorithm):
 
     @property
     def epsilon_schedule(self):
+        """Annealed over `exploration_fraction` of the gradient-step budget."""
         return Schedule(
             start=self.epsilon_start,
             end=self.epsilon_end,
-            transition_steps=self.num_training_updates,
+            transition_steps=max(
+                1, int(self.exploration_fraction * self.num_training_updates)
+            ),
         )
 
     @property
@@ -141,10 +150,12 @@ class PQN(RLAlgorithm):
         agent = agent.update_normalizer(trajectory_batch)
 
         # Calculate Qlambda returns, add to trajectory batch
+        # we pass a q_lambda of 0.0 on the first iteration
+        carry = QLambdaCarry(jnp.zeros(self.num_envs), 0.0)
         _, returns = (
             train_batch.scan(  # We can use a normal scan, but this custom scan automatically handles multi-agent scenarios
                 lambda re, transition: self._compute_q_lambda_scan(re, transition),
-                jnp.zeros(self.num_envs),
+                carry,
                 reverse=True,
                 unroll=16,
             )
@@ -217,17 +228,24 @@ class PQN(RLAlgorithm):
 
         return rollout_state, trajectory_batch
 
-    def _compute_q_lambda_scan(self, next_return, transition: Transition):
-        next_q_values = jax.tree.map(
-            lambda q: jnp.max(q, axis=-1), transition.next_value
-        )
-        next_q_values = jym.tree.batch_sum(next_q_values)
+    def _compute_q_lambda_scan(self, next_return_and_lambda, transition: Transition):
+        # q_lambda is 0.0 on the first iteration, afterwards it is self.q_lambda
+        next_return, q_lambda = next_return_and_lambda
 
-        done = transition.terminated
-        return_this_step = transition.reward + (1 - done) * self.gamma * (
-            self.q_lambda * next_return + (1 - self.q_lambda) * next_q_values
+        next_q_values = jym.tree.batch_sum(
+            jax.tree.map(lambda q: jnp.max(q, axis=-1), transition.next_value)
         )
-        return return_this_step, return_this_step
+
+        # bootstrap only on truncated or non-terminal
+        bootstrap = (1 - transition.terminated) * next_q_values
+        blended = q_lambda * next_return + (1 - q_lambda) * bootstrap
+
+        done = jnp.logical_or(transition.terminated, transition.truncated)
+        return_this_step = transition.reward + (
+            self.gamma * (((1 - done) * blended) + (done * bootstrap))
+        )
+
+        return QLambdaCarry(return_this_step, self.q_lambda), return_this_step
 
 
 class PQNAgent(RLAgent):
@@ -269,7 +287,8 @@ class PQNAgent(RLAgent):
             assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
-        action_dist = EpsilonGreedy(q_values, epsilon=epsilon)
+        action_mask = getattr(observation, "action_mask", None)
+        action_dist = EpsilonGreedy(q_values, epsilon=epsilon, action_mask=action_mask)
         return action_dist.sample(seed=key)
 
     def get_value(self, observation: PyTree):

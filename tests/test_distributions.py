@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxnasium.algorithms.core._distributions import (
     DistraxContainer,
+    EpsilonGreedy,
     TanhNormal,
     TanhNormalFactory,
 )
@@ -220,3 +221,53 @@ def test_factory_samples_within_bounds():
     samples = dist.sample(seed=SEED, sample_shape=(1000,))
     assert jnp.all(samples > low)
     assert jnp.all(samples < high)
+
+
+_PREFS = jnp.array([1.0, 5.0, 2.0, 3.0])
+
+
+def test_epsilon_greedy_masked_actions_get_zero_probability():
+    mask = jnp.array([False, True, True, False])
+    for epsilon in (0.0, 0.5, 1.0):
+        probs = EpsilonGreedy(
+            _PREFS, epsilon=epsilon, action_mask=mask
+        ).distributions.probs
+        assert jnp.allclose(probs[0], 0.0), epsilon
+        assert jnp.allclose(probs[3], 0.0), epsilon
+        assert jnp.allclose(probs.sum(), 1.0), epsilon
+
+
+def test_epsilon_greedy_explores_uniformly_over_valid_actions():
+    mask = jnp.array([False, True, True, False])
+    probs = EpsilonGreedy(_PREFS, epsilon=1.0, action_mask=mask).distributions.probs
+    assert jnp.allclose(probs, jnp.array([0.0, 0.5, 0.5, 0.0]))
+
+
+def test_epsilon_greedy_is_greedy_over_valid_actions_only():
+    """The argmax must avoid a masked action even if it has the highest preference."""
+    mask = jnp.array([True, False, True, True])  # index 1 is the unmasked argmax
+    probs = EpsilonGreedy(_PREFS, epsilon=0.0, action_mask=mask).distributions.probs
+    assert jnp.allclose(probs, jnp.array([0.0, 0.0, 0.0, 1.0]))  # next best is index 3
+
+
+def test_epsilon_greedy_all_masked_falls_back_to_uniform():
+    mask = jnp.zeros((4,), dtype=bool)
+    for epsilon in (0.0, 0.5, 1.0):
+        probs = EpsilonGreedy(
+            _PREFS, epsilon=epsilon, action_mask=mask
+        ).distributions.probs
+        assert jnp.all(jnp.isfinite(probs)), epsilon
+        assert jnp.allclose(probs, 0.25), epsilon
+
+
+def test_epsilon_greedy_mask_supports_pytree_action_spaces():
+    prefs = {"a": jnp.array([1.0, 5.0]), "b": jnp.array([2.0, 0.0, 1.0])}
+    masks = {"a": jnp.array([True, False]), "b": jnp.array([False, True, True])}
+    dist = EpsilonGreedy(prefs, epsilon=1.0, action_mask=masks)
+    probs = jax.tree.map(
+        lambda d: d.probs,
+        dist.distributions,
+        is_leaf=lambda x: isinstance(x, distrax.Distribution),
+    )
+    assert jnp.allclose(probs["a"], jnp.array([1.0, 0.0]))
+    assert jnp.allclose(probs["b"], jnp.array([0.0, 0.5, 0.5]))
