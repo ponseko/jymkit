@@ -44,11 +44,11 @@ class DQN(RLAlgorithm):
     gamma: float = 0.99
     max_grad_norm: float = 10.0
     update_every: int = eqx.field(static=True, default=256)
-    num_updates: int = eqx.field(static=True, default=16)
+    num_updates: int = eqx.field(static=True, default=8)
     replay_buffer_size: int = eqx.field(static=True, default=50_000)
-    batch_size: int = eqx.field(static=True, default=128)
+    batch_size: int = eqx.field(static=True, default=256)
     warmup_steps: int = eqx.field(static=True, default=5_000)
-    tau: float = 0.005
+    tau: float = 0.05
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
     num_envs: int = eqx.field(static=True, default=8)

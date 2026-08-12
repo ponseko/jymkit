@@ -487,6 +487,24 @@ def test_int_seeds_are_rejected():
         AlgorithmEvaluation(0)._create_config({})  # type: ignore[arg-type]
 
 
+def test_algorithm_evaluation_seed_from_kwargs():
+    seed = jax.random.key(0)
+    config = AlgorithmEvaluation()._create_config({"seed": seed})
+    assert jnp.array_equal(config.seed, seed)
+
+
+def test_algorithm_evaluation_seed_required_at_run():
+    with pytest.raises(ValueError, match="seed is required"):
+        AlgorithmEvaluation()._create_config({})
+
+
+def test_algorithm_evaluation_seed_cannot_be_given_twice():
+    with pytest.raises(ValueError, match="both at init and as a keyword"):
+        AlgorithmEvaluation(jax.random.key(0))._create_config(
+            {"seed": jax.random.key(1)}
+        )
+
+
 def _tiny_algorithm():
     from jaxnasium.algorithms import PPO
     from jaxnasium.algorithms.architectures import MLP

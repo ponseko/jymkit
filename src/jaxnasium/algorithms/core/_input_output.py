@@ -259,6 +259,10 @@ class PyTreeObsSpaceNetwork(eqx.Module):
     ):
         try:
             if len(obs_space.shape) == 3:
+                # Honour an explicit `channels_axis` else we infer it.
+                bound = getattr(architecture, "keywords", None) or {}
+                if "channels_axis" in bound:
+                    return architecture(obs_space.shape, key=key)
                 channels_axis = self._infer_channels_axis(obs_space)
                 return architecture(
                     obs_space.shape,
