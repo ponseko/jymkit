@@ -90,7 +90,7 @@ class SAC(RLAlgorithm):
     warmup_steps: int = eqx.field(static=True, default=10_000)
     """ Warmup for the normalizer and the replay buffer. """
     tau: float = 0.005
-    total_timesteps: int = eqx.field(static=True, default=int(5e6))
+    total_timesteps: int = eqx.field(static=True, default=int(5e5))
     num_envs: int = eqx.field(static=True, default=8)
 
     critics_num_updates: int = eqx.field(static=True, default=16)

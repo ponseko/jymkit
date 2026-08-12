@@ -33,8 +33,8 @@ class PPO(RLAlgorithm):
 
     learning_rate_start: float = 2.5e-4
     learning_rate_end: float | None = eqx.field(static=True, default=None)
-    ent_coef_start: float = 0.01
-    ent_coef_end: float | None = eqx.field(static=True, default=None)
+    ent_coef_start: float = 0.1
+    ent_coef_end: float | None = eqx.field(static=True, default=0.01)
     gamma: float = 0.99
     gae_lambda: float = 0.95
     max_grad_norm: float = 10.0
