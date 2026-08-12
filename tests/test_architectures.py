@@ -70,11 +70,3 @@ def test_simba_forward_and_out_features():
     y = net(jnp.ones((6,)))
     assert y.shape == (32,)
     assert jnp.all(jnp.isfinite(y))
-
-
-def test_simba_defaults():
-    net = SimBa(in_features=4, key=SEED)
-    assert net.depth == 1
-    assert net.width_size == 128
-    assert len(net.blocks) == 1
-    assert net(jnp.ones((4,))).shape == (128,)

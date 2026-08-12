@@ -116,7 +116,7 @@ class AlgorithmEvaluation:
         hyperparameters = dict(kwargs)
         if "seed" in hyperparameters and self.seed is not None:
             raise ValueError(
-                f"{type(self).__name__} was initialized with a seed, but was its run was also given a seed. Choose one."
+                f"{type(self).__name__} was initialized with a seed, but its run was also given a seed. Choose one."
             )
         seed = hyperparameters.pop("seed", self.seed)
         if seed is None:

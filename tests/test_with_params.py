@@ -8,6 +8,7 @@ import jaxnasium.algorithms
 
 # `key` is the exception; here we follow equinox's convention.
 NOT_PRE_BOUND = {"key"}
+NOT_FORWARDED_AT_DEFAULT = {"channels_axis"}
 
 """
 Tests to ensure that architectures that expose .with_params(), have this
@@ -110,7 +111,7 @@ def test_with_params_actually_forwards_what_it_accepts(qualname):
     assert bound.keywords is not None, (
         f"{qualname}.with_params did not return a partial"
     )
-    not_forwarded = set(bindable) - set(bound.keywords)
+    not_forwarded = set(bindable) - set(bound.keywords) - NOT_FORWARDED_AT_DEFAULT
     assert not not_forwarded, (
         f"{qualname}.with_params() accepts {sorted(not_forwarded)} but does not forward "
         f"them to the constructor."

@@ -494,12 +494,12 @@ def test_algorithm_evaluation_seed_from_kwargs():
 
 
 def test_algorithm_evaluation_seed_required_at_run():
-    with pytest.raises(ValueError, match="seed is required"):
+    with pytest.raises(ValueError, match="No seed was provided to"):
         AlgorithmEvaluation()._create_config({})
 
 
 def test_algorithm_evaluation_seed_cannot_be_given_twice():
-    with pytest.raises(ValueError, match="both at init and as a keyword"):
+    with pytest.raises(ValueError, match="but its run was also given a seed"):
         AlgorithmEvaluation(jax.random.key(0))._create_config(
             {"seed": jax.random.key(1)}
         )
