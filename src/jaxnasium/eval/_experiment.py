@@ -69,6 +69,8 @@ class AlgorithmEvaluation:
     **Arguments**:
         `seed`: Key for training and evaluation. Pass multiple keys to repeat the
         training and evaluation for each (e.g. AlgorithmEvaluation(jax.random.split(key, 10))).
+        Optional at init: it can also be supplied when calling (e.g. from a `Sweep`),
+        but not both. A seed is required by the time the evaluation actually runs.
         `env`: Environment to train on, or a name to pass to `jym.make`.
         `algorithm`: `RLAlgorithm` instance or name (e.g. `"PPO"`).
         `batch_size`: the batch size to `jax.lax.map` in case multiple seeds are given.
@@ -101,7 +103,7 @@ class AlgorithmEvaluation:
     ```
     """
 
-    seed: PRNGKeyArray
+    seed: PRNGKeyArray | None = None
     env: jym.Environment | str = "CartPole-v1"
     algorithm: RLAlgorithm | str = "PPO"
     batch_size: int | None = None
@@ -112,7 +114,15 @@ class AlgorithmEvaluation:
     def _create_config(self, kwargs: dict[str, Any]) -> AlgorithmEvaluationConfig:
         """Create a config from the given kwargs, filling in defaults from this instance."""
         hyperparameters = dict(kwargs)
+        if "seed" in hyperparameters and self.seed is not None:
+            raise ValueError(
+                f"{type(self).__name__} was initialized with a seed, but was its run was also given a seed. Choose one."
+            )
         seed = hyperparameters.pop("seed", self.seed)
+        if seed is None:
+            raise ValueError(
+                f"No seed was provided to {type(self).__name__}. Pass at init or to the run itself."
+            )
         if not jnp.issubdtype(seed.dtype, jax.dtypes.prng_key):
             seed = jax.random.wrap_key_data(seed)
         env, env_name = _get_env(hyperparameters.pop("env", self.env))
