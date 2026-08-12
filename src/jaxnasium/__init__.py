@@ -3,6 +3,10 @@ from importlib.metadata import version
 __version__ = version("jaxnasium")
 from jaxnasium import _registry, envs as envs, sweep as sweep, tree as tree
 
+from ._compilation import (
+    enable_compilation_cache as enable_compilation_cache,
+    precompile as precompile,
+)
 from ._environment import (
     ORIGINAL_OBSERVATION_KEY as ORIGINAL_OBSERVATION_KEY,
     Environment as Environment,
