@@ -144,9 +144,21 @@ class AlgorithmEvaluation:
 
         start_time = time.time()
         if config.seed.ndim == 0:
-            result = run(config.seed)
+
+            def run_single(key: PRNGKeyArray) -> Any:
+                return run(key)
+
+            run_single.__name__ = "AlgorithmEvaluation"
+            fn = jym.precompile(run_single, config.seed)
         else:
-            result = jax.lax.map(run, config.seed, batch_size=self.batch_size)
+
+            def run_batch(keys: PRNGKeyArray):
+                return jax.lax.map(run, keys, batch_size=self.batch_size)
+
+            run_batch.__name__ = f"AlgorithmEvaluation:batched[{self.batch_size}]"
+            fn = jym.precompile(run_batch, config.seed)
+
+        result = fn()
 
         if self.save_path is not None:
             result = jax.block_until_ready(result)
