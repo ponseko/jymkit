@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import Field, dataclass, fields, replace
@@ -15,6 +16,14 @@ from jaxtyping import PRNGKeyArray
 from ._probe import log_cost_estimate, split_static_dynamic_params
 
 logger = logging.getLogger(__name__)
+
+
+def _log(*text: str) -> None:
+    try:
+        sys.stderr.write(" ".join(text) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 
 class ParameterSpaceSearch(Protocol):
@@ -335,15 +344,15 @@ class Sweep:
                 **first_job.static_args,
                 **{name: values[0] for name, values in first_job.dynamic_args.items()},
             }
-            print(
+            _log(
                 "Estimating the cost of the first job without any arguments mapped over.",
                 " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
                 " especially when sweeping over different environments, num_envs etc.",
                 " Compiling...",
             )
-            print(log_cost_estimate(fn, **sample_args))
-            print("Done.")
-            print(
+            _log(f"{log_cost_estimate(fn, **sample_args)}")
+            _log("Done.")
+            _log(
                 "Proxied a single configuration. In this sweep, the largest job runs",
                 f"{max(jobs, key=lambda j: j.num_runs).num_runs} configuration(s) in parallel (vmap batch size).",
             )
