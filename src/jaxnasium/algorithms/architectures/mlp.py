@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable, Sequence
-from functools import partial
 from typing import Self
 
 import equinox as eqx
@@ -58,4 +57,4 @@ class MLP(eqx.Module):
         hidden_sizes: Sequence[int] = (128, 128),
         activation: Callable = jax.nn.relu,
     ) -> Callable[..., Self]:
-        return partial(cls, hidden_sizes=hidden_sizes, activation=activation)
+        return eqx.Partial(cls, hidden_sizes=hidden_sizes, activation=activation)

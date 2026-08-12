@@ -10,9 +10,17 @@ from scipy.stats import qmc
 from ._sweep import Sweep
 
 
-def _scale_to_spec(spec: list | tuple, u: float) -> Any:
+def _as_key(seed: PRNGKeyArray | int) -> PRNGKeyArray:
+    """A plain int becomes a fresh key; an existing key passes through."""
+    if isinstance(seed, int):
+        return jax.random.PRNGKey(seed)
+    return seed
+
+
+def _scale_to_spec(spec: list | tuple | dict, u: float) -> Any:
     """Maps a ranomly drawn `u` in [0, 1) onto the specified spec.
-    A spec is a list of choices, or a tuple of (low, high, ["linear", "log"])
+    A spec is a list of choices, a dict of branches (drawing a label), or a
+    tuple of (low, high, ["linear", "log"])
 
     Examples:
     >>> _scale_to_spec(["a", "b", "c"], 0.5)
@@ -29,14 +37,15 @@ def _scale_to_spec(spec: list | tuple, u: float) -> Any:
 
     """
     is_range = isinstance(spec, tuple) and len(spec) in (2, 3)
-    is_choice = isinstance(spec, list) and len(spec) > 0
+    is_choice = isinstance(spec, (list, dict)) and len(spec) > 0
     assert is_range or is_choice, (
-        f"Search params must be a non-empty list or a "
+        f"Search params must be a non-empty list, a dict of branches, or a "
         f"(low, high) / (low, high, scale) tuple, got {spec!r}"
     )
 
-    if isinstance(spec, list):
-        return spec[int(u * len(spec))]
+    if isinstance(spec, (list, dict)):
+        # Iterating a branch dict yields its labels, so both draw the same way.
+        return list(spec)[int(u * len(spec))]
 
     if len(spec) == 2:
         low, high = spec
@@ -65,22 +74,10 @@ def _scale_to_spec(spec: list | tuple, u: float) -> Any:
 class RandomSearch:
     """`num_samples` independent draws from the given parameters.
 
-    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.eval.Sweep], alone or
     chained with other searches. For only performing this random search,
     `RandomSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
-    A `Sweep` object allows batching jobs together in various `vmap` calls. See
-    [`Sweep`][jaxnasium.sweep.Sweep] for more details.
-
-
-    **Arguments**:
-        `params`: Maps param name to either:
-            - a non-empty list to sample uniformly from
-              (`{"env": ["env1", "env2", "env3"]}`), or
-            - a `(low, high)` or `(low, high, scale)` range, where `scale` is `"linear"` (default) or `"log"`
-              (`{"learning_rate": (1e-4, 1e-2, "log")}`).
-        `num_samples`: Number of configurations to draw.
-        `fixed_seed`: When chaining this search with other search in a `Sweep` object,
-        fixing this seed will ensure each configuration of this search uses the same random draws.
+    See [`Sweep`][jaxnasium.eval.Sweep] for more details.
 
     **Examples**:
 
@@ -88,7 +85,8 @@ class RandomSearch:
     sweep = RandomSearch(
         {"learning_rate": (1e-4, 1e-2, "log"), "gamma": [0.98, 0.99]},
         num_samples=64,
-    ).sweep(train, seed=jax.random.PRNGKey(0), batch_size=16)
+        seed=jax.random.PRNGKey(1),
+    ).sweep(train)
     for run in sweep:
         for r in run():
             print(r.arguments, r.result)
@@ -103,9 +101,8 @@ class RandomSearch:
         RandomSearch(
             {"learning_rate": (1e-4, 1e-2, "log")},
             num_samples=64,
-            fixed_seed=jax.random.PRNGKey(1),
+            seed=jax.random.PRNGKey(1),
         ),
-        seed=jax.random.PRNGKey(0),
     )
     for run in sweep:
         for r in run():
@@ -113,9 +110,9 @@ class RandomSearch:
     ```
     """
 
-    params: dict[str, list | tuple]
+    params: dict[str, list | tuple | dict]
     num_samples: int
-    fixed_seed: PRNGKeyArray | None = None
+    seed: PRNGKeyArray | int
 
     def __post_init__(self):
         assert self.params, "RandomSearch params cannot be empty"
@@ -123,10 +120,10 @@ class RandomSearch:
         # Eager validation check of each param:
         [_scale_to_spec(value, 0.0) for value in self.params.values()]
 
-    def configs(self, seed: PRNGKeyArray) -> list[dict[str, Any]]:
+    def configs(self) -> list[dict[str, Any]]:
         """Draw `num_samples` configurations"""
         random_u_samples = jax.random.uniform(
-            seed, (self.num_samples, len(self.params))
+            _as_key(self.seed), (self.num_samples, len(self.params))
         )
         random_u_samples = np.asarray(random_u_samples)
         names = list(self.params)
@@ -142,16 +139,12 @@ class RandomSearch:
         self,
         fn: Callable,
         *,
-        seed: PRNGKeyArray | None = None,
-        batch_size: int | None = None,
         print_cost_estimate: bool = False,
     ) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
+        """Create a [`Sweep`][jaxnasium.eval.Sweep] with this search alone."""
         return Sweep(
             fn,
             self,
-            seed=seed,
-            batch_size=batch_size,
             print_cost_estimate=print_cost_estimate,
         )
 
@@ -160,23 +153,10 @@ class RandomSearch:
 class SobolSearch:
     """Quasi-random draws that cover the parameter space more evenly than RandomSearch.
 
-    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.eval.Sweep], alone or
     chained with other searches. For only performing this Sobol search,
     `SobolSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
-    A `Sweep` object allows batching jobs together in various `vmap` calls. See
-    [`Sweep`][jaxnasium.sweep.Sweep] for more details.
-
-    **Arguments**:
-        `params`: Maps param name to either:
-            - a non-empty list to sample uniformly from
-              (`{"env": ["env1", "env2", "env3"]}`), or
-            - a `(low, high)` or `(low, high, scale)` range, where `scale` is
-              `"linear"` (default) or `"log"`
-              (`{"learning_rate": (1e-4, 1e-2, "log")}`).
-        `num_samples`: Number of configurations to draw. Prefer a power of two for this value.
-        `fixed_seed`: When chaining this search with other search in a `Sweep` object,
-        fixing this seed will ensure each configuration of this search uses the same random draws.
-
+    See [`Sweep`][jaxnasium.eval.Sweep] for more details.
 
     **Examples**:
 
@@ -184,7 +164,8 @@ class SobolSearch:
     sweep = SobolSearch(
         {"learning_rate": (1e-4, 1e-2, "log"), "gamma": (0.9, 1.0)},
         num_samples=64,
-    ).sweep(train, seed=jax.random.PRNGKey(0), batch_size=16)
+        seed=jax.random.PRNGKey(1),
+    ).sweep(train)
     for run in sweep:
         for r in run():
             print(r.arguments, r.result)
@@ -199,10 +180,9 @@ class SobolSearch:
         SobolSearch(
             {"learning_rate": (1e-4, 1e-2, "log"), "gamma": (0.9, 1.0)},
             num_samples=64,
-            fixed_seed=jax.random.PRNGKey(1),
+            seed=jax.random.PRNGKey(1),
         ),
         seed=jax.random.PRNGKey(0),
-        batch_size=16,
     )
     for run in sweep:
         for r in run():
@@ -210,9 +190,9 @@ class SobolSearch:
     ```
     """
 
-    params: dict[str, list | tuple]
+    params: dict[str, list | tuple | dict]
     num_samples: int
-    fixed_seed: PRNGKeyArray | None = None
+    seed: PRNGKeyArray | int
 
     def __post_init__(self):
         assert self.params, "SobolSearch params cannot be empty"
@@ -220,10 +200,10 @@ class SobolSearch:
         # Eager validation check of each param:
         [_scale_to_spec(value, 0.0) for value in self.params.values()]
 
-    def configs(self, seed: PRNGKeyArray) -> list[dict[str, Any]]:
+    def configs(self) -> list[dict[str, Any]]:
         """`num_samples` configurations spread evenly over the parameter space."""
         # We accept a JAX key, but need to convert it to a regular key
-        seed = jax.random.key_data(seed)  # new random.key() api
+        seed = jax.random.key_data(_as_key(self.seed))  # new random.key() api
         sampler = qmc.Sobol(
             len(self.params), rng=np.random.default_rng(np.asarray(seed))
         )
@@ -237,19 +217,6 @@ class SobolSearch:
             for row in random_u_samples
         ]
 
-    def sweep(
-        self,
-        fn: Callable,
-        *,
-        seed: PRNGKeyArray | None = None,
-        batch_size: int | None = None,
-        print_cost_estimate: bool = False,
-    ) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
-        return Sweep(
-            fn,
-            self,
-            seed=seed,
-            batch_size=batch_size,
-            print_cost_estimate=print_cost_estimate,
-        )
+    def sweep(self, fn: Callable, *, print_cost_estimate: bool = False) -> Sweep:
+        """Create a [`Sweep`][jaxnasium.eval.Sweep] with this search alone."""
+        return Sweep(fn, self, print_cost_estimate=print_cost_estimate)

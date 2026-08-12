@@ -1,6 +1,5 @@
 import logging
 from collections.abc import Callable
-from functools import partial
 from typing import Self
 
 import equinox as eqx
@@ -62,7 +61,7 @@ class SimBa(eqx.Module):
         *,
         key: PRNGKeyArray,
         depth: int = 1,
-        width_size: int = 128,
+        width_size: int = 256,
     ):
         keys = jax.random.split(key, depth + 1)
         self.in_features = in_features
@@ -85,6 +84,6 @@ class SimBa(eqx.Module):
 
     @classmethod
     def with_params(
-        cls, *, depth: int = 1, width_size: int = 128
+        cls, *, depth: int = 1, width_size: int = 256
     ) -> Callable[..., Self]:
-        return partial(cls, depth=depth, width_size=width_size)
+        return eqx.Partial(cls, depth=depth, width_size=width_size)

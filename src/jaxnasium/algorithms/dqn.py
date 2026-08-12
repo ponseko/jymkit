@@ -35,17 +35,19 @@ class DQN(RLAlgorithm):
     a replay buffer and epsilon-greedy exploration with optional annealing.
     """
 
-    learning_rate_start: float = 2.5e-3
-    learning_rate_end: float | None = eqx.field(static=True, default=2.5e-4)
-    epsilon_start: float = 0.1
-    epsilon_end: float | None = eqx.field(static=True, default=None)
+    learning_rate_start: float = 2.5e-4
+    learning_rate_end: float | None = eqx.field(static=True, default=None)
+    epsilon_start: float = 1.0
+    epsilon_end: float | None = eqx.field(static=True, default=0.05)
+    exploration_fraction: float = eqx.field(static=True, default=0.1)
+    """ Fraction of `total_timesteps` over which epsilon anneals from start to end. """
     gamma: float = 0.99
     max_grad_norm: float = 10.0
-    update_every: int = eqx.field(static=True, default=128)
-    replay_buffer_size: int = 10_000
-    batch_size: int = 64
+    update_every: int = eqx.field(static=True, default=256)
+    num_updates: int = eqx.field(static=True, default=8)
+    replay_buffer_size: int = eqx.field(static=True, default=50_000)
+    batch_size: int = eqx.field(static=True, default=256)
     warmup_steps: int = eqx.field(static=True, default=5_000)
-    """ Warmup for the normalizer and the replay buffer. """
     tau: float = 0.05
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
@@ -53,7 +55,6 @@ class DQN(RLAlgorithm):
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=False)
-    """ Normalization params are only updated during the warmup rollout """
 
     critic_kwargs: dict[str, Any] = eqx.field(static=True, default_factory=dict)
 
@@ -65,7 +66,12 @@ class DQN(RLAlgorithm):
 
     @property
     def epsilon_schedule(self) -> Schedule:
-        return Schedule(self.epsilon_start, self.epsilon_end, self.num_training_updates)
+        """Annealed over `exploration_fraction` of the gradient-step budget."""
+        return Schedule(
+            self.epsilon_start,
+            self.epsilon_end,
+            max(1, int(self.exploration_fraction * self.num_training_updates)),
+        )
 
     @property
     def optimizer(self):
@@ -76,7 +82,7 @@ class DQN(RLAlgorithm):
 
     @property
     def num_iterations(self):
-        return int(self.total_timesteps // self.update_every)
+        return int(self.total_timesteps // self.rollout_length // self.num_envs)
 
     @property
     def rollout_length(self):
@@ -88,7 +94,7 @@ class DQN(RLAlgorithm):
 
     @property
     def num_training_updates(self):
-        return self.num_iterations
+        return self.num_iterations * self.num_updates
 
     @eqx.filter_jit
     def init_agent(self, key: PRNGKeyArray, env: Environment) -> DQNAgent:
@@ -105,6 +111,7 @@ class DQN(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
+        # Note that the randomness of the warmup data is dependent on the initial epsilon.
         warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
             agent, (env_state, obsv, key), env, length=warmup_length
@@ -153,16 +160,30 @@ class DQN(RLAlgorithm):
 
         # Add new data to buffer & Sample update batch from the buffer
         buffer = buffer.insert(trajectory_batch)
-        train_batch = buffer.sample(rng)
         agent = agent.update_normalizer(trajectory_batch)
 
-        train_batch = train_batch.normalize(agent.normalizer)
-
-        # Update
-        agent = agent.update_params(train_batch)
+        rng, update_key = jax.random.split(rng)
+        agent = self._update_agent_state(update_key, agent, buffer)
 
         runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
+
+    def _update_agent_state(
+        self, key: PRNGKeyArray, agent: DQNAgent, buffer: TransitionBuffer
+    ) -> DQNAgent:
+        """`num_updates` gradient steps, each on its own freshly sampled batch."""
+
+        def scan_fn(carry, _):
+            agent, rng = carry
+            rng, sample_key = jax.random.split(rng)
+            minibatch = buffer.sample(sample_key)
+            minibatch = minibatch.normalize(agent.normalizer)
+            return (agent.update_params(minibatch), rng), None
+
+        (updated_agent, _), _ = jax.lax.scan(
+            scan_fn, (agent, key), None, length=self.num_updates
+        )
+        return updated_agent
 
     def _collect_rollout(
         self, agent: DQNAgent, rollout_state, env: Environment, length=None
@@ -251,7 +272,8 @@ class DQNAgent(RLAgent):
             assert epsilon == 0.0, "Non-zero epsilon for deterministic action"
         observation = self.normalizer.normalize_obs(observation)
         q_values = self.critic(observation)
-        action_dist = EpsilonGreedy(q_values, epsilon=epsilon)
+        action_mask = getattr(observation, "action_mask", None)
+        action_dist = EpsilonGreedy(q_values, epsilon=epsilon, action_mask=action_mask)
         return action_dist.sample(seed=key)
 
     def get_value(self, observation: PyTree):

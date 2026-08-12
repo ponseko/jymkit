@@ -6,7 +6,7 @@ import jax
 from jaxtyping import Array, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
-from jaxnasium.algorithms.architectures import CNN, MLP
+from jaxnasium.algorithms.architectures import CNN, SimBa
 from jaxnasium.algorithms.core import (
     POLICY_HEAD_WEIGHT_INIT,
     VALUE_HEAD_WEIGHT_INIT,
@@ -37,7 +37,7 @@ Each of these consist of three components:
         1d observation spaces are processed via the configured ``architecture_1d`` network.
         2d observation spaces are processed via the configured ``architecture_2d`` network.
         The output of each observation processor is concatenated into a single 1d vector.
-    - A body (default MLP) = A shared body network that takes the output of the observation processor and processes it jointly.
+    - A body (default SimBa) = A shared body network that takes the output of the observation processor and processes it jointly.
     - An output processor (PyTreeOutputNetwork)
         This accepts a PyTree of output spaces and builds a network per output space.
         Automtically builds a discrete or continuous output network based on the output space.
@@ -56,7 +56,7 @@ class ActorNetwork(eqx.Module):
         output_space: PyTree[jym.Space],
         *,
         key: PRNGKeyArray,
-        body: Callable[..., OutSizedNetwork] = MLP,
+        body: Callable[..., OutSizedNetwork] = SimBa,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         discrete_output_layer: Callable[..., Network] = CategoricalLayer,
@@ -112,7 +112,7 @@ class ValueNetwork(eqx.Module):
         obs_space: PyTree[jym.Space],
         *,
         key: PRNGKeyArray,
-        body: Callable[..., OutSizedNetwork] = MLP,
+        body: Callable[..., OutSizedNetwork] = SimBa,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,
@@ -164,7 +164,7 @@ class QValueNetwork(eqx.Module):
         output_space: PyTree[jym.Space],
         *,
         key: PRNGKeyArray,
-        body: Callable[..., OutSizedNetwork] = MLP,
+        body: Callable[..., OutSizedNetwork] = SimBa,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
         output_layer_type: Callable[..., Network] = eqx.nn.Linear,

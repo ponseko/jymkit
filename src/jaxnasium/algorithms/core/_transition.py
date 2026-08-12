@@ -32,6 +32,7 @@ class Transition(eqx.Module):
     return_: Float[Array, " "] | None = None
     advantage: Float[Array, "..."] | None = None
     target: Float[Array, " "] | None = None
+    bootstrap_n: Int[Array, " "] | None = None
 
     # PER stores the values here so they are easily tracked and updated after reshuffling.
     PER_weight: Float[Array, " "] | None = None
@@ -323,6 +324,7 @@ def n_step_to_cumulative_single_step(
             next_observation=jax.tree.map(
                 lambda x: x[boundary_idx], t.next_observation
             ),
+            bootstrap_n=boundary_idx,
         )
 
     # In the multi-agent case, we tranpose to per-agent and process each agent, then merge back.
