@@ -11,15 +11,15 @@ class GridSearch:
     """Sets up a grid search over the given parameter values. All
     combinations of the parameter values are created in its configs.
 
-    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or
+    Pass as a stage to [`Sweep`][jaxnasium.eval.Sweep], alone or
     chained with other searches. For only performing this grid search,
     `GridSearch(...).sweep(fn, ...)` is a shorthand for `Sweep(fn, self, ...)`.
-    See [`Sweep`][jaxnasium.sweep.Sweep] for more details.
+    See [`Sweep`][jaxnasium.eval.Sweep] for more details.
 
     **Arguments**:
         `params`: A dict of param names mapping to a non-empty list of values,
             or to a `{label: sub-space}` dict of branches. See
-            [`Sweep`][jaxnasium.sweep.Sweep] for what a branch expands into.
+            [`Sweep`][jaxnasium.eval.Sweep] for what a branch expands into.
 
     **Examples**:
 
@@ -91,5 +91,5 @@ class GridSearch:
         ]
 
     def sweep(self, fn: Callable, *, print_cost_estimate: bool = False) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.sweep.Sweep] object with this grid search"""
+        """Create a [`Sweep`][jaxnasium.eval.Sweep] object with this grid search"""
         return Sweep(fn, self, print_cost_estimate=print_cost_estimate)

@@ -70,7 +70,7 @@ def create_batched_grid_search(
     """
     warnings.warn(
         "create_batched_grid_search is deprecated in favor of "
-        "jaxnasium.sweep.GridSearch.",
+        "jaxnasium.eval.GridSearch.",
         DeprecationWarning,
         stacklevel=2,
     )
@@ -185,7 +185,7 @@ def create_batched_random_search(
 ):
     warnings.warn(
         "create_batched_random_search is deprecated in favor of "
-        "jaxnasium.sweep.RandomSearch.",
+        "jaxnasium.eval.RandomSearch.",
         DeprecationWarning,
         stacklevel=2,
     )

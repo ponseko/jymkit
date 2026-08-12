@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from jaxnasium.sweep import (
+from jaxnasium.eval import (
     AlgorithmEvaluation,
     GridSearch,
     OneAtATimeSearch,
@@ -42,7 +42,7 @@ def test_with_cost_size_estimate(capsys):
 
 
 def test_log_cost_estimate_returns_dataclass():
-    from jaxnasium.sweep._probe import CostEstimate, log_cost_estimate
+    from jaxnasium.eval._probe import CostEstimate, log_cost_estimate
 
     def fn(lr):
         return (jnp.ones(8) * lr).sum()

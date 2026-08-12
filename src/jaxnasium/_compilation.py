@@ -3,9 +3,10 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Self
 
 import equinox as eqx
 import jax
@@ -86,7 +87,7 @@ class _Step:
         while not self._stop.wait(0.1):
             self._write(f"\r\033[2K  {self.doing} ... {_format_secs(self.elapsed)}")
 
-    def __enter__(self) -> "_Step":
+    def __enter__(self) -> Self:
         try:
             animate = sys.stderr.isatty()
         except Exception:
@@ -96,7 +97,7 @@ class _Step:
             self._thread.start()
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *args: object) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=1.0)

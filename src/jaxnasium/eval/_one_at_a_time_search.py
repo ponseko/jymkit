@@ -13,14 +13,14 @@ class OneAtATimeSearch:
     one parameter at a time to each of its other values while holding the rest at
     baseline. Linear in the number of values.
 
-    Pass as a stage to [`Sweep`][jaxnasium.sweep.Sweep], alone or chained with
+    Pass as a stage to [`Sweep`][jaxnasium.eval.Sweep], alone or chained with
     other searches. For only performing this search,
     `OneAtATimeSearch(...).sweep(fn, ...)` is a shorthand for
     `Sweep(fn, self, ...)`.
 
     **Arguments**:
         `params`: A dict of param names mapping to a non-empty list of values,
-            or to a `{label: sub-space}` dict of branches (see  [`Sweep`][jaxnasium.sweep.Sweep]).
+            or to a `{label: sub-space}` dict of branches (see  [`Sweep`][jaxnasium.eval.Sweep]).
             The first entry of each is the baseline value.
 
     **Examples**:
@@ -67,5 +67,5 @@ class OneAtATimeSearch:
         return configs
 
     def sweep(self, fn: Callable, *, print_cost_estimate: bool = False) -> Sweep:
-        """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
+        """Create a [`Sweep`][jaxnasium.eval.Sweep] with this search alone."""
         return Sweep(fn, self, print_cost_estimate=print_cost_estimate)
