@@ -2,8 +2,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from jaxtyping import PRNGKeyArray
-
 from ._sweep import Sweep
 
 
@@ -21,8 +19,9 @@ class OneAtATimeSearch:
     `Sweep(fn, self, ...)`.
 
     **Arguments**:
-        `params`: A dict of param names mapping to a non-empty list of values.
-            The first entry of each list is the baseline value.
+        `params`: A dict of param names mapping to a non-empty list of values,
+            or to a `{label: sub-space}` dict of branches (see  [`Sweep`][jaxnasium.sweep.Sweep]).
+            The first entry of each is the baseline value.
 
     **Examples**:
 
@@ -31,50 +30,42 @@ class OneAtATimeSearch:
         {
             "gamma": [0.99, 0.95, 0.999],
             "lr": [0.1, 0.01],
+            # One tag in the results, two keyword arguments in the call.
+            "network": {
+                "mlp": {"actor_kwargs": MLP_KWARGS, "critic_kwargs": MLP_KWARGS},
+                "simba": {
+                    "actor_kwargs": SIMBA_KWARGS,
+                    "critic_kwargs": SIMBA_KWARGS,
+                },
+            },
         }
-    ).sweep(train, batch_size=None)
+    ).sweep(train)
     for run in sweep:
         for r in run():
             print(r.arguments, r.result)
     ```
-
-    **Note**: when batching is requested and the params mix `vmap`-able and
-    non-`vmap`-able values, the baseline runs in a job of its own rather than
-    joining the batch.
     """
 
-    params: dict[str, list]
+    params: dict[str, list | dict]
 
     def __post_init__(self):
         assert self.params, "OneAtATimeSearch params cannot be empty"
         assert all(
-            isinstance(values, list) and values for values in self.params.values()
-        ), "OneAtATimeSearch params must be non-empty lists"
+            isinstance(values, (list, dict)) and values
+            for values in self.params.values()
+        ), "OneAtATimeSearch params must be non-empty lists, or dicts of branches"
 
-    def configs(self, seed: PRNGKeyArray) -> list[dict[str, Any]]:
-        """
-        Returns the baseline config, then one config per non-baseline value of each parameter. `seed` is unused.
-        """
-        baseline = {name: values[0] for name, values in self.params.items()}
+    def configs(self) -> list[dict[str, Any]]:
+        """Returns the baseline config, then one config per non-baseline value of each parameter."""
+        # Iterating a branch dict yields its labels, so both specs work the same.
+        options = {name: list(values) for name, values in self.params.items()}
+        baseline = {name: values[0] for name, values in options.items()}
         configs = [dict(baseline)]
-        for name, values in self.params.items():
+        for name, values in options.items():
             for value in values[1:]:
                 configs.append({**baseline, name: value})
         return configs
 
-    def sweep(
-        self,
-        fn: Callable,
-        *,
-        seed: PRNGKeyArray | None = None,  # unused for one-at-a-time search
-        batch_size: int | None = None,
-        print_cost_estimate: bool = False,
-    ) -> Sweep:
+    def sweep(self, fn: Callable, *, print_cost_estimate: bool = False) -> Sweep:
         """Create a [`Sweep`][jaxnasium.sweep.Sweep] with this search alone."""
-        return Sweep(
-            fn,
-            self,
-            seed=seed,
-            batch_size=batch_size,
-            print_cost_estimate=print_cost_estimate,
-        )
+        return Sweep(fn, self, print_cost_estimate=print_cost_estimate)

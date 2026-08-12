@@ -11,6 +11,7 @@ import jax.numpy as jnp
 logger = logging.getLogger(__name__)
 
 
+# NOTE: unused internally at the moment
 def _is_traceable(fn: Callable[..., Any], kwargs: dict[str, Any], name: str) -> bool:
     """Whether `fn` can be traced with `kwargs[name]` replaced by a JAX tracer.
 

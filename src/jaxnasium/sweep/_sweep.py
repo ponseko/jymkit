@@ -1,19 +1,18 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import Field, dataclass, fields, replace
+from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, ClassVar, Protocol, overload
+from typing import Any, Protocol, overload
 
 import jax
-import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray
 
-from ._probe import log_cost_estimate, split_static_dynamic_params
+from ._probe import log_cost_estimate
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +26,9 @@ def _log(*text: str) -> None:
 
 
 class ParameterSpaceSearch(Protocol):
-    @property
-    def params(self) -> dict[str, list | tuple] | dict[str, list]: ...
+    """Anything that produces a list of configurations."""
 
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
-
-    def configs(self, seed: PRNGKeyArray) -> list[dict[str, Any]]: ...
+    def configs(self) -> list[dict[str, Any]]: ...
 
 
 def _jsonify(value: Any) -> Any:
@@ -55,23 +51,19 @@ class SweepResult:
     **Attributes**:
         `start_time`: Unix time at which the job containing this run started.
         `end_time`: Unix time at which the job containing this run finished.
-        `arguments`: The parameter values that produced this result.
+        `arguments`: The parameter values that produced this result. Branch
+            parameters hold their *label*, not the sub-space they expanded into.
         `result`: Whatever the swept function returned, for this configuration.
-        `num_runs`: How many configurations shared the job, i.e. the `vmap` batch
-            size. The timestamps cover all of them, not this run alone.
     """
 
     start_time: float
     end_time: float
     arguments: dict[str, Any]
     result: Any
-    num_runs: int
 
     @property
     def duration(self) -> float:
-        """Wall-clock seconds spent on the job containing this run.
-        Note that some jobs may have multiple runs vmapped over (`num_runs` > 1).
-        In that case, the duration is the time spent on the complete vmapped batch of job runs."""
+        """Wall-clock seconds spent on this job."""
         return self.end_time - self.start_time
 
     def to_json(self, **kwargs: Any) -> str:
@@ -98,28 +90,80 @@ class SweepJob:
     """One dispatchable unit of work: a single call to the swept function.
 
     **Attributes**:
-        `static_args`: Kwargs held fixed for the whole job, one value each.
-        `dynamic_args`: Kwargs varied *within* the job, a batch of values each,
-            all of the same length. These are what `vmap` maps over.
+        `args`: The keyword arguments the swept function is called with.
+        `labels`: Branch labels recorded in place of what they expanded into.
+            Overlay these on `args` to get the human-readable configuration.
     """
 
-    static_args: dict[str, Any]
-    dynamic_args: dict[str, list]
-
-    @property
-    def num_runs(self) -> int:
-        """How many configurations this job evaluates."""
-        if not self.dynamic_args:
-            return 1
-        return len(next(iter(self.dynamic_args.values())))
+    args: dict[str, Any]
+    labels: dict[str, Any]
 
     @property
     def arguments(self) -> dict[str, Any]:
-        """Combined static and dynamic arguments of this job."""
-        return {**self.static_args, **self.dynamic_args}
+        """The input configuration as recorded"""
+        return {**self.args, **self.labels}
 
 
-@dataclass(frozen=True)
+def _merge(
+    job: SweepJob,
+    args: dict[str, Any] | None = None,
+    labels: dict[str, Any] | None = None,
+) -> SweepJob:
+    """Add arguments (and branch labels) to `job`, rejecting duplicates."""
+    merged = dict(job.args)
+    for name, value in (args or {}).items():
+        if name in merged:
+            raise ValueError(
+                f"Param {name!r} is set by more than one stage on the same path. "
+                "Only sibling branches may reuse a parameter name."
+            )
+        merged[name] = value
+    return SweepJob(merged, {**job.labels, **(labels or {})})
+
+
+def _expand_space(space: Any, jobs: list[SweepJob]) -> list[SweepJob]:
+    """Expand every job in `jobs` by a (sub-)space, returning what they grow into.
+
+    A space is a `dict` of fixed keyword arguments, a `list`/`tuple` of spaces applied in order, or a search stage.
+    """
+    if isinstance(space, dict):
+        return [_merge(job, args=space) for job in jobs]
+    if isinstance(space, (list, tuple)):
+        for item in space:
+            jobs = _expand_space(item, jobs)
+        return jobs
+
+    # No dict, tuple or list; so this is a search stage (RandomSearch, GridSearch, ...)
+
+    branches = {
+        name: spec
+        for name, spec in getattr(space, "params", {}).items()
+        if isinstance(spec, dict)
+    }
+    configs = space.configs()
+
+    expanded: list[SweepJob] = []
+    for job in jobs:
+        for config in configs:
+            labels = {n: v for n, v in config.items() if n in branches}
+            branched = [
+                _merge(
+                    job,
+                    args={n: v for n, v in config.items() if n not in branches},
+                    labels=labels,
+                )
+            ]
+            for name, label in labels.items():
+                sub_space = branches[name][label]
+                if not isinstance(sub_space, (dict, list, tuple)) and not hasattr(
+                    sub_space, "configs"
+                ):
+                    sub_space = {name: sub_space}
+                branched = _expand_space(sub_space, branched)
+            expanded.extend(branched)
+    return expanded
+
+
 class Sweep:
     """Build a parameter sweep over function `fn` from one or more stages of parameter
     space search, like `GridSearch`, `OneAtATimeSearch`, `RandomSearch`, or `SobolSearch`.
@@ -129,19 +173,12 @@ class Sweep:
     **Arguments**:
         `fn`: The function to sweep. Must accept all swept params as keywords.
         `*stages`: `GridSearch` / `OneAtATimeSearch` / `RandomSearch` / `SobolSearch` stages to nest.
-        `seed`: Randomness for configs from sampling stages that omit `fixed_seed`.
-            Required unless every sampling stage sets `fixed_seed` (or there are none).
-        `batch_size`: How many configurations to `vmap` in one job. Defaults to
-            `None` (no batching: one configuration per job). Pass `0` for
-            unlimited batching of configs that share the same static args, or a
-            positive int to cap the vmap size. `fn` will be traced to determine which
-            parameters are dynamic and can be `vmap`ed together.
         `print_cost_estimate`: After creation, print the cost estimate of the first job to provide a
         rough estimate of the memory requirements of a job in the sweep. This triggers a compilation, so
         adds some overhead to the creation of the sweep.
 
     **Attributes**:
-        `fn`: Runs one `SweepJob`, returning a `SweepResult` per configuration.
+        `fn`: Runs one `SweepJob` and returns its `SweepResult`.
         `jobs`: All jobs, to run in a loop or to dispatch by index (e.g. over a slurm job array).
 
     **Example**:
@@ -152,27 +189,82 @@ class Sweep:
         RandomSearch(
             {"learning_rate": (1e-4, 1e-2, "log")},
             num_samples=64,
-            fixed_seed=jax.random.PRNGKey(1),  # same lrs in both envs
+            seed=jax.random.PRNGKey(1),  # the same 64 lrs in both envs
         ),
-        seed=jax.random.PRNGKey(0),
-        batch_size=16,
     )
-    len(sweep)  # 2 envs * (64 learning rates / 16 per vmap)
+    len(sweep)  # 2 envs * 64 learning rates
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
-    # Or dispatch one job: for r in sweep[0](): ...
+        result = run()
+        print(result.arguments, result.result)
+    # Or dispatch one job: sweep[0]()
+    ```
+
+    Branching over algorithms, each with its own hyperparameters:
+    ```python
+    sweep = Sweep(
+        train,
+        GridSearch(
+            {
+                "algorithm": {
+                    "PPO": [
+                        {"algorithm": PPO()},
+                        SobolSearch({"clip_coef": (0.1, 0.3)}, 32, seed=key),
+                    ],
+                    "SAC": [
+                        {"algorithm": SAC()},
+                        SobolSearch({"tau": (1e-3, 5e-2)}, 32, seed=key),
+                    ],
+                }
+            }
+        ),
+    )
+    # Results record algorithm="PPO"; the run is called with algorithm=PPO().
     ```
 
     Or in a slurm job array:
     ```bash
     #SBATCH --array=0-5
-    python create_jobs_and_run_id.py --batch_idx $SLURM_ARRAY_TASK_ID --seed 0
+    python create_jobs_and_run_id.py --batch_idx $SLURM_ARRAY_TASK_ID
     ```
     """
 
-    fn: Callable[[SweepJob], list[SweepResult]]
+    fn: Callable[[SweepJob], SweepResult]
     jobs: list[SweepJob]
+
+    def __init__(
+        self,
+        fn: Callable,
+        *stages: ParameterSpaceSearch,
+        print_cost_estimate: bool = False,
+    ):
+        if not stages:
+            raise ValueError("At least one sweep stage is required")
+
+        # _expand_space will build all stage combinations and built all the jobs
+        self.jobs = _expand_space(list(stages), [SweepJob({}, {})])
+        logger.info(f"Created {len(self.jobs)} sweep jobs")
+
+        def run_job(job: SweepJob) -> SweepResult:
+            start_time = time.time()
+            result = jax.block_until_ready(fn(**job.args))
+            return SweepResult(
+                start_time=start_time,
+                end_time=time.time(),
+                arguments=job.arguments,
+                result=result,
+            )
+
+        self.fn = run_job
+
+        if print_cost_estimate:
+            _log(
+                "Estimating the cost of the first job.",
+                " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
+                " especially when sweeping over different environments, num_envs etc.",
+                " Compiling...",
+            )
+            _log(f"{log_cost_estimate(fn, **self.jobs[0].args)}")
+            _log("Done.")
 
     def __len__(self):
         return len(self.jobs)
@@ -180,182 +272,18 @@ class Sweep:
     def __iter__(self):
         return (partial(self.fn, job) for job in self.jobs)
 
+    def __repr__(self):
+        return f"Sweep({len(self.jobs)} jobs)"
+
     @overload
-    def __getitem__(self, index: int) -> partial[list[SweepResult]]: ...
+    def __getitem__(self, index: int) -> partial[SweepResult]: ...
     @overload
     def __getitem__(self, index: slice) -> Sweep: ...
 
-    def __getitem__(self, index: int | slice) -> partial[list[SweepResult]] | Sweep:
+    def __getitem__(self, index: int | slice) -> partial[SweepResult] | Sweep:
         if isinstance(index, slice):
-            # Custom __init__ builds from stages; bypass it when slicing jobs.
-            sliced = object.__new__(Sweep)
-            object.__setattr__(sliced, "fn", self.fn)
-            object.__setattr__(sliced, "jobs", self.jobs[index])
+            # copy of the fn over a subset of the jobs.
+            sliced = copy.copy(self)
+            sliced.jobs = self.jobs[index]
             return sliced
         return partial(self.fn, self.jobs[index])
-
-    def __init__(
-        self,
-        fn: Callable,
-        *stages: ParameterSpaceSearch,
-        seed: PRNGKeyArray | None = None,
-        batch_size: int | None = None,
-        print_cost_estimate: bool = False,
-    ):
-        if not stages:
-            raise ValueError("At least one sweep stage is required")
-        if batch_size is not None and batch_size < 0:
-            raise ValueError(
-                f"batch_size must be None, 0, or positive, got {batch_size}"
-            )
-        max_batch = (
-            1 if batch_size is None else (None if batch_size == 0 else batch_size)
-        )
-
-        needs_parent_seed = any(
-            hasattr(stage, "fixed_seed") and stage.fixed_seed is None  # type: ignore
-            for stage in stages
-        )
-        if seed is None:
-            if needs_parent_seed:
-                raise ValueError(
-                    "seed is required when a Random/Sobol Search stage omits fixed_seed"
-                )
-            seed = jax.random.PRNGKey(0)  # unused when every stage pins fixed_seed
-
-        all_params: dict[str, list | tuple] = {}
-        for stage in stages:
-            for name, values in stage.params.items():
-                if name in all_params:
-                    raise ValueError(f"Param {name!r} is swept by more than one stage")
-                all_params[name] = values
-
-        if batch_size is None:
-            static_params = all_params
-            dynamic_params = {}
-        else:
-            static_params, dynamic_params = split_static_dynamic_params(fn, all_params)
-
-        # Order each stage so its static params vary slowest, keeping configurations
-        # that can share a job (equal static args) adjacent in the expansion below.
-        stages = tuple(
-            replace(
-                stage,
-                params={
-                    **{n: v for n, v in stage.params.items() if n in static_params},
-                    **{n: v for n, v in stage.params.items() if n in dynamic_params},
-                },
-            )
-            for stage in stages
-        )
-
-        # Make a list of all configuration combinations where we have sampled from random stages.
-        configs: list[dict[str, Any]] = [{}]
-        for stage in stages:
-            seed, stage_seed = jax.random.split(seed)  # type: ignore
-            expanded: list[dict[str, Any]] = []
-            for i, config in enumerate(configs):
-                if getattr(stage, "fixed_seed", None) is not None:
-                    config_seed: PRNGKeyArray = stage.fixed_seed  # type: ignore
-                else:  # Fresh draws per outer configuration when the stage does not pin a key.
-                    config_seed: PRNGKeyArray = jax.random.fold_in(stage_seed, i)
-                expanded.extend(
-                    {**config, **inner} for inner in stage.configs(config_seed)
-                )
-            configs = expanded
-
-        # Static args are put adjecent, so we vmap dynamic args where possible (if static args are the same).
-        jobs: list[SweepJob] = []
-        for config in configs:
-            static_args = {name: config[name] for name in static_params}
-            # fmt: off
-            if not (
-                dynamic_params # if there are dynamic params
-                and jobs # if there are jobs
-                and jobs[-1].static_args == static_args # if the last job has the same static args
-                and (max_batch is None or jobs[-1].num_runs < max_batch)
-            ):
-                # if not any of the above, we create a new job
-                jobs.append(SweepJob(static_args, {name: [] for name in dynamic_params}))
-            for name in dynamic_params:
-                jobs[-1].dynamic_args[name].append(config[name]) # add the dynamic arg to the last job
-
-        # fmt: on
-
-        def mapped_fn(job: SweepJob) -> list[SweepResult]:
-            if not job.dynamic_args:
-                start_time = time.time()
-                result = jax.block_until_ready(fn(**job.static_args))
-                return [
-                    SweepResult(
-                        start_time=start_time,
-                        end_time=time.time(),
-                        arguments=dict(job.static_args),
-                        result=result,
-                        num_runs=1,
-                    )
-                ]
-
-            names = list(job.dynamic_args)
-            batch = tuple(jnp.asarray(job.dynamic_args[name]) for name in names)
-            batched_fn = jax.vmap(
-                lambda *values: fn(**job.static_args, **dict(zip(names, values)))
-            )
-
-            start_time = time.time()
-            results = jax.block_until_ready(batched_fn(*batch))
-            end_time = time.time()
-
-            return [
-                SweepResult(
-                    start_time=start_time,
-                    end_time=end_time,
-                    arguments={
-                        **job.static_args,
-                        **{name: job.dynamic_args[name][i] for name in names},
-                    },
-                    result=jax.tree.map(lambda leaf, _i=i: leaf[_i], results),
-                    num_runs=job.num_runs,
-                )
-                for i in range(job.num_runs)
-            ]
-
-        largest_batch = max(job.num_runs for job in jobs)
-        requested = "unlimited" if max_batch is None else max_batch
-        logger.info(
-            f"Created {len(jobs)} sweep jobs for {len(configs)} configurations "
-            f"(per job: {list(static_params)} fixed, {list(dynamic_params)} vmapped). "
-            f"Largest job batches {largest_batch} configuration(s), of {requested} allowed."
-        )
-        if batch_size is not None and dynamic_params and largest_batch == 1:
-            logger.warning(
-                f"Batching was requested (batch_size={batch_size}) but no configurations "
-                "could be batched, so nothing is vmapped. A job batches configurations "
-                f"that agree on the fixed parameters {list(static_params)} and that are "
-                "adjacent, and stages are nested in the order given — so a stage varying "
-                "only vmappable parameters has to come last to end up adjacent. Try "
-                f"moving the stage(s) sweeping {list(dynamic_params)} to the end."
-            )
-
-        if print_cost_estimate:
-            first_job = jobs[0]
-            # dynamic_args are lists of values for vmap; unwrap one config for the probe.
-            sample_args = {
-                **first_job.static_args,
-                **{name: values[0] for name, values in first_job.dynamic_args.items()},
-            }
-            _log(
-                "Estimating the cost of the first job without any arguments mapped over.",
-                " Note that this is only a proxy. Jobs in this sweep with different input arguments may have different costs,"
-                " especially when sweeping over different environments, num_envs etc.",
-                " Compiling...",
-            )
-            _log(f"{log_cost_estimate(fn, **sample_args)}")
-            _log("Done.")
-            _log(
-                "Proxied a single configuration. In this sweep, the largest job runs",
-                f"{max(jobs, key=lambda j: j.num_runs).num_runs} configuration(s) in parallel (vmap batch size).",
-            )
-
-        object.__setattr__(self, "fn", mapped_fn)
-        object.__setattr__(self, "jobs", jobs)

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+import time
 from dataclasses import dataclass, fields, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import PRNGKeyArray
 
 import jaxnasium as jym
@@ -37,23 +43,13 @@ def _get_algorithm(algorithm: RLAlgorithm | str, hyperparameters: dict) -> RLAlg
 
 
 def _get_env(env: jym.Environment | str) -> tuple[jym.Environment, str]:
+    """The environment, plus the name to record it under. Exlcuding wrappers"""
     if isinstance(env, str):
         return jym.make(env), env
-    return env, type(env).__name__
-
-
-def _algorithm_params(algorithm: RLAlgorithm) -> dict:
-    return {f.name: getattr(algorithm, f.name) for f in fields(algorithm)}
-
-
-def _as_key(seed: int | PRNGKeyArray) -> PRNGKeyArray:
-    """A scalar integer (also as a tracer, when swept) becomes a fresh key; an
-    existing key array is passed through."""
-    if isinstance(seed, jax.Array) and (
-        jnp.issubdtype(seed.dtype, jax.dtypes.prng_key) or seed.ndim > 0
-    ):
-        return seed
-    return jax.random.PRNGKey(seed)
+    innermost = env
+    while hasattr(innermost, "_env"):
+        innermost = innermost._env  # type: ignore
+    return env, type(innermost).__name__
 
 
 @dataclass(frozen=True)
@@ -61,52 +57,64 @@ class AlgorithmEvaluationConfig:
     algorithm: RLAlgorithm
     env: jym.Environment
     env_name: str
-    seed: int | PRNGKeyArray
+    seed: PRNGKeyArray  # always a typed key array; see `_create_config`
     hyperparameters: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class AlgorithmEvaluation:
-    """Train and evaluate a `jaxnasium` algorithm on a given environment for a single seed.
-    A possible trail function for a `Sweep`. Typically a `Sweep` should sweep this
-    function at least over `seed`.
-
-
-    Calling this traces cleanly, so it never writes anything itself. Use `context` from a
-    `postprocess_fn` to recover the metadata a `vmap` cannot return — most usefully the
-    algorithm's *full* field values, including the defaults that were never swept.
+    """Train and evaluate a `jaxnasium` algorithm on a given environment, for one
+    seed or for many. A possible trial function for a `Sweep`.
 
     **Arguments**:
+        `seed`: Key for training and evaluation. Pass multiple keys to repeat the
+        training and evaluation for each (e.g. AlgorithmEvaluation(jax.random.split(key, 10))).
         `env`: Environment to train on, or a name to pass to `jym.make`.
         `algorithm`: `RLAlgorithm` instance or name (e.g. `"PPO"`).
-        `seed`: Seed for training and evaluation.
+        `batch_size`: the batch size to `jax.lax.map` in case multiple seeds are given.
         `num_evaluations`: Episodes to evaluate the trained agent over.
-
+        `return_train_metrics`: Also return the per-iteration training metrics.
+        `save_path`: Where to write the results, or `None` (the default) to write
+            nothing and leave saving to the caller.
+            This will save to <save_path>/<algorithm>_<env>_<digest> and writes 4 files:
+            - `results.npy`: the evaluation results, shape (num_seeds, num_evaluations)
+            - `train_curve.npy`: the training metrics, shape (num_seeds, num_iterations, ...)
+            - `input_parameters.json`: the input parameters to the evaluation
+            - `full_parameters.json`: the full parameters used for the evaluation.
 
     **Example**:
     ```python
-    evaluation = AlgorithmEvaluation(env="CartPole-v1")  # or leave empty and sweep
+    key = jax.random.key(0)
+    evaluation = AlgorithmEvaluation(
+        jax.random.split(key, 10), env="CartPole-v1", batch_size=5
+    )
     sweep = Sweep(
         evaluation,
         GridSearch({"algorithm": ["PPO", "DQN"]}),
-        RandomSearch({"learning_rate": (1e-4, 1e-2, "log")}, num_samples=64),
-        GridSearch({"seed": [0, 1, 2, 3, 4]}),
-        seed=jax.random.PRNGKey(0),
-        batch_size=8,
+        RandomSearch(
+            {"learning_rate": (1e-4, 1e-2, "log")},
+            num_samples=64,
+            seed=jax.random.PRNGKey(1),
+        ),
     )
+    # 2 algorithms * 64 learning rates = 128 jobs, each of 10 seeds, 5 at a time.
     ```
     """
 
+    seed: PRNGKeyArray
     env: jym.Environment | str = "CartPole-v1"
     algorithm: RLAlgorithm | str = "PPO"
-    seed: int | PRNGKeyArray = 0
+    batch_size: int | None = None
     num_evaluations: int = 50
     return_train_metrics: bool = False
+    save_path: str | Path | None = None
 
     def _create_config(self, kwargs: dict[str, Any]) -> AlgorithmEvaluationConfig:
         """Create a config from the given kwargs, filling in defaults from this instance."""
         hyperparameters = dict(kwargs)
         seed = hyperparameters.pop("seed", self.seed)
+        if not jnp.issubdtype(seed.dtype, jax.dtypes.prng_key):
+            seed = jax.random.wrap_key_data(seed)
         env, env_name = _get_env(hyperparameters.pop("env", self.env))
         algorithm = _get_algorithm(
             hyperparameters.pop("algorithm", self.algorithm), hyperparameters
@@ -116,48 +124,92 @@ class AlgorithmEvaluation:
         )
 
     def __call__(self, **kwargs: Any) -> Any:
-        """Train on one seed and return the evaluation episode returns.
+        """Train and evaluate, once per seed.
 
         Returns a dict {"evaluation": evaluation_returns, "train_metrics": train_metrics} if
-        `return_train_metrics` is True, otherwise just the evaluation returns.
+        `return_train_metrics` is True, otherwise just the evaluation returns. With
+        several seeds, every leaf gains a leading axis over them.
         """
         config = self._create_config(kwargs)
-        train_key, eval_key = jax.random.split(_as_key(config.seed))
 
-        agent, train_metrics = config.algorithm.train(train_key, config.env)
-        evaluation = agent.evaluate(
-            eval_key, config.env, num_eval_episodes=self.num_evaluations
+        def run(key: PRNGKeyArray) -> Any:
+            train_key, eval_key = jax.random.split(key)
+            agent, train_metrics = config.algorithm.train(train_key, config.env)
+            evaluation = agent.evaluate(
+                eval_key, config.env, num_eval_episodes=self.num_evaluations
+            )
+            if not self.return_train_metrics:
+                return evaluation
+            return {"evaluation": evaluation, "train_metrics": train_metrics}
+
+        start_time = time.time()
+        if config.seed.ndim == 0:
+            result = run(config.seed)
+        else:
+            result = jax.lax.map(run, config.seed, batch_size=self.batch_size)
+
+        if self.save_path is not None:
+            result = jax.block_until_ready(result)
+            self._save(config, result, time.time() - start_time)
+        return result
+
+    def _save(self, config: AlgorithmEvaluationConfig, result: Any, duration: float):
+        """Write one configuration's results under `save_path`. see class docstring for the layout."""
+        context = self._context(config)
+        # hash of the context. Same runs in the same folder overwritten.
+        blob = re.sub(r"0x[0-9a-f]+", "0x", json.dumps(context, sort_keys=True))
+        digest = hashlib.sha1(blob.encode()).hexdigest()
+        run_dir = (
+            Path(self.save_path or ".")
+            / f"{context['algorithm']}_{context['env']}_{digest[:8]}"
         )
+        run_dir.mkdir(parents=True, exist_ok=True)
 
-        if not self.return_train_metrics:
-            return evaluation
-        return {"evaluation": evaluation, "train_metrics": train_metrics}
+        evaluation = result["evaluation"] if self.return_train_metrics else result
+        np.save(run_dir / "results.npy", np.asarray(evaluation))
+        if self.return_train_metrics:
+            metrics = result["train_metrics"]
+            if isinstance(metrics, jax.Array):
+                np.save(run_dir / "train_curve.npy", np.asarray(metrics))
+            else:  # a pytree of metrics rather than one reduced array
+                # Helpful for multi agent reward tracking
+                leaves = jax.tree_util.tree_flatten_with_path(metrics)[0]
+                np.savez(
+                    run_dir / "train_curve.npz",
+                    **{
+                        jax.tree_util.keystr(path).lstrip("."): np.asarray(leaf)
+                        for path, leaf in leaves
+                    },  # type: ignore
+                )
 
-    def static_params(self, params: dict[str, Any]) -> set[str]:
-        """Static parameters on the env/algorithm won't cannot be vmapped, so marking them here
-        stops attempting to trace them.
-        """
-        static = {"env", "algorithm"}
-        for algorithm in params.get("algorithm", [self.algorithm]):
-            resolved = _get_algorithm(algorithm, {})
-            static |= {
-                f.name for f in fields(resolved) if f.metadata.get("static", False)
-            }
-        return static
+        # The arguments as given, and then everything they resolved to.
+        inputs = {k: v for k, v in context.items() if k != "algorithm_parameters"}
+        (run_dir / "input_parameters.json").write_text(json.dumps(inputs, indent=2))
+        (run_dir / "full_parameters.json").write_text(
+            json.dumps({**context, "duration": duration}, indent=2)
+        )
 
     def context(self, **kwargs: Any) -> dict[str, Any]:
         """
         JSON-ready metadata for a configuration, to pair with its result.
         Used to retrieve the full algorithm and env parameters that were used for this run.
         """
-        config = self._create_config(kwargs)
+        return self._context(self._create_config(kwargs))
+
+    def _context(self, config: AlgorithmEvaluationConfig) -> dict[str, Any]:
         return {
             "algorithm": type(config.algorithm).__name__,
             "env": config.env_name,
-            "seed": _jsonify(config.seed),
+            "seed": _jsonify(jax.random.key_data(config.seed)),
             "num_evaluations": self.num_evaluations,
             "input_parameters": _jsonify(config.hyperparameters),
-            "algorithm_parameters": _jsonify(_algorithm_params(config.algorithm)),
+            # Every field of the algorithm, not just the ones that were swept.
+            "algorithm_parameters": _jsonify(
+                {
+                    f.name: getattr(config.algorithm, f.name)
+                    for f in fields(config.algorithm)
+                }
+            ),
         }
 
     def __repr__(self) -> str:
