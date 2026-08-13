@@ -183,7 +183,7 @@ class SAC(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
-        warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
+        warmup_length = max(2, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
             agent, (env_state, obsv, key), env, length=warmup_length
         )

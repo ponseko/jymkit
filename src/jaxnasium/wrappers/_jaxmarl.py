@@ -4,8 +4,9 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import PRNGKeyArray
 
-from jaxnasium._environment import AgentObservation, TEnvState, TimeStep, TObservation
+from jaxnasium._environment import TEnvState, TimeStep, TObservation
 from jaxnasium._spaces import Space
+from jaxnasium._types import AgentObservation
 
 from ._util import gymnasium_to_jaxnasium_space
 from ._wrappers import Wrapper

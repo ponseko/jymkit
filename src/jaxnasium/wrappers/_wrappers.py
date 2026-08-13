@@ -14,13 +14,13 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray, PyTree, Real
 import jaxnasium as jym
 from jaxnasium._environment import (
     ORIGINAL_OBSERVATION_KEY,
-    AgentObservation,
     Environment,
     TEnvState,
     TimeStep,
     TObservation,
 )
 from jaxnasium._spaces import Box, Discrete, MultiDiscrete, Space
+from jaxnasium._types import AgentObservation
 
 from ._util import partition_obs_and_masks
 
@@ -461,11 +461,14 @@ class FlattenObservationWrapper(Wrapper):
         obs = eqx.combine(obs, masks)
         timestep = timestep._replace(observation=obs)
         try:
+            # Same above: flatten the observation itself but leave any action mask alone.
             info = timestep.info
-            info[ORIGINAL_OBSERVATION_KEY] = jax.tree.map(
-                lambda x: jnp.reshape(x, -1), info[ORIGINAL_OBSERVATION_KEY]
+            terminal_obs, terminal_masks = partition_obs_and_masks(
+                info[ORIGINAL_OBSERVATION_KEY], self._env.multi_agent
             )
-            timestep._replace(info=info)
+            terminal_obs = jax.tree.map(lambda x: jnp.reshape(x, -1), terminal_obs)
+            info[ORIGINAL_OBSERVATION_KEY] = eqx.combine(terminal_obs, terminal_masks)
+            timestep = timestep._replace(info=info)
         except Exception:
             pass
         return timestep, env_state

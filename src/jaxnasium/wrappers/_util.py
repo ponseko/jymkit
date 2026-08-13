@@ -5,8 +5,9 @@ import equinox as eqx
 import jax
 from jaxtyping import PyTree
 
-from jaxnasium._environment import AgentObservation, TObservation
+from jaxnasium._environment import TObservation
 from jaxnasium._spaces import Box, Discrete, MultiDiscrete, Space
+from jaxnasium._types import AgentObservation
 
 logger = logging.getLogger(__name__)
 

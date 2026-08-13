@@ -6,6 +6,8 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray, PyTree, PyTreeDef
 
+from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
+
 if TYPE_CHECKING:
     from ._normalization import Normalizer
 
@@ -33,11 +35,20 @@ class Transition(eqx.Module):
     advantage: Float[Array, "..."] | None = None
     target: Float[Array, " "] | None = None
     bootstrap_n: Int[Array, " "] | None = None
+    extra: Any = None
 
     # PER stores the values here so they are easily tracked and updated after reshuffling.
     PER_weight: Float[Array, " "] | None = None
     PER_index: Int[Array, " "] | None = None
     PER_priority: Float[Array, " "] | None = None
+
+    def __post_init__(self):
+        # Remove next obs from info to save memory. If next_observation is required;
+        # it should be set explicitly on `next_observation`.
+        if isinstance(self.info, dict) and ORIGINAL_OBSERVATION_KEY in self.info:
+            info = {**self.info}
+            info.pop(ORIGINAL_OBSERVATION_KEY, None)
+            object.__setattr__(self, "info", info)
 
     def replace(self, **updates):
         keys, values = zip(*updates.items())

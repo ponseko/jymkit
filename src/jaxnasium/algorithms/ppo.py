@@ -138,6 +138,7 @@ class PPO(RLAlgorithm):
             agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
+        trajectory_batch = replace(trajectory_batch, info=None)
 
         # Normalize the train_batch before updating the normalizer so stats are the same as during rollout
         train_batch = trajectory_batch.normalize(agent.normalizer)
