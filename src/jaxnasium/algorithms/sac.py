@@ -14,7 +14,6 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium import Environment
-from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
     Normalizer,
@@ -263,7 +262,6 @@ class SAC(RLAlgorithm):
                 terminated=terminated,
                 truncated=truncated,
                 info=info,
-                next_observation=info[ORIGINAL_OBSERVATION_KEY],
             )
 
             rollout_state = (env_state, obsv, rng)
@@ -286,7 +284,9 @@ class SAC(RLAlgorithm):
             def scan_fn(carry, _):
                 agent, rng = carry
                 rng, sample_key, update_step_key = jax.random.split(rng, 3)
-                minibatch = buffer.sample(sample_key, batch_size=batch_size)
+                minibatch = buffer.sample(
+                    sample_key, batch_size=batch_size, with_next_obs=True
+                )
                 minibatch = minibatch.normalize(agent.normalizer)
                 agent = update_fn(agent, update_step_key, minibatch)
                 return (agent, rng), None

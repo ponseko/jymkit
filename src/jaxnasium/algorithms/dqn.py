@@ -12,7 +12,6 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium import Environment
-from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
     EpsilonGreedy,
@@ -176,7 +175,7 @@ class DQN(RLAlgorithm):
         def scan_fn(carry, _):
             agent, rng = carry
             rng, sample_key = jax.random.split(rng)
-            minibatch = buffer.sample(sample_key)
+            minibatch = buffer.sample(sample_key, with_next_obs=True)
             minibatch = minibatch.normalize(agent.normalizer)
             return (agent.update_params(minibatch), rng), None
 
@@ -214,7 +213,6 @@ class DQN(RLAlgorithm):
                 terminated=terminated,
                 truncated=truncated,
                 info=info,
-                next_observation=info[ORIGINAL_OBSERVATION_KEY],
             )
 
             rollout_state = (env_state, obsv, rng)
