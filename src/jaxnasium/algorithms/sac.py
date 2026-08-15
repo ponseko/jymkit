@@ -231,7 +231,7 @@ class SAC(RLAlgorithm):
         agent = agent.update_normalizer(trajectory_batch)
 
         # Update
-        agent = self._update_agent_state(rng, agent, buffer)
+        agent = self._update_agent(rng, agent, buffer)
         metric = trajectory_batch.info or {}
         runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
@@ -277,7 +277,7 @@ class SAC(RLAlgorithm):
 
         return rollout_state, trajectory_batch
 
-    def _update_agent_state(
+    def _update_agent(
         self, key: PRNGKeyArray, current_agent: SACAgent, buffer: TransitionBuffer
     ) -> SACAgent:
         def _scan_update(update_fn, update_key, agent, num_updates, batch_size):

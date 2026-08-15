@@ -163,6 +163,15 @@ class PPO(RLAlgorithm):
 
         # Update agent over multiple epochs x minibatches
         key, rng = jax.random.split(rng)
+        agent = self._update_agent(key, agent, train_batch)
+
+        runner_state = (agent, env_state, last_obs, rng)
+        return runner_state, metric
+
+    def _update_agent(
+        self, key: PRNGKeyArray, agent: PPOAgent, train_batch: Transition
+    ) -> PPOAgent:
+        """`num_epochs` x `num_minibatches` gradient steps over `train_batch`."""
         agent, _ = scan_minibatch_epoch(
             lambda agent, minibatch: (agent.update_params(minibatch), None),
             agent,
@@ -171,9 +180,7 @@ class PPO(RLAlgorithm):
             num_epochs=self.num_epochs,
             num_minibatches=self.num_minibatches,
         )
-
-        runner_state = (agent, env_state, last_obs, rng)
-        return runner_state, metric
+        return agent
 
     def _collect_rollout(
         self, agent: PPOAgent, rollout_state, env: Environment, length=None

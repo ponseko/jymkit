@@ -162,12 +162,12 @@ class DQN(RLAlgorithm):
         agent = agent.update_normalizer(trajectory_batch)
 
         rng, update_key = jax.random.split(rng)
-        agent = self._update_agent_state(update_key, agent, buffer)
+        agent = self._update_agent(update_key, agent, buffer)
 
         runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _update_agent_state(
+    def _update_agent(
         self, key: PRNGKeyArray, agent: DQNAgent, buffer: TransitionBuffer
     ) -> DQNAgent:
         """`num_updates` gradient steps, each on its own freshly sampled batch."""
