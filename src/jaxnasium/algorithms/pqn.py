@@ -233,7 +233,7 @@ class PQN(RLAlgorithm):
         # q_lambda is 0.0 on the first iteration, afterwards it is self.q_lambda
         next_return, q_lambda = next_return_and_lambda
 
-        next_q_values = jym.tree.batch_sum(
+        next_q_values = jym.tree.batch_mean(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), transition.next_value)
         )
 
@@ -310,7 +310,7 @@ class PQNAgent(RLAgent):
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, train_batch.return_)
             return jym.tree.mean(q_loss)
 

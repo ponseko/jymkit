@@ -292,7 +292,7 @@ class DQNAgent(RLAgent):
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, target)
             return jym.tree.mean(q_loss)
 
@@ -300,7 +300,7 @@ class DQNAgent(RLAgent):
 
         # Compute target
         q_target_output = jax.vmap(self.critic_target)(batch.next_observation)
-        q_target_output = jym.tree.batch_sum(
+        q_target_output = jym.tree.batch_mean(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
         )
         target = batch.reward + ~batch.terminated * trainer.gamma * q_target_output

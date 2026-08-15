@@ -407,7 +407,7 @@ class SACAgent(RLAgent):
             weighted_target = (action_dist.probs * target).sum(axis=-1)
             return weighted_target
         assert action_log_prob is not None
-        min_q = jym.tree.batch_sum(min_q)
+        min_q = jym.tree.batch_mean(min_q)
         target = min_q - self.alpha() * action_log_prob
         return target
 
@@ -424,7 +424,7 @@ class SACAgent(RLAgent):
             target = jym.tree.map_distribution(
                 self._compute_soft_target, action_dist, q, action_log_prob
             )
-            target = jym.tree.batch_sum(target)
+            target = jym.tree.batch_mean(target)
             return -jym.tree.mean(target)
 
         trainer = self.trainer
@@ -443,7 +443,7 @@ class SACAgent(RLAgent):
         def __sac_qnet_loss(params, train_batch: Transition):
             q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
             q_taken = jym.tree.gather_actions(q_out, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, q_target)
             return jym.tree.mean(q_loss)
 
@@ -459,7 +459,7 @@ class SACAgent(RLAgent):
         target = jym.tree.map_distribution(
             self._compute_soft_target, action_dist, q, action_log_prob
         )
-        target = jym.tree.batch_sum(target)
+        target = jym.tree.batch_mean(target)
         q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
         grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
         updates, optimizer_state = trainer.optimizer["critics"].update(
