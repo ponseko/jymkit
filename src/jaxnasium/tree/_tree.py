@@ -1,3 +1,4 @@
+import math
 import operator
 from collections.abc import Callable
 from typing import Any
@@ -229,6 +230,52 @@ def tree_batch_sum(values, batch_axes: int | tuple[int, ...] = 0):
     return jax.tree.reduce(operator.add, batch_wise_sums, initializer=0)
 
 
+def tree_batch_mean(values, batch_axes: int | tuple[int, ...] = 0):
+    """
+    Average over all non-batch axes of each leaf in a pytree, and across leaves.
+    The batch axes(s) is/are assumed to be the leading axes.
+
+    All elements are weighted equally; essentially this is then a
+    `jaxnasium.tree.sum` / <total number of elements>.
+
+    Identical to `tree_batch_sum` up to a division by the (static) number of
+    reduced elements.
+
+    **Arguments**:
+        values:  Pytree of JAX arrays. Every leaf must have at least `len(batch_axes)` leading dimensions.
+        batch_axes: Leading axes to exclude from the reduction.
+
+    **Returns**:
+        A JAX array with the same shape as the batch dimensions.
+
+    **Notes**:
+       - For a single leaf with only batch dimensions, this is a no-op.
+
+    **Example**:
+        >>> tree = {
+        ...     "a": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
+        ...     "b": jnp.array([[5.0, 6.0], [7.0, 8.0]]),
+        ... }
+        >>> tree_batch_mean(tree, batch_axes=0)
+        Array([3.5, 5.5])
+    """
+    batch_axes = (batch_axes,) if isinstance(batch_axes, int) else tuple(batch_axes)
+    num_batch_dimensions = len(batch_axes)
+
+    total = tree_batch_sum(values, batch_axes)
+    leaves = jax.tree.leaves(values)
+    if not leaves:
+        return total
+
+    # number of elements excluding the batch axis.
+    num_elements = sum(
+        [math.prod(leaf.shape[num_batch_dimensions:]) for leaf in leaves]
+    )
+    if num_elements == 0:
+        return total
+    return total / num_elements
+
+
 def tree_gather_actions(tree: PyTree, actions: PyTree):
     """Given a (pytree of) array-like values, gather the elements based
     on the indices provided in `actions`. If the arrays in `tree` are of the same
@@ -444,22 +491,3 @@ def tree_clip(
         `max_value`: Maximum value to clip to (scalar or array).
     """
     return jax.tree.map(lambda x: jnp.clip(x, min_value, max_value), tree)
-
-
-batch_sum = tree_batch_sum
-get_first = tree_get_first
-gather_actions = tree_gather_actions
-map_one_level = tree_map_one_level
-mean = tree_mean
-stack = tree_stack
-unstack = tree_unstack
-concatenate = tree_concatenate
-map_distribution = tree_map_distribution
-split_key_like_structure = tree_split_key_like_structure
-split_key_like = tree_split_key_like
-zeros_like = tree_zeros_like
-ones_like = tree_ones_like
-add = tree_add
-mul = tree_mul
-sum = tree_sum
-clip = tree_clip

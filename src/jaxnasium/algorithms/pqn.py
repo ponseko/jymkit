@@ -51,6 +51,8 @@ class PQN(RLAlgorithm):
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
+    warmup_steps: int = eqx.field(static=True, default=5_000)
+    """Normalizer statistics warmup steps."""
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
@@ -122,7 +124,13 @@ class PQN(RLAlgorithm):
         )
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (agent, env_state, obsv, key)
+        warmup_length = max(1, self.warmup_steps // self.num_envs)
+        warmup_state, warmup_trajectory = self._collect_rollout(
+            agent, (env_state, obsv, key), env, length=warmup_length
+        )
+        agent = agent.update_normalizer(warmup_trajectory)
+
+        runner_state = (agent, *warmup_state)
         runner_state, metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
@@ -144,6 +152,7 @@ class PQN(RLAlgorithm):
             agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
+        trajectory_batch = replace(trajectory_batch, info=None)
 
         # Normalize the train_batch before updating the normalizer so stats are the same as during rollout
         train_batch = trajectory_batch.normalize(agent.normalizer)
@@ -170,6 +179,15 @@ class PQN(RLAlgorithm):
 
         # Update agent over multiple epochs x minibatches
         key, rng = jax.random.split(rng)
+        agent = self._update_agent(key, agent, train_batch)
+
+        runner_state = (agent, env_state, last_obs, rng)
+        return runner_state, metric
+
+    def _update_agent(
+        self, key: PRNGKeyArray, agent: PQNAgent, train_batch: Transition
+    ) -> PQNAgent:
+        """`num_epochs` x `num_minibatches` gradient steps over `train_batch`."""
         agent, _ = scan_minibatch_epoch(
             lambda agent, minibatch: (agent.update_params(minibatch), None),
             agent,
@@ -178,9 +196,7 @@ class PQN(RLAlgorithm):
             num_epochs=self.num_epochs,
             num_minibatches=self.num_minibatches,
         )
-
-        runner_state = (agent, env_state, last_obs, rng)
-        return runner_state, metric
+        return agent
 
     def _collect_rollout(
         self, agent: PQNAgent, rollout_state, env: Environment, length=None
@@ -232,7 +248,7 @@ class PQN(RLAlgorithm):
         # q_lambda is 0.0 on the first iteration, afterwards it is self.q_lambda
         next_return, q_lambda = next_return_and_lambda
 
-        next_q_values = jym.tree.batch_sum(
+        next_q_values = jym.tree.batch_mean(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), transition.next_value)
         )
 
@@ -309,7 +325,7 @@ class PQNAgent(RLAgent):
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, train_batch.return_)
             return jym.tree.mean(q_loss)
 

@@ -11,6 +11,7 @@ ENV_WRAPPERS: dict[str, list[type[Wrapper]]] = {}
 AGENT_MIN_CONFIG = {
     "num_envs": 1,
     "total_timesteps": 512,
+    "warmup_steps": 16,
     "log_function": None,
     "normalize_observations": False,
     "normalize_rewards": False,

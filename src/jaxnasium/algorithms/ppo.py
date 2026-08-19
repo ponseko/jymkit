@@ -47,6 +47,8 @@ class PPO(RLAlgorithm):
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
+    warmup_steps: int = eqx.field(static=True, default=5_000)
+    """Normalizer statistics warmup steps."""
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
@@ -116,7 +118,13 @@ class PPO(RLAlgorithm):
         )
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (agent, env_state, obsv, key)
+        warmup_length = max(1, self.warmup_steps // self.num_envs)
+        warmup_state, warmup_trajectory = self._collect_rollout(
+            agent, (env_state, obsv, key), env, length=warmup_length
+        )
+        agent = agent.update_normalizer(warmup_trajectory)
+
+        runner_state = (agent, *warmup_state)
         runner_state, metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )
@@ -138,6 +146,7 @@ class PPO(RLAlgorithm):
             agent, rollout_state, env
         )
         metric = trajectory_batch.info or {}
+        trajectory_batch = replace(trajectory_batch, info=None)
 
         # Normalize the train_batch before updating the normalizer so stats are the same as during rollout
         train_batch = trajectory_batch.normalize(agent.normalizer)
@@ -162,6 +171,15 @@ class PPO(RLAlgorithm):
 
         # Update agent over multiple epochs x minibatches
         key, rng = jax.random.split(rng)
+        agent = self._update_agent(key, agent, train_batch)
+
+        runner_state = (agent, env_state, last_obs, rng)
+        return runner_state, metric
+
+    def _update_agent(
+        self, key: PRNGKeyArray, agent: PPOAgent, train_batch: Transition
+    ) -> PPOAgent:
+        """`num_epochs` x `num_minibatches` gradient steps over `train_batch`."""
         agent, _ = scan_minibatch_epoch(
             lambda agent, minibatch: (agent.update_params(minibatch), None),
             agent,
@@ -170,9 +188,7 @@ class PPO(RLAlgorithm):
             num_epochs=self.num_epochs,
             num_minibatches=self.num_minibatches,
         )
-
-        runner_state = (agent, env_state, last_obs, rng)
-        return runner_state, metric
+        return agent
 
     def _collect_rollout(
         self, agent: PPOAgent, rollout_state, env: Environment, length=None

@@ -70,6 +70,24 @@ def test_batch_sum():
     assert jnp.array_equal(jym.tree.batch_sum(tree, batch_axes=0), jnp.array([14, 22]))
 
 
+def test_batch_mean():
+    tree = {
+        "a": jnp.array([[1.0, 2.0], [3.0, 4.0]]),
+        "b": jnp.array([[5.0, 6.0], [7.0, 8.0]]),
+    }
+    assert jnp.allclose(jym.tree.batch_mean(tree, batch_axes=0), jnp.array([3.5, 5.5]))
+    assert jnp.allclose(
+        jym.tree.batch_mean(tree, batch_axes=0),
+        jym.tree.batch_sum(tree, batch_axes=0) / 4,
+    )
+
+
+def test_batch_mean_multiple_batch_axes():
+    tree = {"x": jnp.arange(24.0).reshape(2, 3, 4), "y": jnp.ones((2, 3, 4))}
+    expected = jym.tree.batch_sum(tree, batch_axes=(0, 1)) / 8
+    assert jnp.allclose(jym.tree.batch_mean(tree, batch_axes=(0, 1)), expected)
+
+
 def test_gather_actions_discrete():
     q_values = jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
     actions = jnp.array([0, 2])

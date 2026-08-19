@@ -516,6 +516,7 @@ def _tiny_algorithm():
         num_steps=128,
         num_minibatches=1,
         num_epochs=1,
+        warmup_steps=16,
         log_function=None,
         normalize_observations=False,
         normalize_rewards=False,

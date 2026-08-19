@@ -14,7 +14,6 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium import Environment
-from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
     Normalizer,
@@ -183,7 +182,7 @@ class SAC(RLAlgorithm):
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
-        warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
+        warmup_length = max(2, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
             agent, (env_state, obsv, key), env, length=warmup_length
         )
@@ -232,7 +231,7 @@ class SAC(RLAlgorithm):
         agent = agent.update_normalizer(trajectory_batch)
 
         # Update
-        agent = self._update_agent_state(rng, agent, buffer)
+        agent = self._update_agent(rng, agent, buffer)
         metric = trajectory_batch.info or {}
         runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
@@ -263,7 +262,6 @@ class SAC(RLAlgorithm):
                 terminated=terminated,
                 truncated=truncated,
                 info=info,
-                next_observation=info[ORIGINAL_OBSERVATION_KEY],
             )
 
             rollout_state = (env_state, obsv, rng)
@@ -279,14 +277,16 @@ class SAC(RLAlgorithm):
 
         return rollout_state, trajectory_batch
 
-    def _update_agent_state(
+    def _update_agent(
         self, key: PRNGKeyArray, current_agent: SACAgent, buffer: TransitionBuffer
     ) -> SACAgent:
         def _scan_update(update_fn, update_key, agent, num_updates, batch_size):
             def scan_fn(carry, _):
                 agent, rng = carry
                 rng, sample_key, update_step_key = jax.random.split(rng, 3)
-                minibatch = buffer.sample(sample_key, batch_size=batch_size)
+                minibatch = buffer.sample(
+                    sample_key, batch_size=batch_size, with_next_obs=True
+                )
                 minibatch = minibatch.normalize(agent.normalizer)
                 agent = update_fn(agent, update_step_key, minibatch)
                 return (agent, rng), None
@@ -407,7 +407,7 @@ class SACAgent(RLAgent):
             weighted_target = (action_dist.probs * target).sum(axis=-1)
             return weighted_target
         assert action_log_prob is not None
-        min_q = jym.tree.batch_sum(min_q)
+        min_q = jym.tree.batch_mean(min_q)
         target = min_q - self.alpha() * action_log_prob
         return target
 
@@ -424,7 +424,7 @@ class SACAgent(RLAgent):
             target = jym.tree.map_distribution(
                 self._compute_soft_target, action_dist, q, action_log_prob
             )
-            target = jym.tree.batch_sum(target)
+            target = jym.tree.batch_mean(target)
             return -jym.tree.mean(target)
 
         trainer = self.trainer
@@ -443,7 +443,7 @@ class SACAgent(RLAgent):
         def __sac_qnet_loss(params, train_batch: Transition):
             q_out = jax.vmap(params)(train_batch.observation, train_batch.action)
             q_taken = jym.tree.gather_actions(q_out, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, q_target)
             return jym.tree.mean(q_loss)
 
@@ -459,7 +459,7 @@ class SACAgent(RLAgent):
         target = jym.tree.map_distribution(
             self._compute_soft_target, action_dist, q, action_log_prob
         )
-        target = jym.tree.batch_sum(target)
+        target = jym.tree.batch_mean(target)
         q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
         grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
         updates, optimizer_state = trainer.optimizer["critics"].update(

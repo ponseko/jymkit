@@ -9,6 +9,7 @@ from ._initialization import (
     DEFAULT_WEIGHT_INIT as DEFAULT_WEIGHT_INIT,
     POLICY_HEAD_WEIGHT_INIT as POLICY_HEAD_WEIGHT_INIT,
     VALUE_HEAD_WEIGHT_INIT as VALUE_HEAD_WEIGHT_INIT,
+    ZERO_INIT as ZERO_INIT,
     set_weight_bias as set_weight_bias,
 )
 from ._input_output import (

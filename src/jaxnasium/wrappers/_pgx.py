@@ -5,8 +5,9 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import PRNGKeyArray
 
-from jaxnasium._environment import AgentObservation, TEnvState, TimeStep, TObservation
+from jaxnasium._environment import TEnvState, TimeStep, TObservation
 from jaxnasium._spaces import Box, Discrete
+from jaxnasium._types import AgentObservation
 
 from ._wrappers import Wrapper
 

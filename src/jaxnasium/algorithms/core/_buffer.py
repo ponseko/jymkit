@@ -7,9 +7,17 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, PRNGKeyArray
 
+import jaxnasium as jym
+
 from ._transition import Transition
 
 logger = logging.getLogger(__name__)
+
+
+def _map_transitions(fn, *trees):
+    if isinstance(trees[0], Transition):
+        return fn(*trees)
+    return jax.tree.map(fn, *trees, is_leaf=lambda x: isinstance(x, Transition))
 
 
 class TransitionBuffer(eqx.Module):
@@ -139,6 +147,7 @@ class TransitionBuffer(eqx.Module):
         key: PRNGKeyArray,
         with_replacement: bool = True,
         batch_size: int | None = None,
+        with_next_obs: bool = False,
     ) -> Transition:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
@@ -149,10 +158,19 @@ class TransitionBuffer(eqx.Module):
 
         When `vectorized_env` is True, the vectorized environment axis is collapsed into
         the batch dimension of the returned transitions.
+
+        **Arguments**:
+            `key`: JAX PRNG key for sampling.
+            `with_replacement`: Whether to sample with replacement.
+            `Batch size`: Number of sequences to sample. Defaults to `sample_batch_size`.
+            `with_next_obs`: sets the `next_observation` field of the returned Transitions
+            to the observation of the next transition in the buffer. This only fires if the transition
+            did not already have an explicit `next_observation` set.
+            In case this fires, truncated transitions are not sampled such that bootstrapping is still correct.
         """
 
         batch_size = self.sample_batch_size if batch_size is None else batch_size
-        flat_valid_start_indices = self._get_flat_valid_start_indices()
+        flat_valid_start_indices = self._get_flat_valid_start_indices(with_next_obs)
 
         if with_replacement:
             probs = flat_valid_start_indices.astype(jnp.float32) / jnp.maximum(
@@ -166,26 +184,31 @@ class TransitionBuffer(eqx.Module):
             id_probs = jnp.where(flat_valid_start_indices, id_probs, -jnp.inf)
             flat_indices = jax.lax.top_k(id_probs, batch_size)[1]
 
-        batch = self._gather_batch(flat_indices)
+        batch = self._gather_batch(flat_indices, with_next_obs)
 
         return batch
 
-    def _get_flat_valid_start_indices(self) -> jnp.ndarray:
+    def _get_flat_valid_start_indices(self, with_next_obs: bool = False) -> jnp.ndarray:
         """Boolean mask over time indices that can start a valid sequence."""
+        infer_next_obs = (
+            with_next_obs and self._first_transition(self.data).next_observation is None
+        )
+        # Inferring next_obs from the following slot needs one extra timestep after n-step window
+        window_length = self.n_steps + int(infer_next_obs)
+
         start_indices = jnp.arange(self.max_size_per_env)
-        if self.n_steps == 1:
+        if window_length == 1:
             # All sequences are valid as long as the data is written to (index < size)
             valid_indices = start_indices < self.size
 
         else:  # Else, we need to check for valid start indices
-            # While the buffer is not full, data is valid until the end of the so far written buffer.
             not_full = self.size < self.max_size_per_env
-            valid_not_full = start_indices + self.n_steps <= self.size
+            valid_not_full = start_indices + window_length <= self.size
 
             # When full, exclude windows that cross the circular write seam.
             # This is the data that we are about to write to (and is therefor from another rollout)
             window_idx = (
-                start_indices[:, None] + jnp.arange(self.n_steps)
+                start_indices[:, None] + jnp.arange(window_length)
             ) % self.max_size_per_env
             prev_idx = (self.insert_position - 1) % self.max_size_per_env
             crosses_seam = jnp.any(window_idx == prev_idx, axis=1) & jnp.any(
@@ -195,14 +218,32 @@ class TransitionBuffer(eqx.Module):
 
             valid_indices = jax.lax.select(not_full, valid_not_full, valid_full)
 
-        # Broadcast valid indices to each environment stream and flatten
+        # Broadcast valid indices to each environment stream
         valid_indices = jnp.broadcast_to(
             valid_indices[:, None], (self.max_size_per_env, self.num_vec_envs or 1)
-        ).reshape(-1)
+        )
 
-        return valid_indices
+        if infer_next_obs:
+            # When inferring next_obs, the next_obs may be the obs of a fresh reset state
+            # in that case, we do not want to bootstrap from it; hence we exclude it from valid samples.
+            # NOTE: this will set the wrong observation in terminated transitions, but these won't be used for bootstrapping.
 
-    def _gather_batch(self, flat_indices: Array) -> Transition:
+            truncated_tree = _map_transitions(lambda t: t.truncated, self.data)
+            truncated = jnp.any(jym.tree.stack(truncated_tree), axis=0)
+            if truncated.ndim == 1:  # single agent case
+                truncated = truncated[:, None]
+
+            trunc_window = (
+                start_indices[:, None] + jnp.arange(self.n_steps)
+            ) % self.max_size_per_env
+            has_truncation = jnp.any(truncated[trunc_window], axis=1)
+            valid_indices = valid_indices & ~has_truncation
+
+        return valid_indices.reshape(-1)
+
+    def _gather_batch(
+        self, flat_indices: Array, with_next_obs: bool = False
+    ) -> Transition:
         step_indices, env_indices = self._flat_to_step_and_env_indices(flat_indices)
 
         window_idx = (
@@ -217,6 +258,27 @@ class TransitionBuffer(eqx.Module):
         else:
             batch = jax.tree.map(lambda x: x[window_idx], self.data)
 
+        infer_next_obs = (
+            with_next_obs and self._first_transition(self.data).next_observation is None
+        )
+        if infer_next_obs:
+            next_window_idx = (window_idx + 1) % self.max_size_per_env
+
+            def attach_next_obs(stored: Transition, sampled: Transition) -> Transition:
+                # sets `next_observation` as the observation of the next transition in the buffer
+                if self.vectorized_env:
+                    next_obs = jax.tree.map(
+                        lambda x: x[next_window_idx, env_indices[:, None]],
+                        stored.observation,
+                    )
+                else:
+                    next_obs = jax.tree.map(
+                        lambda x: x[next_window_idx], stored.observation
+                    )
+                return sampled.replace(next_observation=next_obs)
+
+            batch = _map_transitions(attach_next_obs, self.data, batch)
+
         if self.n_steps == 1:
             batch = jax.tree.map(lambda x: x[:, 0], batch)
 
@@ -227,6 +289,11 @@ class TransitionBuffer(eqx.Module):
         step_indices = flat_indices // num_vec_envs
         env_indices = flat_indices % num_vec_envs
         return step_indices, env_indices
+
+    def _first_transition(self, tree) -> Transition:
+        if isinstance(tree, Transition):
+            return tree
+        return jax.tree.leaves(tree, is_leaf=lambda x: isinstance(x, Transition))[0]
 
 
 class PrioritizedTransitionBuffer(TransitionBuffer):
@@ -296,6 +363,7 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
         key: PRNGKeyArray,
         with_replacement: bool = False,
         batch_size: int | None = None,
+        with_next_obs: bool = False,
     ) -> Transition:
         """
         Sample a batch of transitions from the buffer. Samples a batch of sequences
@@ -310,9 +378,18 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
         Alongside the Transition batch, this PER adds the PER_weights
         to the Transition batch and returns the indices of the sampled sequence starts as
         ``(Transition, flat_indices)``.
+
+        **Arguments**:
+            `key`: JAX PRNG key for sampling.
+            `with_replacement`: Whether to sample with replacement.
+            `Batch size`: Number of sequences to sample. Defaults to `sample_batch_size`.
+            `with_next_obs`: sets the `next_observation` field of the returned Transitions
+            to the observation of the next transition in the buffer. This only fires if the transition
+            did not already have an explicit `next_observation` set.
+            In case this fires, truncated transitions are not sampled such that bootstrapping is still correct.
         """
         batch_size = self.sample_batch_size if batch_size is None else batch_size
-        flat_valid_start_indices = self._get_flat_valid_start_indices()
+        flat_valid_start_indices = self._get_flat_valid_start_indices(with_next_obs)
         flat_priorities = self.priorities.reshape(-1)
         scaled_priorities = jnp.where(
             flat_valid_start_indices, flat_priorities**self.alpha, 0.0
@@ -335,7 +412,7 @@ class PrioritizedTransitionBuffer(TransitionBuffer):
         weights = (num_valid * sample_probs) ** (-self.beta)
         weights = weights / jnp.maximum(weights.max(), 1e-8)
 
-        batch = self._gather_batch(flat_indices)
+        batch = self._gather_batch(flat_indices, with_next_obs)
 
         if isinstance(batch, Transition):
             batch = batch.replace(PER_weight=weights, PER_index=flat_indices)

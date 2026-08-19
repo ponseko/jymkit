@@ -8,12 +8,12 @@ from jaxtyping import PRNGKeyArray
 
 from jaxnasium._environment import (
     ORIGINAL_OBSERVATION_KEY,
-    AgentObservation,
     TEnvState,
     TimeStep,
     TObservation,
 )
 from jaxnasium._spaces import Discrete, MultiDiscrete
+from jaxnasium._types import AgentObservation
 
 from ._util import gymnasium_to_jaxnasium_space
 from ._wrappers import Wrapper

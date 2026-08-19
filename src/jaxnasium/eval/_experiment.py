@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 import time
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
@@ -19,6 +20,14 @@ from ._sweep import _jsonify
 
 if TYPE_CHECKING:
     from jaxnasium.algorithms import RLAlgorithm
+
+
+def _log(*text: str) -> None:
+    try:
+        sys.stderr.write(" ".join(text) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 
 def _get_algorithm(algorithm: RLAlgorithm | str, hyperparameters: dict) -> RLAlgorithm:
@@ -143,6 +152,10 @@ class AlgorithmEvaluation:
         config = self._create_config(kwargs)
 
         def run(key: PRNGKeyArray) -> Any:
+            _log("Running AlgorithmEvaluation")
+            _log(f"Algorithm: {type(config.algorithm).__name__}")
+            _log(f"Environment: {config.env_name}")
+            _log(f"Hyperparameters: {config.hyperparameters}")
             train_key, eval_key = jax.random.split(key)
             agent, train_metrics = config.algorithm.train(train_key, config.env)
             evaluation = agent.evaluate(
@@ -165,7 +178,8 @@ class AlgorithmEvaluation:
             def run_batch(keys: PRNGKeyArray):
                 return jax.lax.map(run, keys, batch_size=self.batch_size)
 
-            run_batch.__name__ = f"AlgorithmEvaluation:batched[{self.batch_size}]"
+            actual_batch_size = min(self.batch_size or 0, config.seed.shape[0])
+            run_batch.__name__ = f"AlgorithmEvaluation:batched[{actual_batch_size}]"
             fn = jym.precompile(run_batch, config.seed)
 
         result = fn()

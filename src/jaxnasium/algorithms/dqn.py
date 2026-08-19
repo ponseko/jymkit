@@ -12,7 +12,6 @@ from jaxtyping import Array, Float, PRNGKeyArray, PyTree
 
 import jaxnasium as jym
 from jaxnasium import Environment
-from jaxnasium._environment import ORIGINAL_OBSERVATION_KEY
 from jaxnasium.algorithms import RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import (
     EpsilonGreedy,
@@ -112,7 +111,7 @@ class DQN(RLAlgorithm):
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
 
         # Note that the randomness of the warmup data is dependent on the initial epsilon.
-        warmup_length = max(1, max(self.warmup_steps, self.batch_size) // self.num_envs)
+        warmup_length = max(2, max(self.warmup_steps, self.batch_size) // self.num_envs)
         warmup_state, dummy_trajectory = self._collect_rollout(
             agent, (env_state, obsv, key), env, length=warmup_length
         )
@@ -163,12 +162,12 @@ class DQN(RLAlgorithm):
         agent = agent.update_normalizer(trajectory_batch)
 
         rng, update_key = jax.random.split(rng)
-        agent = self._update_agent_state(update_key, agent, buffer)
+        agent = self._update_agent(update_key, agent, buffer)
 
         runner_state = (agent, buffer, env_state, last_obs, rng)
         return runner_state, metric
 
-    def _update_agent_state(
+    def _update_agent(
         self, key: PRNGKeyArray, agent: DQNAgent, buffer: TransitionBuffer
     ) -> DQNAgent:
         """`num_updates` gradient steps, each on its own freshly sampled batch."""
@@ -176,7 +175,7 @@ class DQN(RLAlgorithm):
         def scan_fn(carry, _):
             agent, rng = carry
             rng, sample_key = jax.random.split(rng)
-            minibatch = buffer.sample(sample_key)
+            minibatch = buffer.sample(sample_key, with_next_obs=True)
             minibatch = minibatch.normalize(agent.normalizer)
             return (agent.update_params(minibatch), rng), None
 
@@ -214,7 +213,6 @@ class DQN(RLAlgorithm):
                 terminated=terminated,
                 truncated=truncated,
                 info=info,
-                next_observation=info[ORIGINAL_OBSERVATION_KEY],
             )
 
             rollout_state = (env_state, obsv, rng)
@@ -294,7 +292,7 @@ class DQNAgent(RLAgent):
         def __dqn_loss(params: QValueNetwork, train_batch: Transition):
             q_out_1 = jax.vmap(params)(train_batch.observation)
             q_taken = jym.tree.gather_actions(q_out_1, train_batch.action)
-            q_taken = jym.tree.batch_sum(q_taken)
+            q_taken = jym.tree.batch_mean(q_taken)
             q_loss = optax.losses.squared_error(q_taken, target)
             return jym.tree.mean(q_loss)
 
@@ -302,7 +300,7 @@ class DQNAgent(RLAgent):
 
         # Compute target
         q_target_output = jax.vmap(self.critic_target)(batch.next_observation)
-        q_target_output = jym.tree.batch_sum(
+        q_target_output = jym.tree.batch_mean(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
         )
         target = batch.reward + ~batch.terminated * trainer.gamma * q_target_output
