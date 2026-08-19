@@ -102,7 +102,7 @@ def test_discrete_is_learning(alg):
     env = jym.make("CartPole-v1")
     seed = jax.random.PRNGKey(1)
     seed1, seed2 = jax.random.split(seed)
-    agent = alg(total_timesteps=1_000_000, log_function=None)
+    agent = alg(log_function=None)
     agent, _ = agent.train(seed1, env)
 
     rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
