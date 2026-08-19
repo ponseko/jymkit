@@ -120,7 +120,7 @@ def test_constant_reward_does_not_explode_on_the_first_update():
     normalizer = _constant_reward_normalizer(num_envs).update_reward(reward, done)
     normalized = normalizer.normalize_reward(reward)
 
-    clip = normalizer.reward.clip_value  # type: ignore
+    clip = normalizer.clip_value_rew
     # if default is later set to None, we default to a large number
     assert jnp.all(jnp.abs(normalized) <= (clip or 1e8) + 1e-6)
 
@@ -146,15 +146,25 @@ def test_all_false_mask_is_a_noop_not_nan():
 
 
 def test_normalized_outputs_are_clipped():
-    stats = RunningStatisticsState(jnp.zeros(2), clip_value=10.0)
-    stats = stats.update(jax.random.normal(SEED, (256, 2)))
-
+    dummy = jnp.zeros(2)
+    data = jax.random.normal(SEED, (256, 2))
     outlier = jnp.array([[1e4, -1e4]])
-    assert jnp.allclose(stats.normalize(outlier), jnp.array([[10.0, -10.0]]))
 
-    unclipped = RunningStatisticsState(jnp.zeros(2), clip_value=None)
-    unclipped = unclipped.update(jax.random.normal(SEED, (256, 2)))
-    assert jnp.all(jnp.abs(unclipped.normalize(outlier)) > 10.0)
+    clipped = Normalizer(
+        dummy_obs=dummy,
+        normalize_obs=True,
+        normalize_rew=False,
+        clip_value_obs=10.0,
+    ).update_obs(data)
+    assert jnp.allclose(clipped.normalize_obs(outlier), jnp.array([[10.0, -10.0]]))
+
+    unclipped = Normalizer(
+        dummy_obs=dummy,
+        normalize_obs=True,
+        normalize_rew=False,
+        clip_value_obs=None,
+    ).update_obs(data)
+    assert jnp.all(jnp.abs(unclipped.normalize_obs(outlier)) > 10.0)
 
 
 def test_normalizer_is_noop_when_disabled():
@@ -181,7 +191,10 @@ def test_running_statistics_matches_batch_moments():
     assert jnp.allclose(stats.mean, jnp.mean(data, axis=0), atol=1e-3)
     assert jnp.allclose(stats.std, jnp.std(data, axis=0), atol=1e-3)
 
-    normalized = stats.normalize(data)
+    normalizer = Normalizer(
+        dummy_obs=jnp.zeros(4), normalize_obs=True, normalize_rew=False
+    ).update_obs(data)
+    normalized = normalizer.normalize_obs(data)
     assert jnp.allclose(jnp.mean(normalized, axis=0), 0.0, atol=1e-3)
     assert jnp.allclose(jnp.std(normalized, axis=0), 1.0, atol=1e-2)
 

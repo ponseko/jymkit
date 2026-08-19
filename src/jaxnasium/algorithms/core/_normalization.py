@@ -24,39 +24,46 @@ class RunningStatisticsState(eqx.Module):
     mean: Array
     std: Array
     count: Array
-    summed_variance: Array
+    variance: Array
 
-    center_mean: bool = eqx.field(static=True)
-    clip_value: float | None = eqx.field(static=True)
+    max_count: int | None = eqx.field(static=True)
+    std_min_value: float = eqx.field(static=True)
+    std_max_value: float = eqx.field(static=True)
 
     def __init__(
-        self, pytree_example, center_mean: bool = True, clip_value: float | None = 100.0
+        self,
+        pytree_example,
+        max_count: int | None = None,
+        std_min_value: float = 1e-4,
+        std_max_value: float = 1e6,
     ):
         dtype: type = jnp.float64 if jax.config.jax_enable_x64 else jnp.float32  # type: ignore
         count_dtype: type = jnp.int64 if jax.config.jax_enable_x64 else jnp.int32  # type: ignore
 
         self.count = jnp.zeros((), dtype=count_dtype)
         self.mean = optax.tree_utils.tree_zeros_like(pytree_example, dtype=dtype)
-        self.summed_variance = optax.tree_utils.tree_zeros_like(
-            pytree_example, dtype=dtype
-        )
+        self.variance = optax.tree_utils.tree_zeros_like(pytree_example, dtype=dtype)
         self.std = optax.tree_utils.tree_ones_like(pytree_example, dtype=dtype)
 
-        # Typically disabled for rewards, but enabled for observations.
-        self.center_mean = center_mean
+        # Caps the sample count. None (original behavior and default) is an all-history average.
+        # setting max count turns this into an EMA with an horizon of `max_count`.
+        if max_count is not None and max_count < 1:
+            raise ValueError(f"`max_count` must be at least 1, got {max_count}.")
+        self.max_count = max_count
 
-        # Clips the normalized values; SB3 default is 10.0.
-        # Spike of reward in when stds are low could (e.g. sparse rewards) could cause extreme values
-        # Similarly, early training could have low stds and cause extreme values.
-        self.clip_value = clip_value
+        if not 0.0 < std_min_value < std_max_value:
+            raise ValueError(
+                "Require 0 < std_min_value < std_max_value, got "
+                f"{std_min_value}, {std_max_value}."
+            )
+        self.std_min_value = std_min_value
+        self.std_max_value = std_max_value
 
     def update(
         self,
         batch: Array,
         *,
         mask: jnp.ndarray | None = None,
-        std_min_value: float = 1e-4,
-        std_max_value: float = 1e6,
         validate_shapes: bool = True,
     ) -> "RunningStatisticsState":
         """
@@ -69,12 +76,14 @@ class RunningStatisticsState(eqx.Module):
         """
 
         def _compute_node_statistics(
-            mean: jnp.ndarray, summed_variance: jnp.ndarray, batch: jnp.ndarray
+            mean: jnp.ndarray, variance: jnp.ndarray, batch: jnp.ndarray
         ) -> tuple[jnp.ndarray, jnp.ndarray]:
             assert isinstance(mean, jnp.ndarray), type(mean)
-            assert isinstance(summed_variance, jnp.ndarray), type(summed_variance)
+            assert isinstance(variance, jnp.ndarray), type(variance)
             # The mean and the sum of past variances are updated with Welford's
             # algorithm using batches (see https://stackoverflow.com/q/56402955).
+            # However, we now carry the variance rather than the summed variance to allow
+            # us to floor the count
             weight = (
                 True
                 if mask is None
@@ -86,17 +95,19 @@ class RunningStatisticsState(eqx.Module):
             mean = mean + mean_update
 
             diff_to_new_mean = batch - mean
-            variance_update = diff_to_old_mean * diff_to_new_mean * weight
-            variance_update = jnp.sum(variance_update, axis=batch_axis)
-            summed_variance = summed_variance + variance_update
-            return mean, summed_variance
+            variance_update = jnp.sum(
+                diff_to_old_mean * diff_to_new_mean * weight, axis=batch_axis
+            )
+            variance = variance + (variance_update - step_increment * variance) / denom
+            return mean, variance
 
-        def compute_std(summed_variance: jnp.ndarray, std: jnp.ndarray) -> jnp.ndarray:
-            assert isinstance(summed_variance, jnp.ndarray)
-            # Summed variance can get negative due to rounding errors.
-            summed_variance = jnp.maximum(summed_variance, 0)
-            std = jnp.sqrt(summed_variance / denom)
-            std = jnp.clip(std, std_min_value, std_max_value)
+        def compute_std(variance: jnp.ndarray) -> jnp.ndarray:
+            assert isinstance(variance, jnp.ndarray)
+            variance = jnp.maximum(
+                variance, 0
+            )  # in case var < 0 due to rounding errors.
+            std = jnp.sqrt(variance)
+            std = jnp.clip(std, self.std_min_value, self.std_max_value)
             return std
 
         assert jax.tree.structure(batch) == jax.tree.structure(self.mean)
@@ -121,8 +132,11 @@ class RunningStatisticsState(eqx.Module):
             )
             step_increment = jnp.sum(mask)
         count = self.count + step_increment.astype(self.count.dtype)
+        if self.max_count is not None:
+            count = jnp.minimum(count, self.max_count).astype(self.count.dtype)
         # if all masks are 0 on the first update, denom becomes 0.
         denom = jnp.where(count > 0, count, 1)
+        denom = jnp.maximum(denom, step_increment.astype(denom.dtype))
 
         # # Validation is important. If the shapes don't match exactly, but are
         # # compatible, arrays will be silently broadcasted resulting in incorrect
@@ -131,27 +145,17 @@ class RunningStatisticsState(eqx.Module):
             self._validate_batch_shapes(batch, self.mean, batch_dims)
 
         updated_stats = jax.tree.map(
-            _compute_node_statistics, self.mean, self.summed_variance, batch
+            _compute_node_statistics, self.mean, self.variance, batch
         )
         mean = jax.tree.map(lambda _, x: x[0], self.mean, updated_stats)
-        summed_variance = jax.tree.map(lambda _, x: x[1], self.mean, updated_stats)
-        std = jax.tree.map(compute_std, summed_variance, self.std)
+        variance = jax.tree.map(lambda _, x: x[1], self.mean, updated_stats)
+        std = jax.tree.map(compute_std, variance)
 
         return eqx.tree_at(
-            lambda x: (x.mean, x.std, x.count, x.summed_variance),
+            lambda x: (x.mean, x.std, x.count, x.variance),
             self,
-            (mean, std, count, summed_variance),
+            (mean, std, count, variance),
         )
-
-    def normalize(self, batch: Array) -> Array:
-        if self.center_mean:
-            batch = optax.tree.sub(batch, self.mean)
-        normalized = jax.tree.map(
-            lambda data, std: data / (std + 1e-8), batch, self.std
-        )
-        if self.clip_value is None:
-            return normalized
-        return jym.tree.clip(normalized, -self.clip_value, self.clip_value)
 
     @staticmethod
     def _validate_batch_shapes(
@@ -186,8 +190,14 @@ class Normalizer(eqx.Module):
     obs: RunningStatisticsState | None
     reward: RunningStatisticsState | None
 
-    returns: Array | None = None  # for (discounted) reward normalization
-    gamma: float | None = None
+    returns: Array | None  # for (discounted) reward normalization
+    returns_max: Array | None  # the running max discounted return
+    gamma: float | None
+    g_max: float | None = eqx.field(static=True)
+    center_mean_obs: bool = eqx.field(static=True)
+    center_mean_rew: bool = eqx.field(static=True)
+    clip_value_obs: float | None = eqx.field(static=True)
+    clip_value_rew: float | None = eqx.field(static=True)
 
     def __init__(
         self,
@@ -198,6 +208,11 @@ class Normalizer(eqx.Module):
         normalize_rew: bool = True,
         gamma: float | None = 0.99,
         rew_shape: tuple[int, ...] | None = (1,),
+        g_max: float | None = None,
+        center_mean_obs: bool = True,
+        center_mean_rew: bool = False,
+        clip_value_obs: float | None = 100.0,
+        clip_value_rew: float | None = 100.0,
     ):
         """
         **Arguments:**
@@ -209,9 +224,17 @@ class Normalizer(eqx.Module):
         - `normalize_rew`: whether to normalize rewards.
         - `gamma`: discount factor for computing discounted returns. Must be provided if `normalize_rew` is True.
         - `rew_shape`: shape of a **single env step's** reward, i.e. `(num_envs,)`.
+        - `g_max`: if not None, bounds the normalized returns between ±g_max (SimBaV2 trick).
+        - `center_mean_obs`: subtract the running observation mean from the observations.
+        - `center_mean_rew`: subtract the running return mean from the rewards.
+        - `clip_value_obs` / `clip_value_rew`: when not None, clips normalized values to `±clip_value`.
         """
         self.obs = None
         self.reward = None
+        self.center_mean_obs = center_mean_obs
+        self.center_mean_rew = center_mean_rew
+        self.clip_value_obs = clip_value_obs
+        self.clip_value_rew = clip_value_rew
 
         if normalize_obs:
             assert dummy_obs is not None or obs_space is not None, (
@@ -226,16 +249,23 @@ class Normalizer(eqx.Module):
             self.obs = RunningStatisticsState(dummy_obs)
 
         if normalize_rew:
-            self.reward = RunningStatisticsState(jnp.zeros(()), center_mean=False)
+            self.reward = RunningStatisticsState(jnp.zeros(()))
 
         self.returns = None
+        self.returns_max = None
         self.gamma = None
+        self.g_max = None
         if normalize_rew:
             assert gamma is not None and rew_shape is not None, (
                 "Normalizer must be initialized with gamma and rew_shape when normalizing rewards."
             )
-            self.returns = jnp.zeros(rew_shape, dtype=jnp.float32)
+            if g_max is not None and g_max <= 0:
+                raise ValueError(f"`g_max` must be positive, got {g_max}.")
+            dtype = jnp.float64 if jax.config.jax_enable_x64 else jnp.float32
+            self.returns = jnp.zeros(rew_shape, dtype=dtype)
+            self.returns_max = jnp.zeros((), dtype=dtype)
             self.gamma = gamma
+            self.g_max = g_max
 
     def update_obs(self, obs: PyTree, mask: Array | None = None) -> "Normalizer":
         if self.obs is None:
@@ -267,8 +297,15 @@ class Normalizer(eqx.Module):
         )
         reward_normalizer = self.reward.update(discounted_returns)
 
+        assert self.returns_max is not None
+        new_returns_max = jnp.maximum(
+            self.returns_max, jnp.max(jnp.abs(discounted_returns))
+        )
+
         return eqx.tree_at(
-            lambda x: (x.reward, x.returns), self, (reward_normalizer, new_returns)
+            lambda x: (x.reward, x.returns, x.returns_max),
+            self,
+            (reward_normalizer, new_returns, new_returns_max),
         )
 
     def update(self, batch: Transition) -> "Normalizer":
@@ -282,15 +319,36 @@ class Normalizer(eqx.Module):
         """Normalizes the given batch of observations if normalization of observations is enabled."""
         if self.obs is None:
             return obs
+
+        def _normalize(batch: Array, mean: Array, std: Array) -> Array:
+            if self.center_mean_obs:
+                batch = optax.tree.sub(batch, mean)
+            normalized = jax.tree.map(lambda data, s: data / (s + 1e-8), batch, std)
+            if self.clip_value_obs is None:
+                return normalized
+            return jym.tree.clip(normalized, -self.clip_value_obs, self.clip_value_obs)
+
         if isinstance(obs, jym.AgentObservation):
             return jym.AgentObservation(
-                observation=self.obs.normalize(obs.observation),
+                observation=_normalize(obs.observation, self.obs.mean, self.obs.std),
                 action_mask=obs.action_mask,
             )
-        return self.obs.normalize(obs)
+        return _normalize(obs, self.obs.mean, self.obs.std)
 
     def normalize_reward(self, reward: Array) -> Array:
         """Normalizes the given batch of rewards if normalization of rewards is enabled."""
         if self.reward is None:
             return reward
-        return self.reward.normalize(reward)
+
+        std = self.reward.std
+        if self.g_max is not None:
+            assert self.returns_max is not None
+            std = jnp.maximum(std, self.returns_max / self.g_max)
+
+        if self.center_mean_rew:
+            reward = optax.tree.sub(reward, self.reward.mean)
+
+        normalized = jax.tree.map(lambda data, s: data / (s + 1e-8), reward, std)
+        if self.clip_value_rew is None:
+            return normalized
+        return jym.tree.clip(normalized, -self.clip_value_rew, self.clip_value_rew)
