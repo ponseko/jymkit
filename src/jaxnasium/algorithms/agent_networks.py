@@ -115,7 +115,9 @@ class ValueNetwork(eqx.Module):
         body: Callable[..., OutSizedNetwork] = SimBa,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
-        output_layer_type: Callable[..., Network] = eqx.nn.Linear,
+        output_layer_type: Callable[..., Network] = eqx.Partial(
+            eqx.nn.Linear, out_features="scalar"
+        ),
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
 
@@ -129,9 +131,7 @@ class ValueNetwork(eqx.Module):
         self.body = body(self.obs_processor.out_features, key=body_key)
 
         self.output_layers = output_layer_type(
-            in_features=self.body.out_features,
-            out_features=1,
-            key=output_key,
+            in_features=self.body.out_features, key=output_key
         )
 
         body_key, head_key = jax.random.split(wb_key)
@@ -148,7 +148,7 @@ class ValueNetwork(eqx.Module):
 
         x = self.obs_processor(x, key=key)
         x = self.body(x, key=key)
-        return self.output_layers(x, key=key).squeeze(-1)
+        return self.output_layers(x, key=key)
 
 
 class QValueNetwork(eqx.Module):
