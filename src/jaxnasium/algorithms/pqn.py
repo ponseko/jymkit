@@ -51,6 +51,8 @@ class PQN(RLAlgorithm):
     num_steps: int = eqx.field(static=True, default=128)  # steps per environment
     num_minibatches: int = eqx.field(static=True, default=4)  # Number of mini-batches
     num_epochs: int = eqx.field(static=True, default=4)  # K epochs
+    warmup_steps: int = eqx.field(static=True, default=5_000)
+    """Normalizer statistics warmup steps."""
 
     normalize_observations: bool = eqx.field(static=True, default=True)
     normalize_rewards: bool = eqx.field(static=True, default=True)
@@ -122,7 +124,13 @@ class PQN(RLAlgorithm):
         )
 
         obsv, env_state = env.reset(jax.random.split(key, self.num_envs))
-        runner_state = (agent, env_state, obsv, key)
+        warmup_length = max(1, self.warmup_steps // self.num_envs)
+        warmup_state, warmup_trajectory = self._collect_rollout(
+            agent, (env_state, obsv, key), env, length=warmup_length
+        )
+        agent = agent.update_normalizer(warmup_trajectory)
+
+        runner_state = (agent, *warmup_state)
         runner_state, metrics = jax.lax.scan(
             train_iteration_fn, runner_state, jnp.arange(self.num_iterations)
         )

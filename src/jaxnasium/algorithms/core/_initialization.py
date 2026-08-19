@@ -10,6 +10,7 @@ from jaxtyping import PRNGKeyArray, PyTree
 DEFAULT_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, np.sqrt(2))
 POLICY_HEAD_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, 0.01)
 VALUE_HEAD_WEIGHT_INIT = partial(jax.nn.initializers.orthogonal, 1.0)
+ZERO_INIT = partial(jax.nn.initializers.constant, 0.0)
 DEFAULT_BIAS_INIT = 0.0
 
 
