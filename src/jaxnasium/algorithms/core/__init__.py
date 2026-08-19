@@ -33,15 +33,6 @@ from ._scan import (
     scan_transitions as scan_transitions,
 )
 from ._schedule import Schedule as Schedule
-from ._transforms import (
-    categorical_expectation as categorical_expectation,
-    linear_bins as linear_bins,
-    symexp as symexp,
-    symexp_bins as symexp_bins,
-    symlog as symlog,
-    twohot as twohot,
-    twohot_cross_entropy as twohot_cross_entropy,
-)
 from ._transition import (
     Transition as Transition,
     n_step_to_cumulative_single_step as n_step_to_cumulative_single_step,
