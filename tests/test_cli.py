@@ -78,6 +78,13 @@ def test_jaxnasium_add_ppo(tmp_path):
     assert (tmp_path / "agent_networks.py").is_file()
 
 
+def test_jaxnasium_add_sweep(tmp_path):
+    """`jaxnasium add sweep` scaffolds the sweep template."""
+    result = _run_jaxnasium_add("sweep", tmp_path)
+    assert result.returncode == 0, f"CLI failed: {result.stderr}\n{result.stdout}"
+    assert (tmp_path / "sweep.py").is_file()
+
+
 def test_jaxnasium_add_sac(tmp_path):
     """`jaxnasium add sac` works and skips agent_networks.py if already present."""
     ppo_result = _run_jaxnasium_add("ppo", tmp_path)

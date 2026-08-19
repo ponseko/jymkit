@@ -4,6 +4,8 @@ from jaxtyping import PRNGKeyArray
 import jaxnasium as jym
 from jaxnasium.algorithms import PPO as Algo
 
+# jym.enable_compilation_cache() # optional
+
 
 def do_random_evaluation(
     key: PRNGKeyArray, env: jym.Environment, num_repitions: int = 10
@@ -11,12 +13,13 @@ def do_random_evaluation(
     """Perform some random steps to set a baseline for the environment."""
     rewards = 0.0
     for _ in range(num_repitions):
-        obs, env_state = env.reset(key)
+        reset_key, key = jax.random.split(key)
+        obs, env_state = env.reset(reset_key)
         while True:
-            key, key = jax.random.split(key)
-            action = env.action_space.sample(key)
+            sample_key, step_key, key = jax.random.split(key)
+            action = env.action_space.sample(sample_key)
             (obs, reward, terminated, truncated, info), env_state = env.step(
-                key, env_state, action
+                step_key, env_state, action
             )
             rewards += reward
             if terminated or truncated:
@@ -34,7 +37,8 @@ if __name__ == "__main__":
 
     # RL Training
     agent = Algo(total_timesteps=100000)
-    agent, metrics = agent.train(rng, env)
+    train = jym.precompile(agent.train, rng, env)
+    agent, metrics = train()
 
     print(f"Agent average reward: {agent.evaluate(rng, env)}")
 

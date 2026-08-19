@@ -25,6 +25,11 @@ source = "algorithms/architectures/mlp.py"
 dest = "mlp.py"
 description = "Simple MLP architecture (Equinox)."
 
+[file.sweep]
+source = "cli/_resources/sweep_template.py"
+dest = "sweep.py"
+description = "Scaffold a small example multi-environment, multi-algorithm hyperparameter random search."
+
 # Bundles of files to scaffold as a group
 # [bundle.<name>]
 # options:
