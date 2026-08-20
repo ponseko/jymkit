@@ -1,5 +1,5 @@
 import pytest
-from _test_utils import run_env_and_agent_env_test
+from _test_utils import check_env
 
 # Only run these in "external" mode
 pytestmark = pytest.mark.external
@@ -13,7 +13,7 @@ def test_econojax_env():
     from econojax import EconoJax  # type: ignore
 
     env = EconoJax(num_population=4)
-    run_env_and_agent_env_test(env, test_reset=True, test_step=True, flatten_obs=True)
+    check_env(env, flatten_obs=True)
 
 
 @pytest.mark.skip(reason="Rice JAX is undergoing an update")
@@ -24,7 +24,7 @@ def test_rice_jax_env():
     region_yamls = load_region_yamls(3)
     env = Rice(region_yamls)
 
-    run_env_and_agent_env_test(env, test_reset=True, test_step=True, flatten_obs=True)
+    check_env(env, flatten_obs=True)
 
 
 def test_chargax_env():
@@ -33,4 +33,4 @@ def test_chargax_env():
     station = ChargingStation.init_default_station()
     env = Chargax(station=station)
 
-    run_env_and_agent_env_test(env, test_reset=True, test_step=True, flatten_obs=True)
+    check_env(env, flatten_obs=True)

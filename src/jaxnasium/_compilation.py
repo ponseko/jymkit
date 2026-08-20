@@ -28,7 +28,7 @@ def _default_cache_dir() -> Path:
 def enable_compilation_cache(
     path: str | os.PathLike | None = None,
     *,
-    min_compile_time_secs: float = 0.1,
+    min_compile_time_secs: float = 0.01,
     min_entry_size_bytes: int = 0,
 ) -> Path:
     """Convenience function to enable JAX's persistent compilation cache.

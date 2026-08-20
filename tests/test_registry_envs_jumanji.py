@@ -1,5 +1,5 @@
 import pytest
-from _test_utils import registry_envs_for_package, run_env_and_agent_env_test
+from _test_utils import check_env, registry_envs_for_package
 
 # Only run these in "external" mode
 pytestmark = pytest.mark.external
@@ -12,9 +12,4 @@ JUMANJI_ENVS = registry_envs_for_package("jumanji")
 
 @pytest.mark.parametrize("env_id", JUMANJI_ENVS)
 def test_jumanji_env_smoke(env_id: str) -> None:
-    run_env_and_agent_env_test(
-        env_id,
-        test_reset=False,
-        test_step=False,
-        flatten_obs=True,
-    )
+    check_env(env_id, flatten_obs=True, run_env=False)

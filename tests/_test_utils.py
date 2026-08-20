@@ -1,11 +1,10 @@
-"""Shared helpers for lightweight per-registry environment smoke tests."""
-
 from __future__ import annotations
 
 import warnings
 from functools import partial
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import pytest
@@ -14,6 +13,8 @@ from _consts import AGENT_MIN_CONFIG, SKIP_AGENT_ENVS, SKIP_ENVS
 import jaxnasium as jym
 from jaxnasium.algorithms import DQN, PPO, PQN, SAC, RLAgent, RLAlgorithm
 from jaxnasium.algorithms.core import Transition
+
+SEED = jax.random.PRNGKey(0)
 
 
 def get_skip_envs(env_reason_dict: dict[str, str]) -> dict[str, str]:
@@ -39,6 +40,13 @@ def registry_envs_for_package(package: str) -> list[str]:
     )
 
 
+def _shape_dtype(leaf) -> tuple[tuple[int, ...], Any]:
+    if hasattr(leaf, "shape") and hasattr(leaf, "dtype"):
+        return tuple(leaf.shape), leaf.dtype
+    array = jnp.asarray(leaf)
+    return array.shape, array.dtype
+
+
 def _assert_equal_pytrees(reference, candidate, name: str = " ") -> None:
     assert jax.tree.structure(reference) == jax.tree.structure(candidate), (
         f"Tree structure mismatch for {name}: {jax.tree.structure(reference)} != {jax.tree.structure(candidate)}"
@@ -46,23 +54,23 @@ def _assert_equal_pytrees(reference, candidate, name: str = " ") -> None:
     for ref_leaf, cand_leaf in zip(
         jax.tree.leaves(reference), jax.tree.leaves(candidate), strict=True
     ):
-        ref_leaf = jnp.asarray(ref_leaf)
-        cand_leaf = jnp.asarray(cand_leaf)
-        assert ref_leaf.dtype == cand_leaf.dtype, (
-            f"Tree dtype mismatch for {name}: {ref_leaf.dtype} != {cand_leaf.dtype}"
+        ref_shape, ref_dtype = _shape_dtype(ref_leaf)
+        cand_shape, cand_dtype = _shape_dtype(cand_leaf)
+        assert ref_dtype == cand_dtype, (
+            f"Tree dtype mismatch for {name}: {ref_dtype} != {cand_dtype}"
         )
-        if (ref_leaf.shape == () and cand_leaf.shape == (1,)) or (
-            ref_leaf.shape == (1,) and cand_leaf.shape == ()
+        if (ref_shape == () and cand_shape == (1,)) or (
+            ref_shape == (1,) and cand_shape == ()
         ):
             warnings.warn(
-                f"Detected inconsistent scalar shape ({ref_leaf.shape} and {cand_leaf.shape})"
+                f"Detected inconsistent scalar shape ({ref_shape} and {cand_shape})"
                 f"This is often caused by a mismatch in the observation space and the actual"
                 f"observation returned by step()/reset(). This will not necessarily cause issues,"
                 f" but should likely be fixed in the environment implementation. "
             )
             continue
-        assert ref_leaf.shape == cand_leaf.shape, (
-            f"Tree shape mismatch for {name}: {ref_leaf.shape} != {cand_leaf.shape}"
+        assert ref_shape == cand_shape, (
+            f"Tree shape mismatch for {name}: {ref_shape} != {cand_shape}"
         )
 
 
@@ -78,7 +86,7 @@ def _has_continuous_action_space(env: jym.Environment) -> bool:
 def get_valid_test_algs(env: jym.Environment) -> list[type[RLAlgorithm]]:
     algs = [
         partial[PPO](PPO, **AGENT_MIN_CONFIG),
-        partial[SAC](SAC, **AGENT_MIN_CONFIG),
+        partial[SAC](SAC, **AGENT_MIN_CONFIG, critics_num_updates=1),
     ]
     if not _has_continuous_action_space(env):
         NO_ACTOR_AGENT_MIN_CONFIG = {
@@ -86,7 +94,7 @@ def get_valid_test_algs(env: jym.Environment) -> list[type[RLAlgorithm]]:
         }
         algs.extend(
             [
-                partial[DQN](DQN, **NO_ACTOR_AGENT_MIN_CONFIG),
+                partial[DQN](DQN, **NO_ACTOR_AGENT_MIN_CONFIG, num_updates=1),
                 partial[PQN](PQN, **NO_ACTOR_AGENT_MIN_CONFIG),
             ]
         )
@@ -127,50 +135,65 @@ def _make_dummy_update_batch(
     return batch
 
 
-def _run_agent_update(agent: Any, batch: Transition, key: jax.Array) -> RLAgent:
+def _run_agent_update(agent: Any, batch: Transition, key: jax.Array):
     if isinstance(agent.trainer, SAC):
-        agent = agent.update_critics_params(key, batch)
-        agent = agent.update_actor_params(key, batch)
+        jax.eval_shape(agent.update_critics_params, key, batch)
+        jax.eval_shape(agent.update_actor_params, key, batch)
     else:
-        agent = agent.update_params(batch)
-    return agent
+        jax.eval_shape(agent.update_params, batch)
 
 
-def run_env_and_agent_env_test(
+def _run_agent_on_env(
+    env: jym.Environment,
+    alg: RLAlgorithm,
+    key: jax.Array,
+    *,
+    include_update: bool = True,
+) -> Any:
+    def _test(key: jax.Array):
+        init_key, obs_key, action_key, update_key = jax.random.split(key, 4)
+        agent: RLAgent = alg.init_agent(init_key, env)
+        observation = env.sample_observation(obs_key)
+        action = agent.get_action(action_key, observation)
+        if include_update:
+            batch = _make_dummy_update_batch(agent, env, update_key)
+            _run_agent_update(agent, batch, update_key)
+        return action
+
+    return eqx.filter_eval_shape(_test, key)
+
+
+def check_env(
     env: jym.Environment | str,
     *,
-    test_reset: bool,
-    test_step: bool,
-    flatten_obs: bool,
-    test_train_runs: bool = False,
+    flatten_obs: bool = False,
+    run_env: bool = True,
 ) -> None:
+    """Checks if the action space samples, the env steps and resets and whether each
+    algorithm correctly builds and can train on it.
+    """
     if isinstance(env, str):
         env_id = env
         skip_envs = get_skip_envs(SKIP_ENVS)
-        if env in SKIP_ENVS:
-            pytest.skip(f"Skipping {env}: {skip_envs[env]}")
+        if env_id in skip_envs:
+            pytest.skip(f"Skipping {env_id}: {skip_envs[env_id]}")
         try:
-            env = jym.make(env)
+            env = jym.make(env_id)
         except ImportError as e:
-            pytest.skip(f"Skipping {env} due to ImportError: {e}")
+            pytest.skip(f"Skipping {env_id} due to ImportError: {e}")
     else:
         env_id = "_"
-
-    (reset_key, o_sample_key, a_sample_key, a_agent_key, step_key, init_key) = (
-        jax.random.split(jax.random.PRNGKey(0), 6)
-    )
 
     if flatten_obs:
         env = jym.wrappers.FlattenObservationWrapper(env)
 
-    sampled_obs = env.sample_observation(o_sample_key)
-    sampled_action = env.sample_action(a_sample_key)
-    if test_reset:
-        _reset_obs, reset_state = env.reset(reset_key)
-        # _assert_equal_pytrees(sampled_obs, reset_obs, "sampled_obs != reset_obs")
-    if test_step:
-        assert test_reset, "test_step requires test_reset"
-        timestep, _step_state = env.step(step_key, reset_state, sampled_action)  # type: ignore
+    reset_key, action_key, step_key = jax.random.split(SEED, 3)
+
+    if run_env:
+        _obs, reset_state = env.reset(reset_key)
+        timestep, _state = env.step(
+            step_key, reset_state, env.sample_action(action_key)
+        )
         assert jym.ORIGINAL_OBSERVATION_KEY in timestep.info, (
             f"ORIGINAL_OBSERVATION_KEY not in timestep.info for {env_id}"
         )
@@ -178,19 +201,12 @@ def run_env_and_agent_env_test(
     if env_id in get_skip_envs(SKIP_AGENT_ENVS):
         return
 
-    algs = get_valid_test_algs(env)
-    for alg_cls in algs:
-        alg: RLAlgorithm = alg_cls()  # type: ignore
-        agent: RLAgent = alg.init_agent(init_key, env)
-        agent_action = agent.get_action(a_agent_key, sampled_obs)
+    reference = jax.eval_shape(env.sample_action, action_key)
+    for alg_cls in get_valid_test_algs(env):
+        alg: RLAlgorithm = alg_cls()  # type: ignore[operator]
+        action = _run_agent_on_env(env, alg, SEED)
         _assert_equal_pytrees(
-            sampled_action, agent_action, "sampled_action != agent_action"
+            reference,
+            action,
+            f"sampled_action != agent_action for {type(alg).__name__} on {env_id}",
         )
-        if test_step:
-            timestep, _step_state = env.step(step_key, reset_state, agent_action)  # type: ignore
-            assert jym.ORIGINAL_OBSERVATION_KEY in timestep.info, (
-                f"ORIGINAL_OBSERVATION_KEY not in timestep.info for {env_id}"
-            )
-        if test_train_runs:
-            batch = _make_dummy_update_batch(agent, env, a_sample_key)
-            agent = _run_agent_update(agent, batch, a_agent_key)

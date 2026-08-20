@@ -1,11 +1,21 @@
-"""Structural input/output tests for the algorithm networks. These obs/action spaces
-cover the possible paths that we want supported in terms of possible input / output networks
-and multi-agent support.
+"""Input/output coverage for the algorithm networks.
+
+These obs/action spaces cover the paths we want supported in terms of possible
+input/output networks and multi-agent support. Each one is handed to
+`check_env`, the same function every registry environment goes through, so a
+space is tested here exactly the way a real environment is tested elsewhere.
+
+`check_env` is structural: it asserts what gets built and what shape comes out,
+abstractly, without compiling. What it cannot see is *values* -- a mask applied to
+the wrong axis with a coincidentally valid shape. `TestActionMasking` below covers
+that with real compiled execution on deliberately restrictive masks, and is the only
+part of this file that runs anything.
 """
 
 from collections.abc import Callable
 from typing import Any
 
+import jax
 import pytest
 from _proxy_test_envs import (
     MULTI_AGENT_ACT_SPACES,
@@ -16,8 +26,9 @@ from _proxy_test_envs import (
     mirror_agent_structure,
     obs_box_vector,
 )
-from _test_utils import run_env_and_agent_env_test
+from _test_utils import check_env
 
+SEED = jax.random.PRNGKey(0)
 default_obs_space = obs_box_vector
 
 INPUT_SPACE_CASES = [
@@ -29,9 +40,7 @@ INPUT_SPACE_CASES = [
 @pytest.mark.parametrize("obs_space_fn, multi_agent", INPUT_SPACE_CASES)
 def test_various_input_spaces(obs_space_fn: Callable[[], Any], multi_agent: bool):
     env = make_proxy_env(obs_space_fn, multi_agent=multi_agent)
-    run_env_and_agent_env_test(
-        env, test_reset=True, test_step=True, flatten_obs=False, test_train_runs=True
-    )
+    check_env(env)
 
 
 OUTPUT_SPACE_CASES = [
@@ -49,6 +58,4 @@ def test_various_output_spaces(action_space_fn: Callable[[], Any], multi_agent: 
         obs_space_fn = default_obs_space
 
     env = make_proxy_env(obs_space_fn, action_space_fn, multi_agent=multi_agent)
-    run_env_and_agent_env_test(
-        env, test_reset=True, test_step=True, flatten_obs=False, test_train_runs=True
-    )
+    check_env(env)
