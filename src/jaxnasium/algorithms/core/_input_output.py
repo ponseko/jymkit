@@ -616,14 +616,13 @@ class PyTreeQValueNetwork(_PyTreeOutputNetwork):
         output_space: PyTree[SpaceLike],
         *,
         key: PRNGKeyArray,
-        layer_type: Callable[..., Network] = eqx.nn.Linear,
+        output_layer: Callable[..., Network] = QLayer,
     ):
         self.num_output_spaces = len(jax.tree.leaves(output_space))
 
         keys = optax.tree.split_key_like(key, output_space)
-        Q_layer = QLayer.with_params(layer_type=layer_type)
         self.heads = jax.tree.map(
-            lambda o, k: Q_layer(in_features, o, key=k), output_space, keys
+            lambda o, k: output_layer(in_features, o, key=k), output_space, keys
         )
 
     def __call__(self, x, action_mask=None, *, key: PRNGKeyArray | None = None):

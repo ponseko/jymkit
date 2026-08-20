@@ -15,6 +15,7 @@ from jaxnasium.algorithms.core import (
     PyTreeActionNetwork,
     PyTreeObsSpaceNetwork,
     PyTreeQValueNetwork,
+    QLayer,
     set_weight_bias,
 )
 from jaxnasium.algorithms.types import Network, OutSizedNetwork
@@ -167,7 +168,9 @@ class QValueNetwork(eqx.Module):
         body: Callable[..., OutSizedNetwork] = SimBa,
         obs_architecture_1d: Callable[..., Network] = eqx.nn.Identity,
         obs_architecture_2d: Callable[..., Network] = _DEFAULT_ARCHITECTURE_2D,
-        output_layer_type: Callable[..., Network] = eqx.nn.Linear,
+        output_layer_type: Callable[..., Network] = QLayer.with_params(
+            layer_type=eqx.nn.Linear
+        ),
     ):
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
@@ -191,7 +194,7 @@ class QValueNetwork(eqx.Module):
             self.body.out_features,
             output_space,
             key=output_key,
-            layer_type=output_layer_type,
+            output_layer=output_layer_type,
         )
 
         body_key, head_key = jax.random.split(wb_key)
