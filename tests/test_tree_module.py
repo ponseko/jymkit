@@ -95,6 +95,15 @@ def test_gather_actions_discrete():
     assert jnp.array_equal(gathered, jnp.array([1.0, 6.0]))
 
 
+def test_gather_actions_discrete_not_last_axis():
+    q_values = jnp.array(
+        [[[1.0, 0.1], [2.0, 0.2], [3.0, 0.3]], [[4.0, 0.4], [5.0, 0.5], [6.0, 0.6]]]
+    )
+    actions = jnp.array([0, 2])
+    gathered = jym.tree.gather_actions(q_values, actions, axis=-2)
+    assert jnp.array_equal(gathered, jnp.array([[1.0, 0.1], [6.0, 0.6]]))
+
+
 def test_gather_actions_continuous_passthrough():
     """When shapes already match, the value is returned unchanged."""
     q_value = jnp.array([1.5, 2.5])

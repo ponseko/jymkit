@@ -276,7 +276,7 @@ def tree_batch_mean(values, batch_axes: int | tuple[int, ...] = 0):
     return total / num_elements
 
 
-def tree_gather_actions(tree: PyTree, actions: PyTree):
+def tree_gather_actions(tree: PyTree, actions: PyTree, axis=-1):
     """Given a (pytree of) array-like values, gather the elements based
     on the indices provided in `actions`. If the arrays in `tree` are of the same
     shape as `actions`, the tree is assumed to be array of actions taken and
@@ -293,6 +293,7 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
         tree: Array or Pytree of arrays.
         actions: Array or same-structure Pytree of arrays as `tree`. The final axis of
         `actions` must contain elements that are valid indices for the corresponding arrays in `tree`.
+        axis: The axis on which the actions live on each leaf within the tree.
     """
 
     def gather_actions(arr, indices):
@@ -301,7 +302,8 @@ def tree_gather_actions(tree: PyTree, actions: PyTree):
         indices = jnp.asarray(indices)
         if jnp.isdtype(indices.dtype, "real floating"):
             return arr
-        return jnp.take_along_axis(arr, indices[..., None], axis=-1).squeeze()
+        indices = jnp.reshape(indices, indices.shape + (1,) * (arr.ndim - indices.ndim))
+        return jnp.take_along_axis(arr, indices, axis=axis).squeeze(axis)
 
     return jax.tree.map(gather_actions, tree, actions)
 
