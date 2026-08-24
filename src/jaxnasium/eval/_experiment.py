@@ -206,7 +206,7 @@ class AlgorithmEvaluation:
         # hash of the context. Same runs in the same folder overwritten.
         blob = re.sub(r"0x[0-9a-f]+", "0x", json.dumps(context, sort_keys=True))
         digest = hashlib.sha1(blob.encode()).hexdigest()
-        run_name = f"{context['algorithm']}_{context['env']}_{digest[:8]}"
+        run_name = f"{context['algorithm']}_{context['env']}_{digest[:16]}"
         save_root = Path(self.save_path or ".")
         save_root.mkdir(parents=True, exist_ok=True)
 
