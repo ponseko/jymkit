@@ -6,7 +6,7 @@ import re
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -70,6 +70,7 @@ class AlgorithmEvaluationConfig:
     env_name: str
     seed: PRNGKeyArray  # always a typed key array; see `_create_config`
     hyperparameters: dict[str, Any]
+    labels: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,11 @@ class AlgorithmEvaluation:
     return_train_metrics: bool = False
     save_path: str | Path | None = None
     save_as_zip: bool = False
+    _labels: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def with_labels(self, labels: dict[str, Any]) -> AlgorithmEvaluation:
+        """Attach recorded labels for the saved config that won't be passed as call arguments."""
+        return replace(self, _labels=dict(labels))
 
     def _create_config(self, kwargs: dict[str, Any]) -> AlgorithmEvaluationConfig:
         """Create a config from the given kwargs, filling in defaults from this instance."""
@@ -144,7 +150,7 @@ class AlgorithmEvaluation:
             hyperparameters.pop("algorithm", self.algorithm), hyperparameters
         )
         return AlgorithmEvaluationConfig(
-            algorithm, env, env_name, seed, hyperparameters
+            algorithm, env, env_name, seed, hyperparameters, dict(self._labels)
         )
 
     def __call__(self, **kwargs: Any) -> Any:
@@ -248,12 +254,13 @@ class AlgorithmEvaluation:
         return self._context(self._create_config(kwargs))
 
     def _context(self, config: AlgorithmEvaluationConfig) -> dict[str, Any]:
+        input_parameters = {**config.hyperparameters, **config.labels}
         return {
             "algorithm": type(config.algorithm).__name__,
             "env": config.env_name,
             "seed": _jsonify(jax.random.key_data(config.seed)),
             "num_evaluations": self.num_evaluations,
-            "input_parameters": _jsonify(config.hyperparameters),
+            "input_parameters": _jsonify(input_parameters),
             # Every field of the algorithm, not just the ones that were swept.
             "algorithm_parameters": _jsonify(
                 {

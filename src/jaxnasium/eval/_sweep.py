@@ -172,6 +172,9 @@ class Sweep:
 
     **Arguments**:
         `fn`: The function to sweep. Must accept all swept params as keywords.
+            If it implements `with_labels(labels) -> fn`, Sweep calls that
+            before each job so branch labels can be recorded (as
+            [`AlgorithmEvaluation`][jaxnasium.eval.AlgorithmEvaluation] does).
         `*stages`: `GridSearch` / `OneAtATimeSearch` / `RandomSearch` / `SobolSearch` stages to nest.
         `print_cost_estimate`: After creation, print the cost estimate of the first job to provide a
         rough estimate of the memory requirements of a job in the sweep. This triggers a compilation, so
@@ -246,7 +249,13 @@ class Sweep:
 
         def run_job(job: SweepJob) -> SweepResult:
             start_time = time.time()
-            result = jax.block_until_ready(fn(**job.args))
+            trial = fn
+            # if the trail implements a with_labels, this can be used to pass some extras
+            # that will not be passed as call arguments.
+            with_labels = getattr(fn, "with_labels", None)
+            if job.labels and callable(with_labels):
+                trial = with_labels(job.labels)
+            result = jax.block_until_ready(trial(**job.args))
             return SweepResult(
                 start_time=start_time,
                 end_time=time.time(),
