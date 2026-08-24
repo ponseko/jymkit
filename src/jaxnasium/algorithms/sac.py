@@ -432,7 +432,9 @@ class SACAgent(RLAgent):
         actor_grads = __sac_actor_loss(self.actor, batch)
 
         updates, optimizer_state = trainer.optimizer["actor"].update(
-            actor_grads, self.optimizer_state["actor"]
+            actor_grads,
+            self.optimizer_state["actor"],
+            eqx.filter(self.actor, eqx.is_inexact_array),
         )
         new_actor = eqx.apply_updates(self.actor, updates)
         optimizer_state = {**self.optimizer_state, "actor": optimizer_state}
@@ -463,7 +465,9 @@ class SACAgent(RLAgent):
         q_target = batch.reward + (1.0 - batch.terminated) * trainer.gamma * target
         grads = jax.vmap(__sac_qnet_loss, in_axes=(0, None))(self.critics, batch)
         updates, optimizer_state = trainer.optimizer["critics"].update(
-            grads, self.optimizer_state["critics"]
+            grads,
+            self.optimizer_state["critics"],
+            eqx.filter(self.critics, eqx.is_inexact_array),
         )
         new_critics = eqx.apply_updates(self.critics, updates)
 
@@ -515,7 +519,9 @@ class SACAgent(RLAgent):
         alpha_grads = __sac_alpha_loss(self.alpha, batch)
 
         updates, optimizer_state = trainer.optimizer["alpha"].update(
-            alpha_grads, self.optimizer_state["alpha"]
+            alpha_grads,
+            self.optimizer_state["alpha"],
+            eqx.filter(self.alpha, eqx.is_inexact_array),
         )
         new_alpha = eqx.apply_updates(self.alpha, updates)
         optimizer_state = {**self.optimizer_state, "alpha": optimizer_state}

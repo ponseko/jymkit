@@ -306,7 +306,9 @@ class DQNAgent(RLAgent):
         target = batch.reward + ~batch.terminated * trainer.gamma * q_target_output
 
         grads = __dqn_loss(self.critic, batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        updates, optimizer_state = trainer.optimizer.update(
+            grads, self.optimizer_state, eqx.filter(self.critic, eqx.is_inexact_array)
+        )
         new_critic = eqx.apply_updates(self.critic, updates)
 
         # update target policy

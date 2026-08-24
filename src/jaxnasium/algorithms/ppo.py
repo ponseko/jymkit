@@ -373,7 +373,11 @@ class PPOAgent(RLAgent):
 
         actor, critic = self.actor, self.critic
         grads = __ppo_loss_fn((actor, critic), batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        updates, optimizer_state = trainer.optimizer.update(
+            grads,
+            self.optimizer_state,
+            eqx.filter((actor, critic), eqx.is_inexact_array),
+        )
         new_actor, new_critic = eqx.apply_updates((actor, critic), updates)
         return self.replace(
             actor=new_actor, critic=new_critic, optimizer_state=optimizer_state

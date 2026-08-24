@@ -332,7 +332,9 @@ class PQNAgent(RLAgent):
         trainer = self.trainer
 
         grads = __dqn_loss(self.critic, batch)
-        updates, optimizer_state = trainer.optimizer.update(grads, self.optimizer_state)
+        updates, optimizer_state = trainer.optimizer.update(
+            grads, self.optimizer_state, eqx.filter(self.critic, eqx.is_inexact_array)
+        )
         new_critic = eqx.apply_updates(self.critic, updates)
 
         return self.replace(critic=new_critic, optimizer_state=optimizer_state)
