@@ -12,26 +12,7 @@ from jaxnasium.eval import AlgorithmEvaluation, GridSearch, RandomSearch, Sweep
 OUTPUT_DIR = Path("results/sweep")
 SEARCH_KEY = jax.random.PRNGKey(1)
 
-DEFAULTS = {"total_timesteps": 100_000, "num_envs": 8, "log_function": None}
-
-ALGORITHMS = {
-    "PPO": [
-        {"algorithm": PPO(**DEFAULTS)},
-        RandomSearch(
-            {"ent_coef_start": (1e-3, 1e-1, "log")},
-            num_samples=4,
-            seed=SEARCH_KEY,
-        ),
-    ],
-    "DQN": [
-        {"algorithm": DQN(**DEFAULTS)},
-        RandomSearch(
-            {"tau": (1e-3, 5e-2, "log")},
-            num_samples=4,
-            seed=SEARCH_KEY,
-        ),
-    ],
-}
+DEFAULTS = {"total_timesteps": 1_000_000, "num_envs": 8, "log_function": None}
 
 
 def main():
@@ -49,7 +30,7 @@ def main():
     # Standard train + evaluation.
     evaluation = AlgorithmEvaluation(
         jax.random.split(jax.random.key(args.seed), args.num_seeds),
-        batch_size=args.num_seeds,
+        batch_size=5,  # vmap 5 seeds
         num_evaluations=50,
         return_train_metrics=True,
         save_path=OUTPUT_DIR,

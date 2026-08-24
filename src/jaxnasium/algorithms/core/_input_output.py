@@ -641,6 +641,6 @@ class PyTreeQValueNetwork(_PyTreeOutputNetwork):
 
     @classmethod
     def with_params(
-        cls, *, layer_type: Callable[..., Network] = eqx.nn.Linear
+        cls, *, output_layer: Callable[..., Network] = QLayer
     ) -> Callable[..., Self]:
-        return eqx.Partial(cls, layer_type=layer_type)
+        return eqx.Partial(cls, output_layer=output_layer)

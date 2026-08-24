@@ -44,7 +44,9 @@ class SimBa(eqx.Module):
     https://arxiv.org/pdf/2410.09754
 
     Operates on 1D inputs.
-    Observation normalization (RSNorm) is left to the agent (enable `Normalize_observations`).
+    Observation normalization (RSNorm) is left to the agent (enable `normalize_observations`).
+
+    depth is the number of blocks.
     """
 
     embedding: eqx.nn.Linear

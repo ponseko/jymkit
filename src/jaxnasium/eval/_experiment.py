@@ -4,10 +4,12 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import jax
 import jax.numpy as jnp
@@ -92,6 +94,8 @@ class AlgorithmEvaluation:
             - `train_curve.npy`: the training metrics, shape (num_seeds, num_iterations, ...)
             - `input_parameters.json`: the input parameters to the evaluation
             - `full_parameters.json`: the full parameters used for the evaluation.
+        `save_as_zip`: If True, while save_path is not None, will zip the results folder
+            and write it to `save_path`.
 
     **Example**:
     ```python
@@ -119,6 +123,7 @@ class AlgorithmEvaluation:
     num_evaluations: int = 50
     return_train_metrics: bool = False
     save_path: str | Path | None = None
+    save_as_zip: bool = False
 
     def _create_config(self, kwargs: dict[str, Any]) -> AlgorithmEvaluationConfig:
         """Create a config from the given kwargs, filling in defaults from this instance."""
@@ -195,35 +200,45 @@ class AlgorithmEvaluation:
         # hash of the context. Same runs in the same folder overwritten.
         blob = re.sub(r"0x[0-9a-f]+", "0x", json.dumps(context, sort_keys=True))
         digest = hashlib.sha1(blob.encode()).hexdigest()
-        run_dir = (
-            Path(self.save_path or ".")
-            / f"{context['algorithm']}_{context['env']}_{digest[:8]}"
-        )
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_name = f"{context['algorithm']}_{context['env']}_{digest[:8]}"
+        save_root = Path(self.save_path or ".")
+        save_root.mkdir(parents=True, exist_ok=True)
 
-        evaluation = result["evaluation"] if self.return_train_metrics else result
-        np.save(run_dir / "results.npy", np.asarray(evaluation))
-        if self.return_train_metrics:
-            metrics = result["train_metrics"]
-            if isinstance(metrics, jax.Array):
-                np.save(run_dir / "train_curve.npy", np.asarray(metrics))
-            else:  # a pytree of metrics rather than one reduced array
-                # Helpful for multi agent reward tracking
-                leaves = jax.tree_util.tree_flatten_with_path(metrics)[0]
-                np.savez(
-                    run_dir / "train_curve.npz",
-                    **{
-                        jax.tree_util.keystr(path).lstrip("."): np.asarray(leaf)
-                        for path, leaf in leaves
-                    },  # type: ignore
-                )
+        def write_files(run_dir: Path) -> None:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            evaluation = result["evaluation"] if self.return_train_metrics else result
+            np.save(run_dir / "results.npy", np.asarray(evaluation))
+            if self.return_train_metrics:
+                metrics = result["train_metrics"]
+                if isinstance(metrics, jax.Array):
+                    np.save(run_dir / "train_curve.npy", np.asarray(metrics))
+                else:  # a pytree of metrics rather than one reduced array
+                    # Helpful for multi agent reward tracking
+                    leaves = jax.tree_util.tree_flatten_with_path(metrics)[0]
+                    np.savez(
+                        run_dir / "train_curve.npz",
+                        **{
+                            jax.tree_util.keystr(path).lstrip("."): np.asarray(leaf)
+                            for path, leaf in leaves
+                        },  # type: ignore
+                    )
 
-        # The arguments as given, and then everything they resolved to.
-        inputs = {k: v for k, v in context.items() if k != "algorithm_parameters"}
-        (run_dir / "input_parameters.json").write_text(json.dumps(inputs, indent=2))
-        (run_dir / "full_parameters.json").write_text(
-            json.dumps({**context, "duration": duration}, indent=2)
-        )
+            # The arguments as given, and then everything they resolved to.
+            inputs = {k: v for k, v in context.items() if k != "algorithm_parameters"}
+            (run_dir / "input_parameters.json").write_text(json.dumps(inputs, indent=2))
+            (run_dir / "full_parameters.json").write_text(
+                json.dumps({**context, "duration": duration}, indent=2)
+            )
+
+        if self.save_as_zip:
+            with tempfile.TemporaryDirectory() as tmp:
+                run_dir = Path(tmp) / run_name
+                write_files(run_dir)
+                with ZipFile(save_root / f"{run_name}.zip", "w", ZIP_DEFLATED) as zf:
+                    for file in run_dir.iterdir():
+                        zf.write(file, arcname=f"{run_name}/{file.name}")
+        else:
+            write_files(save_root / run_name)
 
     def context(self, **kwargs: Any) -> dict[str, Any]:
         """

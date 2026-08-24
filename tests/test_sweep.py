@@ -599,6 +599,24 @@ def test_save_path_writes_the_four_files(tmp_path):
     assert full["duration"] > 0
 
 
+def test_save_as_zip_writes_a_zip_instead_of_a_folder(tmp_path):
+    AlgorithmEvaluation(
+        jax.random.split(jax.random.key(0), 2),
+        algorithm=_tiny_algorithm(),
+        batch_size=2,
+        num_evaluations=2,
+        return_train_metrics=True,
+        save_path=tmp_path,
+        save_as_zip=True,
+    )()
+
+    (zip_path,) = list(tmp_path.iterdir())
+    assert zip_path.is_file()
+    assert zip_path.suffix == ".zip"
+    assert zip_path.name.startswith("PPO_CartPole-v1_")
+    assert not zip_path.with_suffix("").exists()
+
+
 def test_save_path_gives_each_configuration_its_own_folder(tmp_path):
     """The folder is named after a digest of the configuration, so sweeping writes
     one folder per point, and re-running a point overwrites it."""
