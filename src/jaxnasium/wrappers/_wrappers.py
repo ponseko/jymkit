@@ -568,7 +568,7 @@ class DiscreteActionWrapper(Wrapper):
         )
         action = original_action_space.low + (action / (self.num_actions - 1)) * (  # type: ignore
             original_action_space.high - original_action_space.low  # type: ignore
-        )
+        ).reshape(self.original_action_space.shape)
         return self._env.step(key, state, action)
 
     @property

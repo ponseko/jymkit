@@ -255,7 +255,7 @@ class Sweep:
             with_labels = getattr(fn, "with_labels", None)
             if job.labels and callable(with_labels):
                 trial = with_labels(job.labels)
-            result = jax.block_until_ready(trial(**job.args))
+            result = jax.block_until_ready(trial(**job.args))  # type: ignore
             return SweepResult(
                 start_time=start_time,
                 end_time=time.time(),

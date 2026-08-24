@@ -303,7 +303,7 @@ class DQNAgent(RLAgent):
         q_target_output = jym.tree.batch_mean(
             jax.tree.map(lambda q: jnp.max(q, axis=-1), q_target_output)
         )
-        target = batch.reward + ~batch.terminated * trainer.gamma * q_target_output
+        target = batch.reward + (1 - batch.terminated) * trainer.gamma * q_target_output
 
         grads = __dqn_loss(self.critic, batch)
         updates, optimizer_state = trainer.optimizer.update(
