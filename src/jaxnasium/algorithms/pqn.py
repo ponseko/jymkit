@@ -43,7 +43,7 @@ class PQN(RLAlgorithm):
     exploration_fraction: float = eqx.field(static=True, default=0.5)
     """ Fraction of `total_timesteps` over which epsilon anneals from start to end. """
     gamma: float = 0.99
-    max_grad_norm: float = 10.0
+    max_grad_norm: float | None = 10.0
     q_lambda: float = 0.65
 
     total_timesteps: int = eqx.field(static=True, default=int(1e6))
@@ -81,7 +81,9 @@ class PQN(RLAlgorithm):
     @property
     def optimizer(self):
         return optax.chain(
-            optax.clip_by_global_norm(self.max_grad_norm),
+            optax.clip_by_global_norm(self.max_grad_norm)
+            if self.max_grad_norm is not None
+            else optax.identity(),
             optax.adam(learning_rate=self.learning_rate_schedule, eps=1e-4),
         )
 

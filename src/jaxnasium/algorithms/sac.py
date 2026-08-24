@@ -83,7 +83,7 @@ class SAC(RLAlgorithm):
     learn_alpha: bool = eqx.field(static=True, default=True)
 
     gamma: float = 0.99
-    max_grad_norm: float = 10.0
+    max_grad_norm: float | None = 10.0
     update_every: int = eqx.field(static=True, default=128)
     replay_buffer_size: int = eqx.field(static=True, default=50_000)
     warmup_steps: int = eqx.field(static=True, default=10_000)
@@ -118,7 +118,9 @@ class SAC(RLAlgorithm):
     def optimizer(self):
         def _create_optimizer(lr_schedule: Schedule):
             return optax.chain(
-                optax.clip_by_global_norm(self.max_grad_norm),
+                optax.clip_by_global_norm(self.max_grad_norm)
+                if self.max_grad_norm is not None
+                else optax.identity(),
                 optax.adam(learning_rate=lr_schedule, eps=1e-4),
             )
 

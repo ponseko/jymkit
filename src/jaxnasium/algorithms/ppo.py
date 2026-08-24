@@ -37,7 +37,7 @@ class PPO(RLAlgorithm):
     ent_coef_end: float | None = eqx.field(static=True, default=0.01)
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    max_grad_norm: float = 10.0
+    max_grad_norm: float | None = 10.0
     clip_coef: float = 0.2
     clip_coef_vf: float = 10.0
     vf_coef: float = 0.25
@@ -75,7 +75,9 @@ class PPO(RLAlgorithm):
     @property
     def optimizer(self):
         return optax.chain(
-            optax.clip_by_global_norm(self.max_grad_norm),
+            optax.clip_by_global_norm(self.max_grad_norm)
+            if self.max_grad_norm is not None
+            else optax.identity(),
             optax.adam(learning_rate=self.learning_rate_schedule, eps=1e-4),
         )
 
