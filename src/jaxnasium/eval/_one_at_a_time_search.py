@@ -41,8 +41,8 @@ class OneAtATimeSearch:
         }
     ).sweep(train)
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
     """
 

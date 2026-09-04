@@ -88,8 +88,8 @@ class RandomSearch:
         seed=jax.random.PRNGKey(1),
     ).sweep(train)
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
 
     Combined with a grid search over environments (same learning rates in each env):
@@ -105,8 +105,8 @@ class RandomSearch:
         ),
     )
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
     """
 
@@ -167,8 +167,8 @@ class SobolSearch:
         seed=jax.random.PRNGKey(1),
     ).sweep(train)
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
 
     Combined with a grid search over environments:
@@ -185,8 +185,8 @@ class SobolSearch:
         seed=jax.random.PRNGKey(0),
     )
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
     """
 

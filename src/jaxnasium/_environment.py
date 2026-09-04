@@ -88,7 +88,7 @@ class Environment(eqx.Module, Generic[TEnvState]):
         Defines the environment-specific step logic. I.e. here the state of the environment is updated
         according to the transition function.
 
-        Returns a [`TimeStep`](.#timestep) object (observation, reward, terminated, truncated, info) and the new state.
+        Returns a [`TimeStep`](#timestep) object (observation, reward, terminated, truncated, info) and the new state.
 
         **Arguments:**
 

@@ -12,6 +12,7 @@ Jaxnasium lets you
 1. 🕹️ Import your favourite environments from various libraries with a single API and automatically wrap them to a common standard.
 2. 🚀 Bootstrap new JAX RL projects with a single CLI command and get started instantly with a complete codebase.
 3. 🤖 Jaxnasium comes equiped with standard **general** RL implementations based on a near-single-file philosophy. You can either import these as off-the-shelf algorithms or copy over the code and tweak them for your problem. These algorithms follow the ideas of [PureJaxRL](https://github.com/luchris429/purejaxrl) for extremely fast end-to-end RL training in JAX.
+4. 📊 Sweep hyperparameters and evaluate algorithms over many seeds, locally or across a job array.
 
 For more details, see the [📖 Documentation](https://ponseko.github.io/jaxnasium/).
 
@@ -43,10 +44,9 @@ For existing projects, you can simply install Jaxnasium via `pip` and import the
 > from jaxnasium.algorithms import PPO
 > 
 > env = jym.make("CartPole-v1")
-> env = jaxnasium.LogWrapper(env)
 > rng = jax.random.PRNGKey(0)
-> agent = PPO(total_timesteps=5e5, learning_rate=2.5e-3)
-> agent, metrics = agent.train(rng, env)
+> algorithm = PPO(total_timesteps=5e5, learning_rate_start=2.5e-3)
+> agent, metrics = algorithm.train(rng, env)
 > ```
 
 ## 🏠 Environments
@@ -62,12 +62,12 @@ env = jym.make("Breakout-MinAtar")
 env = jym.FlattenObservationWrapper(env)
 env = jym.LogWrapper(env)
 
-agent = PPO(**some_good_hyperparameters)
-agent, metrics = agent.train(jax.random.PRNGKey(0), env)
+algorithm = PPO(**some_good_hyperparameters)
+agent, metrics = algorithm.train(jax.random.PRNGKey(0), env)
 
 # > Using an environment from Gymnax via gymnax.make(Breakout-MinAtar).
 # > Wrapping Gymnax environment with GymnaxWrapper
-# >  Disable this behavior by passing wrapper=False
+# >  Control this behavior by passing wrappers=[...] to jym.make
 # > Wrapping environment in VecEnvWrapper
 # > ... training results
 ```
@@ -75,7 +75,7 @@ agent, metrics = agent.train(jax.random.PRNGKey(0), env)
 !!!info 
     For convenience, Jaxnasium does include the 5 [classic-control environments](https://gymnasium.farama.org/environments/classic_control/).
 
-See the [Environments](./api/Available-Environments.md) page for a complete list of available environments.
+See the [Environments](https://ponseko.github.io/jaxnasium/api/Available-Environments/) page for a complete list of available environments.
 
 ### Environment API
 
@@ -94,20 +94,26 @@ obs, env_state = env.reset(key)  # <-- Mirroring Gymnax
 
 Algorithms in `jaxnasium.algorithms` are built following a near-single-file implementation philosophy in mind. In contrast to implementations in [CleanRL](https://github.com/vwxyzjn/cleanrl) or [PureJaxRL](https://github.com/luchris429/purejaxrl), Jaxnasium algorithms are built in Equinox and follow a class-based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3) API. 
 
+Hyperparameters and training logic live in the algorithm (the *trainer*); the trainable state
+lives in the *agent* that `train` returns, together with the trainer that produced it.
+
 ```python
 from jaxnasium.algorithms import PPO
 import jax
 
 env = ...
-agent = PPO(**some_good_hyperparameters)
-agent, metrics = agent.train(jax.random.PRNGKey(0), env)
+algorithm = PPO(**some_good_hyperparameters)
+agent, metrics = algorithm.train(jax.random.PRNGKey(0), env)
+
+returns = agent.evaluate(jax.random.PRNGKey(1), env)
+agent.save("ppo_agent.eqx")
 ```
 
 `train` returns the trained agent along with its training metrics: by default the mean
 return of the episodes finishing in each training iteration, one scalar per iteration.
 Iterations containing no finished episodes return a NaN.
 
-See the [Algorithms](./algorithms/Algorithms.md) for more details on the included algorithms..
+See the [Algorithms](https://ponseko.github.io/jaxnasium/algorithms/Algorithms/) page for more details on the included algorithms.
 
 ## Available Algorithms
 
