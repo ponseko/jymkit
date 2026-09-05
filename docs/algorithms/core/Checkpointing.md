@@ -1,7 +1,6 @@
 # Checkpointing
 
-Agents are saved with their trainer, so a checkpoint contains everything needed to keep
-training or to evaluate:
+Agents are saved with their trainer, so a checkpoint contains everything needed to keep training or to evaluate:
 
 ```python
 agent.save("ppo_cartpole.eqx")

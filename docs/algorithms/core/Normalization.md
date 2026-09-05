@@ -2,8 +2,8 @@
 
 Algorithm-side observation and reward normalization, enabled with the
 `normalize_observations` / `normalize_rewards` hyperparameters. Because the running
-statistics live inside the agent, they are checkpointed and restored along with it, which is
-why this is preferred over environment wrappers ([`NormalizeVecObsWrapper`][jaxnasium.NormalizeVecObsWrapper] and
+statistics live inside the agent, they are checkpointed and restored along with it. This is then typically preferred
+over the environment wrappers ([`NormalizeVecObsWrapper`][jaxnasium.NormalizeVecObsWrapper] and
 [`NormalizeVecRewardWrapper`][jaxnasium.NormalizeVecRewardWrapper]).
 
 ::: jaxnasium.algorithms.core.Normalizer
@@ -15,9 +15,3 @@ why this is preferred over environment wrappers ([`NormalizeVecObsWrapper`][jaxn
             - update_obs
             - update_reward
 
-## Running statistics
-
-::: jaxnasium.algorithms.core._normalization.RunningStatisticsState
-    options:
-        members:
-            - update

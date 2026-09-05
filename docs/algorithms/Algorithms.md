@@ -4,7 +4,7 @@ Jaxnasium provides a suite of reinforcement learning algorithms. Currently, a sm
 
 ## Algorithm Overview
 
-Jaxnasium algorithms are primarily inspired by [CleanRL](https://github.com/vwxyzjn/cleanrl) and [PureJaxRL](https://github.com/luchris429/purejaxrl) and therefore follow a near-single-file implementation philosophy. However, Jaxnasium algorithms are built in Equinox and follow a class-based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3) API.
+Jaxnasium algorithms are primarily inspired by [CleanRL](https://github.com/vwxyzjn/cleanrl) and [PureJaxRL](https://github.com/luchris429/purejaxrl) and therefore follow a near-single-file implementation philosophy. However, Jaxnasium algorithms are built in Equinox and follow a class-based design with a familiar [Stable-Baselines](https://github.com/DLR-RM/stable-baselines3)-like API.
 
 Each algorithm is split into two objects:
 
