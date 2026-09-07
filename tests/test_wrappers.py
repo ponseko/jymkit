@@ -253,6 +253,35 @@ def test_discrete_action_wrapper_vector_continuous():
     assert jnp.allclose(timestep_base.reward, timestep_discrete.reward)
 
 
+def test_discrete_action_wrapper_pytree_continuous():
+    num_actions = 5
+    action_space = {
+        "steer": Box(low=-2.0, high=5.0, shape=(), dtype=jnp.float32),
+        "thrust": Box(low=-1.0, high=1.0, shape=(3,), dtype=jnp.float32),
+    }
+    base_env = make_proxy_env(obs_box_vector, lambda: action_space)
+    env = jym.DiscreteActionWrapper(base_env, num_actions=num_actions)
+
+    assert isinstance(env.action_space["steer"], Discrete)
+    assert env.action_space["steer"].n == num_actions
+    assert isinstance(env.action_space["thrust"], MultiDiscrete)
+    assert jnp.array_equal(env.action_space["thrust"].nvec, np.array([num_actions] * 3))
+
+    discrete_action = jym.tree.mul(
+        jym.tree.ones_like(env.sample_action(SEED)), num_actions // 2
+    )
+    continuous_action = jax.tree.map(
+        lambda space: jnp.broadcast_to((space.low + space.high) / 2, space.shape),
+        env.original_action_space,
+    )
+
+    _, state_base = base_env.reset(SEED)
+    _, state_discrete = env.reset(SEED)
+    timestep_base, _ = base_env.step(SEED, state_base, continuous_action)
+    timestep_discrete, _ = env.step(SEED, state_discrete, discrete_action)
+    assert jnp.allclose(timestep_base.reward, timestep_discrete.reward)
+
+
 def test_is_wrapped_and_remove_wrapper():
     env = jym.ScaleRewardWrapper(
         jym.FlattenObservationWrapper(_make_base_env()), scale=2.0
