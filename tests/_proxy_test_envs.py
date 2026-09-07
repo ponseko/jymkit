@@ -214,6 +214,23 @@ def obs_agent_observation_multidiscrete_mask():
     return AgentObservation(observation=_float_box((6,)), action_mask=_bool_box((3, 4)))
 
 
+def obs_agent_observation_critic():
+    """Local policy obs plus a larger critic (CTDE-style) observation."""
+    return AgentObservation(
+        observation=_float_box((6,)),
+        critic_observation=_float_box((12,)),
+    )
+
+
+def obs_agent_observation_masked_critic():
+    """Action mask + a distinct critic observation."""
+    return AgentObservation(
+        observation=_float_box((6,)),
+        action_mask=_bool_box((4,)),
+        critic_observation=_float_box((12,)),
+    )
+
+
 # Multi-agent cases: the first level of the pytree is the agent dimension.
 def obs_ma_dict_homogeneous():
     return {"agent_0": _float_box((6,)), "agent_1": _float_box((6,))}
@@ -262,6 +279,18 @@ def obs_ma_dict_nested_masked_agent_observation():
     }
 
 
+def obs_ma_dict_critic_observation():
+    """Homogeneous agents with a larger shared-style critic observation."""
+    return {
+        "agent_0": AgentObservation(
+            observation=_float_box((6,)), critic_observation=_float_box((12,))
+        ),
+        "agent_1": AgentObservation(
+            observation=_float_box((6,)), critic_observation=_float_box((12,))
+        ),
+    }
+
+
 SINGLE_AGENT_OBS_SPACES: dict[str, Callable[[], Any]] = {
     "obs_box_scalar": obs_box_scalar,
     "obs_box_vector": obs_box_vector,
@@ -277,6 +306,8 @@ SINGLE_AGENT_OBS_SPACES: dict[str, Callable[[], Any]] = {
     "obs_agent_observation_vector": obs_agent_observation_vector,
     "obs_agent_observation_dict": obs_agent_observation_dict,
     "obs_agent_observation_multidiscrete_mask": obs_agent_observation_multidiscrete_mask,
+    "obs_agent_observation_critic": obs_agent_observation_critic,
+    "obs_agent_observation_masked_critic": obs_agent_observation_masked_critic,
 }
 
 MULTI_AGENT_OBS_SPACES: dict[str, Callable[[], Any]] = {
@@ -288,6 +319,7 @@ MULTI_AGENT_OBS_SPACES: dict[str, Callable[[], Any]] = {
     "obs_ma_list_multidiscrete": obs_ma_list_multidiscrete,
     "obs_ma_heterogeneous_discrete_multidiscrete": obs_ma_heterogeneous_discrete_multidiscrete,
     "obs_ma_dict_nested_masked_agent_observation": obs_ma_dict_nested_masked_agent_observation,
+    "obs_ma_dict_critic_observation": obs_ma_dict_critic_observation,
 }
 
 
@@ -431,6 +463,7 @@ REPRESENTATIVE_ENVS: dict[str, AnyInputOutputEnv] = {
         obs_multidiscrete, act_multidiscrete_homogeneous
     ),
     "masked_discrete": make_proxy_env(obs_agent_observation_vector),  # mask -> Discrete
+    "critic_obs_discrete": make_proxy_env(obs_agent_observation_critic),
     # Multi-agent (first pytree level is the agent dimension)
     "ma_dict_discrete": make_proxy_env(
         obs_ma_dict_homogeneous, act_ma_dict_discrete, multi_agent=True
@@ -452,11 +485,16 @@ DISCRETE_ACTION_ENV_NAMES = [
 def observation_arrays(tree: Any) -> list[Array]:
     """Leaves of an observation (or observation-space) pytree, ignoring action masks.
 
-    `AgentObservation` nodes are reduced to their `.observation` so that masks are not
-    treated as observation leaves.
+    `AgentObservation` nodes are reduced to their `.observation` (and
+    `.critic_observation` when present) so that masks are not treated as
+    observation leaves.
     """
     stripped = jax.tree.map(
-        lambda o: o.observation if isinstance(o, AgentObservation) else o,
+        lambda o: (
+            {"observation": o.observation, "critic": o.critic_observation}
+            if isinstance(o, AgentObservation)
+            else o
+        ),
         tree,
         is_leaf=lambda x: isinstance(x, AgentObservation),
     )

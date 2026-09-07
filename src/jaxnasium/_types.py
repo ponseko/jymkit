@@ -14,10 +14,19 @@ class AgentObservation(NamedTuple):
 
     - `observation`: The observation of the agent.
     - `action_mask`: The action mask of the agent. A boolean array of the same shape as the action space.
+    - `critic_observation`: Optional observation of the critic for the agent. when not provided, the regular observation is used.
+     This may be used for CTDE (like) approaches.
     """
 
     observation: Num[Array, "..."] | PyTree[Bool[Array, "..."]]
     action_mask: Bool[Array, "..."] | PyTree[Bool[Array, "..."]] | None = None
+    critic_observation: Num[Array, "..."] | PyTree[Num[Array, "..."]] | None = None
+
+    @property
+    def critic_input(self) -> Num[Array, "..."] | PyTree[Num[Array, "..."]]:
+        if self.critic_observation is not None:
+            return self.critic_observation
+        return self.observation
 
 
 class TimeStep(NamedTuple):

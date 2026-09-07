@@ -43,12 +43,20 @@ def partition_obs_and_masks(
     if all(not isinstance(o, AgentObservation) for o in observations):
         filter_spec = True
     elif all(isinstance(o, AgentObservation) for o in observations):
-        filter_spec = AgentObservation(observation=True, action_mask=False)
-        filter_spec = jax.tree.map(
-            lambda _: filter_spec,
-            observation_tree,
-            is_leaf=lambda x: isinstance(x, AgentObservation),
-        )
+
+        def _filter_spec(o: AgentObservation) -> AgentObservation:
+            return AgentObservation(
+                observation=True,
+                action_mask=False,
+                critic_observation=True if o.critic_observation is not None else None,
+            )
+
+        specs = [_filter_spec(o) for o in observations]
+        if multi_agent:
+            _, treedef = eqx.tree_flatten_one_level(observation_tree)
+            filter_spec = jax.tree.unflatten(treedef, specs)
+        else:
+            filter_spec = specs[0]
     else:
         raise ValueError(
             "Observations for all agents must be either AgentObservation or not."

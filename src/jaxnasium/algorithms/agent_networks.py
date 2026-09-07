@@ -66,6 +66,9 @@ class ActorNetwork(eqx.Module):
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
 
+        if isinstance(obs_space, jym.AgentObservation):
+            obs_space = obs_space.observation
+
         self.obs_processor = PyTreeObsSpaceNetwork(
             obs_space,
             key=obs_key,
@@ -122,6 +125,9 @@ class ValueNetwork(eqx.Module):
     ):
         obs_key, body_key, output_key, wb_key = jax.random.split(key, 4)
 
+        if isinstance(obs_space, jym.AgentObservation):
+            obs_space = obs_space.critic_input
+
         self.obs_processor = PyTreeObsSpaceNetwork(
             obs_space,
             key=obs_key,
@@ -145,7 +151,7 @@ class ValueNetwork(eqx.Module):
 
     def __call__(self, x, *, key: PRNGKeyArray | None = None):
         if isinstance(x, jym.AgentObservation):
-            x = x.observation
+            x = x.critic_input
 
         x = self.obs_processor(x, key=key)
         x = self.body(x, key=key)
@@ -172,6 +178,9 @@ class QValueNetwork(eqx.Module):
             layer_type=eqx.nn.Linear
         ),
     ):
+        if isinstance(obs_space, jym.AgentObservation):
+            obs_space = obs_space.critic_input
+
         is_continuous = [isinstance(s, jym.Box) for s in jax.tree.leaves(output_space)]
         if any(is_continuous):
             self.include_action_in_input = True
@@ -211,7 +220,7 @@ class QValueNetwork(eqx.Module):
         action_mask = None
         if isinstance(x, jym.AgentObservation):
             action_mask = x.action_mask
-            x = x.observation
+            x = x.critic_input
 
         if self.include_action_in_input:
             assert action is not None, "Action not provided in continuous Q network."
