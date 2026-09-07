@@ -31,8 +31,8 @@ class GridSearch:
         }
     ).sweep(train)
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
 
     Combined with a random search over learning rates:
@@ -41,12 +41,15 @@ class GridSearch:
     sweep = Sweep(
         train,
         GridSearch({"env_name": ["CartPole-v1", "Acrobot-v1"]}),
-        RandomSearch({"learning_rate": (1e-4, 1e-2, "log")}, num_samples=32),
-        seed=jax.random.PRNGKey(0),
+        RandomSearch(
+            {"learning_rate": (1e-4, 1e-2, "log")},
+            num_samples=32,
+            seed=jax.random.PRNGKey(0),
+        ),
     )
     for run in sweep:
-        for r in run():
-            print(r.arguments, r.result)
+        result = run()
+        print(result.arguments, result.result)
     ```
 
     Branching, so each environment brings its own arguments along:
