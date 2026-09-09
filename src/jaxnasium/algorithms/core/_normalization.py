@@ -155,6 +155,7 @@ class RunningStatisticsState(eqx.Module):
             lambda x: (x.mean, x.std, x.count, x.variance),
             self,
             (mean, std, count, variance),
+            is_leaf=lambda x: x is None,
         )
 
     @staticmethod
@@ -272,7 +273,12 @@ class Normalizer(eqx.Module):
             return self
         if isinstance(obs, jym.AgentObservation):
             obs = obs.replace(action_mask=None)
-        return eqx.tree_at(lambda x: x.obs, self, self.obs.update(obs, mask=mask))
+        return eqx.tree_at(
+            lambda x: x.obs,
+            self,
+            self.obs.update(obs, mask=mask),
+            is_leaf=lambda x: x is None,
+        )
 
     def update_reward(self, reward: Array, done: Array) -> "Normalizer":
         if self.reward is None:
@@ -306,6 +312,7 @@ class Normalizer(eqx.Module):
             lambda x: (x.reward, x.returns, x.returns_max),
             self,
             (reward_normalizer, new_returns, new_returns_max),
+            is_leaf=lambda x: x is None,
         )
 
     def update(self, batch: Transition) -> "Normalizer":

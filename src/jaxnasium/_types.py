@@ -25,7 +25,12 @@ class AgentObservation(eqx.Module):
 
     def replace(self, **updates) -> Self:
         keys, values = zip(*updates.items())
-        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
+        return eqx.tree_at(
+            lambda c: [c.__dict__[key] for key in keys],
+            self,
+            values,
+            is_leaf=lambda x: x is None,
+        )
 
     @property
     def critic_input(self) -> Num[Array, "..."] | PyTree[Num[Array, "..."]]:
