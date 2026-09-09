@@ -57,9 +57,19 @@ def test_map_one_level():
     assert doubled == {"a": jnp.array(2), "b": jnp.array(4)}
 
 
-def test_concatenate():
+def test_ravel():
     tree = {"a": jnp.array([1, 2]), "b": jnp.array(3)}
-    assert jnp.array_equal(jym.tree.concatenate(tree), jnp.array([1, 2, 3]))
+    assert jnp.array_equal(jym.tree.ravel(tree), jnp.array([1, 2, 3]))
+
+
+def test_concatenate():
+    trees = (
+        [jnp.array([1, 2]), jnp.array([4])],
+        [jnp.array([5, 5]), jnp.array([3])],
+    )
+    out = jym.tree.concatenate(trees)
+    assert jnp.array_equal(out[0], jnp.array([1, 2, 5, 5]))
+    assert jnp.array_equal(out[1], jnp.array([4, 3]))
 
 
 def test_batch_sum():

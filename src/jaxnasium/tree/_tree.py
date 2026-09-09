@@ -114,25 +114,23 @@ def tree_map_distribution(fn: Callable, tree, *rest):
     return _transpose_tree_of_tuples(result, structure)
 
 
-def tree_concatenate(trees: PyTree) -> Array:
-    """Concatenate the leaves of a pytree into a single 1D array.
+def tree_ravel(tree: PyTree) -> Array:
+    """Flatten a pytree of arrays into a single 1D array.
 
-        **Arguments**:
+    **Arguments**:
 
-        - `trees`: A pytree whose leaves are array-like and all 1d or 0d.
+    - `tree`: A pytree whose leaves are array-like.
 
-        **Returns**: A 1D array containing the concatenated leaves of the pytree.
+    **Returns**: A 1D array containing every element of the pytree.
 
-        **Example**:
+    **Example**:
     ```python
         >>> tree = {'a': jnp.array([1, 2]), 'b': jnp.array(3)}
-        >>> tree_concatenate(tree)
+        >>> tree_ravel(tree)
         Array([1, 2, 3], dtype=int32)
     ```
     """
-    trees = jax.tree.map(jnp.atleast_1d, trees)
-    leaves = jax.tree.leaves(trees)
-    return jnp.concatenate(leaves)
+    return jnp.concatenate(jax.tree.leaves(jax.tree.map(jnp.ravel, tree)))
 
 
 def _key_entry_name(key_entry: Any) -> str | None:
@@ -382,6 +380,40 @@ def tree_unstack(tree, *, axis=0, structure: PyTreeDef | None = None):  # type: 
     if structure is not None:
         return structure.unflatten(list_of_leaves)
     return list_of_leaves
+
+
+def tree_concatenate(pytrees: PyTree, *, axis=0) -> PyTree:
+    """Concatenate corresponding leaves of pytrees along the specified axis.
+
+    Interprets the root node's immediate children as a batch of N pytrees that all
+    share the same structure. For each leaf, concatenates the N leaves along `axis`
+    using `jnp.concatenate`. This does not traverse deeper than one level when
+    determining what to concatenate.
+
+    **Arguments**:
+
+    - `pytrees`: A pytree whose root has N immediate children. Each child must have
+        the same pytree structure. Corresponding leaves must be array-like and
+        compatible with `jnp.concatenate` along `axis`.
+    - `axis`: Axis along which to concatenate corresponding leaves (default=0).
+
+    **Returns**:
+        A pytree with the same structure as a single direct-child element of
+        `pytrees`, where each leaf is the concatenation of the corresponding
+        leaves across all elements.
+
+    **Example**:
+    ```python
+        >>> trees = (
+        ...     [jnp.array([1, 2]), jnp.array([4])],
+        ...     [jnp.array([5, 5]), jnp.array([3])],
+        ... )
+        >>> tree_concatenate(trees, axis=0)
+        [Array([1, 2, 5, 5], dtype=int32), Array([4, 3], dtype=int32)]
+    ```
+    """
+    leaves, _ = eqx.tree_flatten_one_level(pytrees)
+    return jax.tree.map(lambda *v: jnp.concatenate(v, axis=axis), *leaves)
 
 
 def tree_split_key_like_structure(key: PRNGKeyArray, structure: PyTreeDef):  # pyright: ignore[reportInvalidTypeForm]

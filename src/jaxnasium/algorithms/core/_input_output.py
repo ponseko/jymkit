@@ -223,7 +223,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             x,
             is_leaf=_is_callable_module,
         )
-        return jym.tree.concatenate(outputs)
+        return jym.tree.ravel(outputs)
 
     def _create_1d_obs_processor(
         self,
