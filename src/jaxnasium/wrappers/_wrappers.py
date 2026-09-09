@@ -863,7 +863,7 @@ class StackActionSpaceWrapper(Wrapper):
             return observation
         if not _stacks_anything(action_space):
             return observation
-        return observation._replace(
+        return observation.replace(
             action_mask=new_mask_fn(action_space, observation.action_mask)
         )
 

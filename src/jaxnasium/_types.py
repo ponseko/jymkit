@@ -1,9 +1,10 @@
-from typing import NamedTuple
+from typing import NamedTuple, Self
 
+import equinox as eqx
 from jaxtyping import Array, Bool, Float, Num, PyTree
 
 
-class AgentObservation(NamedTuple):
+class AgentObservation(eqx.Module):
     """A container for the observation of a **single** agent, with optional action masking.
 
     Typically, this container is optional. However, Algorithms in
@@ -21,6 +22,10 @@ class AgentObservation(NamedTuple):
     observation: Num[Array, "..."] | PyTree[Bool[Array, "..."]]
     action_mask: Bool[Array, "..."] | PyTree[Bool[Array, "..."]] | None = None
     critic_observation: Num[Array, "..."] | PyTree[Num[Array, "..."]] | None = None
+
+    def replace(self, **updates) -> Self:
+        keys, values = zip(*updates.items())
+        return eqx.tree_at(lambda c: [c.__dict__[key] for key in keys], self, values)
 
     @property
     def critic_input(self) -> Num[Array, "..."] | PyTree[Num[Array, "..."]]:

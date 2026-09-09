@@ -6,7 +6,6 @@
             - structure
             - replace
             - normalize
-            - view_flat
             - view_transposed
             - from_transposed
             - scan

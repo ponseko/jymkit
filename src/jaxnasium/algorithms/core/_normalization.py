@@ -245,7 +245,7 @@ class Normalizer(eqx.Module):
                     lambda space: space.sample(jax.random.PRNGKey(0)), obs_space
                 )
             if isinstance(dummy_obs, jym.AgentObservation):
-                dummy_obs = dummy_obs._replace(action_mask=None)
+                dummy_obs = dummy_obs.replace(action_mask=None)
             self.obs = RunningStatisticsState(dummy_obs)
 
         if normalize_rew:
@@ -271,7 +271,7 @@ class Normalizer(eqx.Module):
         if self.obs is None:
             return self
         if isinstance(obs, jym.AgentObservation):
-            obs = obs._replace(action_mask=None)
+            obs = obs.replace(action_mask=None)
         return eqx.tree_at(lambda x: x.obs, self, self.obs.update(obs, mask=mask))
 
     def update_reward(self, reward: Array, done: Array) -> "Normalizer":
@@ -332,9 +332,9 @@ class Normalizer(eqx.Module):
 
         if isinstance(obs, jym.AgentObservation):
             action_mask = obs.action_mask
-            obs = obs._replace(action_mask=None)
+            obs = obs.replace(action_mask=None)
             normalized = _normalize(obs, self.obs.mean, self.obs.std)
-            return normalized._replace(action_mask=action_mask)
+            return normalized.replace(action_mask=action_mask)
         return _normalize(obs, self.obs.mean, self.obs.std)
 
     def normalize_reward(self, reward: Array) -> Array:

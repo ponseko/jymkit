@@ -41,6 +41,8 @@ jym.tree.mean(pytree)
 
 ::: jaxnasium.tree.concatenate
 
+::: jaxnasium.tree.ravel
+
 ::: jaxnasium.tree.gather_actions
 
 ## Creation

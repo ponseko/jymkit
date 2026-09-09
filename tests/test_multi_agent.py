@@ -7,6 +7,7 @@ from _proxy_test_envs import (
     obs_ma_dict_homogeneous,
 )
 
+from jaxnasium import AgentObservation
 from jaxnasium.algorithms import DQN
 from jaxnasium.algorithms.core import Transition, _multi_agent
 from jaxnasium.algorithms.core._multi_agent import MultiAgentWrapper, map_multi_agent
@@ -107,6 +108,19 @@ def test_map_multi_agent_tuple_return_becomes_tuple_of_trees():
     assert minus == {"a0": 0.0, "a1": 1.0}
 
 
+def test_map_multi_agent_preserves_agent_observation():
+    obs = (
+        AgentObservation(observation=jnp.ones(3), action_mask=jnp.ones(2, dtype=bool)),
+        AgentObservation(
+            observation=jnp.zeros(3), action_mask=jnp.zeros(2, dtype=bool)
+        ),
+    )
+    for vmap in (False, True):
+        result = map_multi_agent(lambda o: o, obs, vmap=vmap)
+        assert type(result[0]) is AgentObservation
+        assert type(result[1]) is AgentObservation
+
+
 class _TestAgent(eqx.Module):
     w: jax.Array
 
@@ -139,6 +153,17 @@ def test_wrapper_structure_reflects_agents():
     assert wrapper._structure == jax.tree.structure({"a0": 0, "a1": 0})
     assert wrapper._matches_structure({"a0": 99.0, "a1": 999.0})
     assert not wrapper._matches_structure({"a0": 1.0})
+
+
+def test_wrapper_subclass_survives_with_hyperparams():
+    class Team(MultiAgentWrapper):
+        pass
+
+    agent = DQN(**SMALL_DQN).init_agent(SEED, _ma_env())
+    assert isinstance(agent, MultiAgentWrapper)
+    team = Team(agent.agents, trainer=agent.trainer)
+    updated = team.with_hyperparams()
+    assert type(updated) is Team
 
 
 def test_collective_methods_are_not_dispatched_per_agent():

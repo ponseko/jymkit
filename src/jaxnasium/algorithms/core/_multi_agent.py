@@ -250,13 +250,12 @@ def map_multi_agent(
 
     def _process_output(o):
         if source_wrapper is not None and _is_pytree_of_agents(o):
-            # carry the team trainer through, so the re-wrapped agents keep it
-            return MultiAgentWrapper(o, trainer=source_wrapper.trainer)
+            return eqx.tree_at(lambda w: w.agents, source_wrapper, o)
 
         if _is_pytree_of_transitions(o):
             return Transition.from_transposed(o)
 
-        if isinstance(o, tuple):
+        if type(o) is tuple:
             return tuple(_process_output(x) for x in o)
 
         return o
@@ -289,7 +288,7 @@ class MultiAgentWrapper(eqx.Module):
             agent_structure=self._structure,
             vmap=False,  # don't vmap this
         )
-        return MultiAgentWrapper(agents, trainer=replace(self.trainer, **hyperparams))
+        return type(self)(agents, trainer=replace(self.trainer, **hyperparams))
 
     def __call__(self, *args, **kwargs):
         return self.__getattr__("__call__")(*args, **kwargs)
