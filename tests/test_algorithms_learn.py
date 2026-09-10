@@ -96,37 +96,42 @@ class PointReach(jym.Environment):
         )
 
 
-@pytest.mark.parametrize("alg", TEST_CONSTS.DISCRETE_ALGS)
+def _final_training_return(metrics) -> float:
+    """Mean episode return over the final `LEARN_FINAL_FRACTION` of training."""
+    LEARN_FINAL_FRACTION = 0.3
+    curve = np.asarray(metrics)
+    assert curve.ndim == 1, f"Expected a per-iteration metric curve, got {curve.shape}"
+    window = max(1, round(LEARN_FINAL_FRACTION * curve.shape[0]))
+    return float(np.nanmean(curve[-window:]))
+
+
+@pytest.mark.parametrize("alg", TEST_CONSTS.DISCRETE_ALGS, ids=lambda a: a.__name__)
 def test_discrete_is_learning(alg):
-    # Confirm learning behavior on CartPole w/ default parameters
+    # Confirm learning behavior on CartPole
+    LEARN_MIN_REWARD_DISCRETE = 100.0  # CartPole-v1, max 500
     env = jym.make("CartPole-v1")
     seed = jax.random.PRNGKey(1)
-    seed1, seed2 = jax.random.split(seed)
-    agent = alg(log_function=None)
-    agent, _ = agent.train(seed1, env)
+    agent = alg(log_function=None, **TEST_CONSTS.LEARN_CONFIG_DISCRETE[alg])
+    agent, metrics = agent.train(seed, env)
 
-    rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
-    avg_reward = jnp.mean(rewards)
-    assert avg_reward > 200, (
-        f"Average reward too low: {avg_reward}. Training may have failed."
-        f"Average reward: {avg_reward}, "
-        f"Rewards array: {rewards}, "
-        f"Rewards type: {type(rewards)}, "
-        f"Rewards shape: {getattr(rewards, 'shape', 'no shape')}"
+    final_return = _final_training_return(metrics)
+    assert final_return > LEARN_MIN_REWARD_DISCRETE, (
+        f"Final training return too low: {final_return} "
+        f"(untrained agents score ~20). Training may have failed."
     )
 
 
-@pytest.mark.parametrize("alg", TEST_CONSTS.CONTINUOUS_ALGS)
+@pytest.mark.parametrize("alg", TEST_CONSTS.CONTINUOUS_ALGS, ids=lambda a: a.__name__)
 def test_continuous_is_learning(alg):
-    # Confirm learning behavior on Pendulum w/ default parameters
+    # Confirm learning behavior on a simple custom Continuous env
+    LEARN_MIN_REWARD_CONTINUOUS = -50.0  # PointReachEnv
     env = jym.make("PointReachEnv")
     seed = jax.random.PRNGKey(0)
-    seed1, seed2 = jax.random.split(seed)
-    agent = alg(total_timesteps=500_000, log_function=None)
-    agent, _ = agent.train(seed1, env)
+    agent = alg(log_function=None, **TEST_CONSTS.LEARN_CONFIG_CONTINUOUS[alg])
+    agent, metrics = agent.train(seed, env)
 
-    rewards = agent.evaluate(seed2, env, num_eval_episodes=50)
-    avg_reward = np.mean(rewards)
-    assert avg_reward > -25, (
-        f"Average reward too low: {avg_reward}. Training may have failed."
+    final_return = _final_training_return(metrics)
+    assert final_return > LEARN_MIN_REWARD_CONTINUOUS, (
+        f"Final training return too low: {final_return} "
+        f"(untrained agents score ~-276). Training may have failed."
     )

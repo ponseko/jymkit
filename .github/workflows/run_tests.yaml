@@ -66,6 +66,10 @@ jobs:
   test-learn:
     needs: lint
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        alg: [PPO, PQN, DQN, SAC]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -82,7 +86,7 @@ jobs:
         run: uv sync --group dev --extra algs
 
       - name: Run learning tests
-        run: uv run pytest -m "learn" -v -s
+        run: uv run pytest -m "learn" -k "${{ matrix.alg }}" -v -s
 
   test-saving-loading:
     needs: lint

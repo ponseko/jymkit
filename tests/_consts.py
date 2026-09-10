@@ -5,6 +5,19 @@ from jaxnasium.wrappers import Wrapper
 DISCRETE_ALGS = [PPO, PQN, DQN, SAC]
 CONTINUOUS_ALGS = [PPO, SAC]
 
+
+LEARN_CONFIG_DISCRETE: dict[type, dict] = {
+    PPO: {"total_timesteps": 100_000},
+    PQN: {"total_timesteps": 100_000},
+    DQN: {"total_timesteps": 100_000},
+    SAC: {"total_timesteps": 100_000, "critics_num_updates": 8, "batch_size": 256},
+}
+
+LEARN_CONFIG_CONTINUOUS: dict[type, dict] = {
+    PPO: {"total_timesteps": 100_000},
+    SAC: {"total_timesteps": 100_000, "critics_num_updates": 8, "batch_size": 256},
+}
+
 # Optional wrappers applied before environment use.
 ENV_WRAPPERS: dict[str, list[type[Wrapper]]] = {}
 

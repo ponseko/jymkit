@@ -194,7 +194,6 @@ class LogWrapper(Wrapper):
         obs, env_state = self._env.reset(key)
 
         # Infer the reward shape from the environment step function:
-        key = jax.random.PRNGKey(0)
         reward_template = jax.eval_shape(
             lambda s: self._env.step(key, s, self._env.sample_action(key))[0].reward,
             env_state,
