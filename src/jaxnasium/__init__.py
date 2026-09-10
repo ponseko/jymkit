@@ -33,6 +33,7 @@ from .wrappers import (
     NavixWrapper as NavixWrapper,
     NormalizeVecObsWrapper as NormalizeVecObsWrapper,
     NormalizeVecRewardWrapper as NormalizeVecRewardWrapper,
+    OctaxWrapper as OctaxWrapper,
     PgxWrapper as PgxWrapper,
     ScaleRewardWrapper as ScaleRewardWrapper,
     StackActionSpaceWrapper as StackActionSpaceWrapper,

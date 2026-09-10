@@ -49,6 +49,7 @@ external = [
     "gymnax>=0.0.9",
     "jumanji>=1.1.1",
     "navix>=0.7.4",
+    "octax>=0.1.1",
     "pgx>=2.6.0",
     "xminigrid>=0.9.3",
 ]

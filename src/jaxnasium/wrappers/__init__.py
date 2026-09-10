@@ -3,6 +3,7 @@ from ._gymnax import GymnaxWrapper as GymnaxWrapper
 from ._jaxmarl import JaxMARLWrapper as JaxMARLWrapper
 from ._jumanji import JumanjiWrapper as JumanjiWrapper
 from ._navix import NavixWrapper as NavixWrapper
+from ._octax import OctaxWrapper as OctaxWrapper
 from ._pgx import PgxWrapper as PgxWrapper
 from ._util import (
     gymnasium_to_jaxnasium_space as gymnasium_to_jaxnasium_space,
