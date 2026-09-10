@@ -83,27 +83,6 @@ class Transition(eqx.Module):
         )
 
     @property
-    def view_flat(self) -> "Transition":
-        """
-        Returns a flattened version of the transition.
-        Where possible, this is a jnp.stack of the leaves.
-        Otherwise, it returns a list of leaves.
-        """
-
-        def return_as_stack_or_list(x):
-            x = jax.tree.leaves(x)
-            try:
-                return jnp.stack(x, axis=-1).squeeze()
-            except ValueError:
-                return x
-
-        return jax.tree.map(
-            return_as_stack_or_list,
-            self,
-            is_leaf=lambda y: y is not self,
-        )
-
-    @property
     def view_transposed(self) -> PyTree["Transition"]:
         """
         For single-agent settings, this will do nothing and return the original transition.

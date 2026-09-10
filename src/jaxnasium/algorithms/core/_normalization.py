@@ -155,6 +155,7 @@ class RunningStatisticsState(eqx.Module):
             lambda x: (x.mean, x.std, x.count, x.variance),
             self,
             (mean, std, count, variance),
+            is_leaf=lambda x: x is None,
         )
 
     @staticmethod
@@ -245,7 +246,7 @@ class Normalizer(eqx.Module):
                     lambda space: space.sample(jax.random.PRNGKey(0)), obs_space
                 )
             if isinstance(dummy_obs, jym.AgentObservation):
-                dummy_obs = dummy_obs.observation
+                dummy_obs = dummy_obs.replace(action_mask=None)
             self.obs = RunningStatisticsState(dummy_obs)
 
         if normalize_rew:
@@ -271,8 +272,13 @@ class Normalizer(eqx.Module):
         if self.obs is None:
             return self
         if isinstance(obs, jym.AgentObservation):
-            obs = obs.observation
-        return eqx.tree_at(lambda x: x.obs, self, self.obs.update(obs, mask=mask))
+            obs = obs.replace(action_mask=None)
+        return eqx.tree_at(
+            lambda x: x.obs,
+            self,
+            self.obs.update(obs, mask=mask),
+            is_leaf=lambda x: x is None,
+        )
 
     def update_reward(self, reward: Array, done: Array) -> "Normalizer":
         if self.reward is None:
@@ -306,6 +312,7 @@ class Normalizer(eqx.Module):
             lambda x: (x.reward, x.returns, x.returns_max),
             self,
             (reward_normalizer, new_returns, new_returns_max),
+            is_leaf=lambda x: x is None,
         )
 
     def update(self, batch: Transition) -> "Normalizer":
@@ -320,7 +327,9 @@ class Normalizer(eqx.Module):
         if self.obs is None:
             return obs
 
-        def _normalize(batch: Array, mean: Array, std: Array) -> Array:
+        def _normalize(
+            batch: PyTree[Array], mean: PyTree[Array], std: PyTree[Array]
+        ) -> PyTree[Array]:
             if self.center_mean_obs:
                 batch = optax.tree.sub(batch, mean)
             normalized = jax.tree.map(lambda data, s: data / (s + 1e-8), batch, std)
@@ -329,10 +338,10 @@ class Normalizer(eqx.Module):
             return jym.tree.clip(normalized, -self.clip_value_obs, self.clip_value_obs)
 
         if isinstance(obs, jym.AgentObservation):
-            return jym.AgentObservation(
-                observation=_normalize(obs.observation, self.obs.mean, self.obs.std),
-                action_mask=obs.action_mask,
-            )
+            action_mask = obs.action_mask
+            obs = obs.replace(action_mask=None)
+            normalized = _normalize(obs, self.obs.mean, self.obs.std)
+            return normalized.replace(action_mask=action_mask)
         return _normalize(obs, self.obs.mean, self.obs.std)
 
     def normalize_reward(self, reward: Array) -> Array:

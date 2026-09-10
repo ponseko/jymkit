@@ -48,6 +48,22 @@ def test_obs_normalization_preserves_action_mask():
     assert not jnp.allclose(normalized.observation, obs_batch.observation)
 
 
+def test_obs_normalization_normalizes_critic_observation():
+    env = REPRESENTATIVE_ENVS["critic_obs_discrete"]
+    obs_batch = jax.vmap(env.sample_observation)(jax.random.split(SEED, BATCH_SIZE))
+
+    normalizer = Normalizer(
+        obs_space=env.observation_space, normalize_obs=True, normalize_rew=False
+    )
+    normalizer = normalizer.update_obs(obs_batch)
+    normalized = normalizer.normalize_obs(obs_batch)
+
+    assert isinstance(normalized, AgentObservation)
+    assert normalized.critic_observation is not None
+    assert not jnp.allclose(normalized.observation, obs_batch.observation)
+    assert not jnp.allclose(normalized.critic_observation, obs_batch.critic_observation)
+
+
 def test_reward_normalization_runs_and_scales():
     env = REPRESENTATIVE_ENVS["vector_discrete"]
     num_steps, num_envs = 16, 4

@@ -74,6 +74,7 @@ nav:
       - 'algorithms/networks/Networks.md'
       - 'algorithms/networks/Architectures.md'
       - 'algorithms/networks/Layers.md'
+      - 'algorithms/networks/examples.md'
     - Core:
       - 'algorithms/core/Transitions.md'
       - 'algorithms/core/Replay-Buffer.md'

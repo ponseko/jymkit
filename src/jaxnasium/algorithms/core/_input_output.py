@@ -186,13 +186,6 @@ class PyTreeObsSpaceNetwork(eqx.Module):
                 )
             raise ValueError(f"Unsupported observation space shape: {obs_space.shape}")
 
-        # Exclude action mask from the observation space if present
-        obs_space = jax.tree.map(
-            lambda o: o.observation if isinstance(o, jym.AgentObservation) else o,
-            obs_space,
-            is_leaf=lambda o: isinstance(o, jym.AgentObservation),
-        )
-
         # For continuous action space where a Q network is used, the action is included
         # in the observation space. We process it seperately by flattening only.
         action_input = None
@@ -230,7 +223,7 @@ class PyTreeObsSpaceNetwork(eqx.Module):
             x,
             is_leaf=_is_callable_module,
         )
-        return jym.tree.concatenate(outputs)
+        return jym.tree.ravel(outputs)
 
     def _create_1d_obs_processor(
         self,

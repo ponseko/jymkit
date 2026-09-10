@@ -557,22 +557,21 @@ class DiscreteActionWrapper(Wrapper):
         self,
         key: PRNGKeyArray,
         state: TEnvState,
-        action: int | Int[Array, " num_actions"],
+        action: PyTree[int | Int[Array, " num_actions"]],
     ) -> tuple[TimeStep, TEnvState]:
-        # Convert the (multi)discrete action back to a continuous action
-        original_action_space = self.original_action_space
-        assert hasattr(original_action_space, "low") and hasattr(
-            original_action_space, "high"
-        ), (
-            "Original action space must have 'low' and 'high' attributes. Is this a continuous action space?"
-        )
-        action = original_action_space.low + (action / (self.num_actions - 1)) * (  # type: ignore
-            original_action_space.high - original_action_space.low  # type: ignore
-        ).reshape(self.original_action_space.shape)
+        def convert_to_continuous(space, discrete_action):
+            assert hasattr(space, "low") and hasattr(space, "high"), (
+                "Original action space must have 'low' and 'high' attributes. Is this a continuous action space?"
+            )
+            low = jnp.broadcast_to(space.low, space.shape)
+            high = jnp.broadcast_to(space.high, space.shape)
+            return low + (discrete_action / (self.num_actions - 1)) * (high - low)
+
+        action = jax.tree.map(convert_to_continuous, self.original_action_space, action)
         return self._env.step(key, state, action)
 
     @property
-    def action_space(self) -> Discrete | MultiDiscrete:
+    def action_space(self) -> PyTree[Discrete | MultiDiscrete]:
         def convert_to_discrete_or_multi_discrete(space):
             assert hasattr(space, "shape")
             if space.shape == () or space.shape == (1,):
@@ -590,7 +589,7 @@ class DiscreteActionWrapper(Wrapper):
         )
 
     @property
-    def original_action_space(self) -> Space:
+    def original_action_space(self) -> Space | PyTree[Space]:
         """
         Return the original action space of the environment.
         This is useful for algorithms that need to know the original action space.
@@ -864,7 +863,7 @@ class StackActionSpaceWrapper(Wrapper):
             return observation
         if not _stacks_anything(action_space):
             return observation
-        return observation._replace(
+        return observation.replace(
             action_mask=new_mask_fn(action_space, observation.action_mask)
         )
 
