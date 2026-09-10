@@ -11,6 +11,7 @@ from .wrappers import (
     JumanjiWrapper,
     LogWrapper,
     NavixWrapper,
+    OctaxWrapper,
     PgxWrapper,
     Wrapper,
     xMinigridWrapper,
@@ -164,6 +165,13 @@ class Registry:
                 env = navix.make(env_name, **env_kwargs)
                 if wrap:
                     return _wrap_env(env, NavixWrapper)
+                return env  # type: ignore
+            elif package == "octax":
+                from octax.environments import create_environment  # type: ignore
+
+                env, _metadata = create_environment(env_name, **env_kwargs)
+                if wrap:
+                    return _wrap_env(env, OctaxWrapper)
                 return env  # type: ignore
             elif package == "craftax":
                 from craftax import craftax_env  # type: ignore
@@ -512,6 +520,36 @@ registry.register_alias("Navix-DistShift2-v0", "navix:Navix-DistShift2-v0")
 registry.register_alias("Navix-GoToDoor-5x5-v0", "navix:Navix-GoToDoor-5x5-v0")
 registry.register_alias("Navix-GoToDoor-6x6-v0", "navix:Navix-GoToDoor-6x6-v0")
 registry.register_alias("Navix-GoToDoor-8x8-v0", "navix:Navix-GoToDoor-8x8-v0")
+
+# Octax CHIP-8 envs
+for _octax_id in (
+    "airplane",
+    "blinky",
+    "brix",
+    *(f"cavern{i}" for i in (1, 2, 3, 5, 6)),
+    "deep",
+    "filter",
+    "flight_runner",
+    "missile",
+    "pong",
+    "rocket",
+    "shooting_stars",
+    *(f"space_flight{i}" for i in range(1, 11)),
+    "spacejam",
+    "squash",
+    "submarine",
+    "tank",
+    *(f"target_shooter{i}" for i in range(1, 4)),
+    "tetris",
+    "ufo",
+    "vertical_brix",
+    "wipe_off",
+    "worm",
+):
+    registry.register_alias(f"{_octax_id}", f"octax:{_octax_id}")
+registry.register_alias("cavern", "octax:cavern1")
+registry.register_alias("space_flight", "octax:space_flight1")
+registry.register_alias("target_shooter", "octax:target_shooter1")
 
 # Craftax envs
 registry.register_alias(

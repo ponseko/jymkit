@@ -45,6 +45,9 @@ JAX implementation of MiniGrid environments, including XLand variants for proced
 ### [Navix](https://github.com/epignatelli/navix)
 JAX implementation of navigation environments, providing various gridworld navigation tasks.
 
+### [Octax](https://github.com/riiswa/octax)
+JAX CHIP-8 emulator environments (Brix, Pong, Tetris, and other classic games).
+
 ### [Craftax](https://github.com/MichaelTMatthews/Craftax)
 JAX implementation of Craftax environments, inspired by Minecraft-like crafting and survival tasks.
 
@@ -63,6 +66,7 @@ env = jym.make("Breakout-MinAtar")  # Gymnax
 env = jym.make("Game2048-v1")  # Jumanji
 env = jym.make("ant")  # Brax
 env = jym.make("chess")  # Pgx
+env = jym.make("octax:brix")  # Octax
 ```
 
 Every id can also be given with an explicit provider prefix (e.g. `gymnax:Breakout-MinAtar`),
